@@ -1,41 +1,39 @@
-# Prerequisites
-*.d
+# build
+build/
+build-*/
+out/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# slang (prebuilt)
+vendors/slang-bin/
 
-# Precompiled Headers
-*.gch
-*.pch
+# compiled shaders
+*.spv
+*.spirv
 
-# Linker files
-*.ilk
+# IDE
+.vscode/settings.json
+.idea/
+*.user
+*.suo
+*.sln.docstates
+.vs/
 
-# Debugger Files
-*.pdb
+# CMake outputs
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+_deps/
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
+# MACOS
+.DS_Store
+.AppleDouble
+.LSOverride
 
-# Fortran module files
-*.mod
-*.smod
+# WINDOWS
+Thumbs.db
+Desktop.ini
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# debug information files
-*.dwo
+# LINUX
+*~
+.nfs*
