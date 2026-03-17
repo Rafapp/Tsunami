@@ -1,20 +1,21 @@
-file(GLOB_RECURSE TSUNAMI_SOURCES CONFIGURE_DEPENDS src/*.cpp)
-file(GLOB_RECURSE TSUNAMI_HEADERS CONFIGURE_DEPENDS include/*.h include/*.hpp)
+cmake_minimum_required(VERSION 3.24...4.1)
+project(tsunami VERSION 0.1.0 LANGUAGES CXX)
 
-add_executable(tsunami ${TSUNAMI_SOURCES} ${TSUNAMI_HEADERS})
+# === C++ standard ===
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-target_include_directories(tsunami PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+# === output directories ===
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-target_link_libraries(tsunami PRIVATE
-    Vulkan::Vulkan
-    vk-bootstrap
-    VulkanMemoryAllocator
-    glfw
-    volk
-)
+# === Vulkan ===
+find_package(Vulkan REQUIRED)
 
-if(TARGET slang)
-    target_link_libraries(tsunami PRIVATE slang)
-endif()
+# === vendors ===
+add_subdirectory(vendors)
+
+# === tsunami ===
+add_subdirectory(tsunami)

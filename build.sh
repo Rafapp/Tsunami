@@ -4,6 +4,7 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+# ── colors ────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -15,43 +16,41 @@ NC='\033[0m'
 
 SLANG_VERSION="2026.4.2"
 SLANG_DIR="vendors/slang-bin"
-BUILD=false
+BUILD=true
 BUILD_TYPE="Release"
 
-# === ARGS ===
+# ── args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --build)         BUILD=true;                    shift ;;
-    --build-debug)   BUILD=true; BUILD_TYPE=Debug;  shift ;;
+    --setup-only)    BUILD=false;      shift ;;
+    --debug)         BUILD_TYPE=Debug; shift ;;
     --help)
       echo "Usage: ./setup.sh [options]"
       echo ""
       echo "Options:"
-      echo "  --build         Run cmake configure + build (Release) after setup"
-      echo "  --build-debug   Run cmake configure + build (Debug) after setup"
-      echo "  --help          Show this message"
+      echo "  (no flags)    Pull submodules, download Slang, configure + build (default)"
+      echo "  --debug       Build Debug instead of Release"
+      echo "  --setup-only  Pull submodules + download Slang, skip build"
+      echo "  --help        Show this message"
       exit 0 ;;
     *) echo -e "${RED}Unknown option: $1${NC}" && exit 1 ;;
   esac
 done
 
+# ── banner ────────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${CYAN}║           Tsunami 🌊 — Setup             ║${NC}"
-echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
+echo -e "${BOLD}${CYAN}╔══════════════════════════════════╗${NC}"
+echo -e "${BOLD}${CYAN}║           Tsunami 🌊             ║${NC}"
+echo -e "${BOLD}${CYAN}╚══════════════════════════════════╝${NC}"
 echo ""
 
-# === PLATFORM ===
+# ── detect platform ───────────────────────────────────────────
 OS=$(uname -s)
 ARCH=$(uname -m)
 
 if [ "$OS" = "Darwin" ]; then
   PLATFORM_LABEL="macOS ($ARCH)"
-  if [ "$ARCH" = "arm64" ]; then
-    SLANG_PLATFORM="macos-aarch64"
-  else
-    SLANG_PLATFORM="macos-x86_64"
-  fi
+  SLANG_PLATFORM=$([ "$ARCH" = "arm64" ] && echo "macos-aarch64" || echo "macos-x86_64")
 elif [ "$OS" = "Linux" ]; then
   PLATFORM_LABEL="Linux ($ARCH)"
   SLANG_PLATFORM="linux-x86_64"
@@ -62,9 +61,10 @@ fi
 
 echo -e "${BOLD}Platform:${NC}  ${MAGENTA}${PLATFORM_LABEL}${NC}"
 echo -e "${BOLD}Slang:${NC}     ${MAGENTA}v${SLANG_VERSION}${NC}"
+echo -e "${BOLD}Build:${NC}     ${MAGENTA}$([ "$BUILD" = true ] && echo "$BUILD_TYPE" || echo "skipped (--setup-only)")${NC}"
 echo ""
 
-# === I. Submodules ===
+# ── step 1: submodules ────────────────────────────────────────
 echo -e "${BOLD}${BLUE}[1/3]${NC} ${BOLD}Pulling submodules...${NC}"
 echo -e "      ${CYAN}◆${NC} vk-bootstrap"
 echo -e "      ${CYAN}◆${NC} VulkanMemoryAllocator"
@@ -75,7 +75,7 @@ git submodule update --init --recursive
 echo -e "${GREEN}      ✓ Submodules ready${NC}"
 echo ""
 
-# === II. Slang binary ===
+# ── step 2: slang ─────────────────────────────────────────────
 echo -e "${BOLD}${BLUE}[2/3]${NC} ${BOLD}Setting up Slang prebuilt binary...${NC}"
 
 if [ -f "${SLANG_DIR}/include/slang.h" ]; then
@@ -89,7 +89,7 @@ else
 fi
 echo ""
 
-# === III. CMake ===
+# ── step 3: cmake ─────────────────────────────────────────────
 if [ "$BUILD" = true ]; then
   PRESET=$([ "$BUILD_TYPE" = "Debug" ] && echo "debug" || echo "default")
   echo -e "${BOLD}${BLUE}[3/3]${NC} ${BOLD}Configuring + building (${BUILD_TYPE})...${NC}"
@@ -99,16 +99,17 @@ if [ "$BUILD" = true ]; then
   echo ""
   echo -e "${GREEN}      ✓ Build complete — binary at build/bin/tsunami${NC}"
 else
-  echo -e "${BOLD}${BLUE}[3/3]${NC} ${BOLD}Skipping build${NC} ${CYAN}(pass --build to build now)${NC}"
+  echo -e "${BOLD}${BLUE}[3/3]${NC} ${BOLD}Skipping build${NC} ${CYAN}(--setup-only)${NC}"
+  echo ""
+  echo -e "${BOLD}When ready to build:${NC}"
+  echo -e "  ${MAGENTA}cmake --preset default && cmake --build --preset default${NC}"
 fi
 
+# ── done ──────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${CYAN}║           Setup Complete! 🎉             ║${NC}"
+echo -e "${BOLD}${CYAN}║        All done! Let it rip 🌊           ║${NC}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${BOLD}Next steps:${NC}"
-echo -e "  Configure:  ${MAGENTA}cmake --preset default${NC}"
-echo -e "  Build:      ${MAGENTA}cmake --build --preset default${NC}"
-echo -e "  Run:        ${MAGENTA}./build/bin/tsunami${NC}"
+echo -e "  Run: ${MAGENTA}./build/bin/tsunami${NC}"
 echo ""
