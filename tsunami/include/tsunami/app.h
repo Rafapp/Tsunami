@@ -5,14 +5,14 @@
 #include "tsunami/core/window.h"
 
 class App {
-public:
-    App();
-    ~App() = default;
+  public:
+	App();
+	~App() = default;
 
-    void run();
+	void run();
 
-private:
-    void MainLoop();
+  private:
+	void MainLoop();
 
-    std::unique_ptr<core::Window> m_window;
+	std::unique_ptr<core::Window> m_window;
 };

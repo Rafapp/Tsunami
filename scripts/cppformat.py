@@ -95,7 +95,7 @@ def main():
     print()
 
     if reformatted:
-        print("  Push aborted - files were reformatted. Commit the fixes and push again:")
+        print("  cppformat: files were reformatted. Commit the fixes and push again:")
         print(f"    git add {' '.join(str(f) for f in reformatted)}")
         print( "    git commit -m \"style: apply clang-format\"")
         print( "    git push\n")
