@@ -11,6 +11,7 @@ vendors/slang-bin/
 *.spirv
 
 # IDE
+.vscode
 .vscode/settings.json
 .idea/
 *.user

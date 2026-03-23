@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# ── colors ────────────────────────────────────────────────────
+# === Colors ===
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -14,12 +14,13 @@ MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# === Config ===
 SLANG_VERSION="2026.4.2"
 SLANG_DIR="vendors/slang-bin"
 BUILD=true
 BUILD_TYPE="Release"
 
-# ── args ──────────────────────────────────────────────────────
+# === Args ===
 while [[ $# -gt 0 ]]; do
   case $1 in
     --setup-only)    BUILD=false;      shift ;;
@@ -37,14 +38,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── banner ────────────────────────────────────────────────────
+# === Banner ===
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════╗${NC}"
 echo -e "${BOLD}${CYAN}║           Tsunami 🌊             ║${NC}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════╝${NC}"
 echo ""
 
-# ── detect platform ───────────────────────────────────────────
+# === Detect platform ===
 OS=$(uname -s)
 ARCH=$(uname -m)
 
@@ -64,8 +65,8 @@ echo -e "${BOLD}Slang:${NC}     ${MAGENTA}v${SLANG_VERSION}${NC}"
 echo -e "${BOLD}Build:${NC}     ${MAGENTA}$([ "$BUILD" = true ] && echo "$BUILD_TYPE" || echo "skipped (--setup-only)")${NC}"
 echo ""
 
-# ── step 1: submodules ────────────────────────────────────────
-echo -e "${BOLD}${BLUE}[1/3]${NC} ${BOLD}Pulling submodules...${NC}"
+# === Step 1: Submodules ===
+echo -e "${BOLD}${BLUE}[1/4]${NC} ${BOLD}Pulling submodules...${NC}"
 echo -e "      ${CYAN}◆${NC} vk-bootstrap"
 echo -e "      ${CYAN}◆${NC} VulkanMemoryAllocator"
 echo -e "      ${CYAN}◆${NC} glfw"
@@ -75,8 +76,8 @@ git submodule update --init --recursive
 echo -e "${GREEN}      ✓ Submodules ready${NC}"
 echo ""
 
-# ── step 2: slang ─────────────────────────────────────────────
-echo -e "${BOLD}${BLUE}[2/3]${NC} ${BOLD}Setting up Slang prebuilt binary...${NC}"
+# === Step 2: Slang ===
+echo -e "${BOLD}${BLUE}[2/4]${NC} ${BOLD}Setting up Slang prebuilt binary...${NC}"
 
 if [ -f "${SLANG_DIR}/include/slang.h" ]; then
   echo -e "${YELLOW}      ↺ Slang already present — skipping download${NC}"
@@ -89,27 +90,38 @@ else
 fi
 echo ""
 
-# ── step 3: cmake ─────────────────────────────────────────────
+# === Step 3: Git hooks ===
+echo -e "${BOLD}${BLUE}[3/4]${NC} ${BOLD}Installing git hooks...${NC}"
+
+if python3 scripts/install_cppformat.py; then
+  echo -e "${GREEN}      ✓ cppformat ready${NC}"
+else
+  echo -e "${RED}      ✗ cppformat installation failed — is Python 3 installed and scripts/install_cppformat.py present?${NC}"
+  exit 1
+fi
+echo ""
+
+# === Step 4: CMake ===
 if [ "$BUILD" = true ]; then
   PRESET=$([ "$BUILD_TYPE" = "Debug" ] && echo "debug" || echo "default")
-  echo -e "${BOLD}${BLUE}[3/3]${NC} ${BOLD}Configuring + building (${BUILD_TYPE})...${NC}"
+  echo -e "${BOLD}${BLUE}[4/4]${NC} ${BOLD}Configuring + building (${BUILD_TYPE})...${NC}"
   echo ""
   cmake --preset "$PRESET"
   cmake --build --preset "$PRESET"
   echo ""
-  echo -e "${GREEN}      ✓ Build complete — binary at build/bin/tsunami${NC}"
+  echo -e "${GREEN}      ✓ Build complete — binary at build/tsunami${NC}"
 else
-  echo -e "${BOLD}${BLUE}[3/3]${NC} ${BOLD}Skipping build${NC} ${CYAN}(--setup-only)${NC}"
+  echo -e "${BOLD}${BLUE}[4/4]${NC} ${BOLD}Skipping build${NC} ${CYAN}(--setup-only)${NC}"
   echo ""
   echo -e "${BOLD}When ready to build:${NC}"
   echo -e "  ${MAGENTA}cmake --preset default && cmake --build --preset default${NC}"
 fi
 
-# ── done ──────────────────────────────────────────────────────
+# === Done ===
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}${CYAN}║        All done! Let it rip 🌊           ║${NC}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  Run: ${MAGENTA}./build/bin/tsunami${NC}"
+echo -e "  Run: ${MAGENTA}./build/tsunami${NC}"
 echo ""
