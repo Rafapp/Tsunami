@@ -1,6 +1,10 @@
 #pragma once
 
+#include <stdexcept>
 #include <memory>
+
+#include "volk.h"
+#include "VkBootstrap.h"
 
 #include "tsunami/core/window.h"
 

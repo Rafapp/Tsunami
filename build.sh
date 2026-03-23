@@ -90,7 +90,7 @@ else
 fi
 echo ""
 
-# === Step 3: Git hooks ===
+# === Step 3: Git cppformat hook ===
 echo -e "${BOLD}${BLUE}[3/4]${NC} ${BOLD}Installing git hooks...${NC}"
 
 if python3 scripts/install_cppformat.py; then

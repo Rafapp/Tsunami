@@ -33,4 +33,4 @@ void Window::pollEvents() const {
 	glfwPollEvents();
 }
 
-}        // namespace core
+}
