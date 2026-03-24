@@ -19,3 +19,12 @@ add_subdirectory(vendors)
 
 # === tsunami ===
 add_subdirectory(tsunami)
+
+# === Shaders ===
+add_custom_target(shaders ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/tsunami/shaders
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
+    COMMENT "Copying shaders to build/bin/shaders"
+)
+add_dependencies(tsunami shaders)

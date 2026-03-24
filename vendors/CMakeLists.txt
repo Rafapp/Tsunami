@@ -3,7 +3,7 @@ add_subdirectory(vk-bootstrap)
 
 # === Vulkan Memory Allocator (header-only) ===
 add_library(VulkanMemoryAllocator INTERFACE)
-target_include_directories(VulkanMemoryAllocator INTERFACE
+target_include_directories(VulkanMemoryAllocator SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/VulkanMemoryAllocator/include)
 
 # === GLFW ===
