@@ -15,6 +15,7 @@ target_link_libraries(tsunami PRIVATE
     VulkanMemoryAllocator
     glfw
     volk
+    glm
 )
 
 # === slang (optional — requires ./setup.sh to download binary) ===

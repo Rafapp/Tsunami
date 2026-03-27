@@ -71,10 +71,10 @@ echo -e "      ${CYAN}◆${NC} vk-bootstrap"
 echo -e "      ${CYAN}◆${NC} VulkanMemoryAllocator"
 echo -e "      ${CYAN}◆${NC} glfw"
 echo -e "      ${CYAN}◆${NC} volk"
+echo -e "      ${CYAN}◆${NC} glm"
 echo ""
 git submodule update --init --recursive
 echo -e "${GREEN}      ✓ Submodules ready${NC}"
-echo ""
 
 # === Step 2: Slang ===
 echo -e "${BOLD}${BLUE}[2/4]${NC} ${BOLD}Setting up Slang prebuilt binary...${NC}"

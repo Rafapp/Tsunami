@@ -34,3 +34,8 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/slang-bin/include/slang.h)
 else()
     message(WARNING "Slang not found — run ./setup.sh first")
 endif()
+
+# === GLM (header-only) ===
+add_library(glm INTERFACE)
+target_include_directories(glm SYSTEM INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/glm)
