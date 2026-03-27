@@ -2,5 +2,5 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 class Shape {
-    virtual ~Shape() = default;
+	virtual ~Shape() = default;
 };

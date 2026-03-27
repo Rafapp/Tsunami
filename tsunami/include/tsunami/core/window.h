@@ -40,4 +40,4 @@ class Window {
 	GLFWwindow*  m_window = nullptr;
 };
 
-}
+}        // namespace core
