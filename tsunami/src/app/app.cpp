@@ -8,7 +8,7 @@
 #include "slang.h"
 #include "vk_mem_alloc.h"
 
-#include "tsunami/app.h"
+#include "tsunami/app/app.h"
 
 struct VulkanContext {
 	vkb::Instance       instance;

@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include "tsunami/app.h"
+#include "tsunami/app/app.h"
 
 int main() {
 	App app;
