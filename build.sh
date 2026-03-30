@@ -30,8 +30,8 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  (no flags)    Pull submodules, download Slang, configure + build (default)"
-      echo "  --debug       Build Debug instead of Release"
       echo "  --setup-only  Pull submodules + download Slang, skip build"
+      echo "  --debug       Build Debug instead of Release"
       echo "  --help        Show this message"
       exit 0 ;;
     *) echo -e "${RED}Unknown option: $1${NC}" && exit 1 ;;
