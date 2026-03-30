@@ -20,6 +20,20 @@ add_subdirectory(vendors)
 # === tsunami ===
 add_subdirectory(tsunami)
 
+# === Copy Slang DLL to bin (Windows only) ===
+if(WIN32)
+    # Create a small custom target to copy the Slang DLL into the runtime folder.
+    # Using a separate target avoids referencing the `tsunami` target before
+    # or across directory boundaries which can trigger CMake errors.
+    add_custom_target(copy_slang ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/vendors/slang-bin/bin/slang.dll
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/slang.dll
+        COMMENT "Copying slang.dll to bin"
+    )
+    add_dependencies(tsunami copy_slang)
+endif()
+
 # === Shaders ===
 add_custom_target(shaders ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
