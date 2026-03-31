@@ -3,10 +3,10 @@
 #include "tsunami/scene/transform.h"
 
 struct alignas(16) GPUCamera {
-    glm::vec4 position;
-    glm::vec4 target;
-    glm::vec4 up;
-	glm::vec4 fov_near_far; // x: fov, y: near clip, z: far clip
+	glm::vec4 position;
+	glm::vec4 target;
+	glm::vec4 up;
+	glm::vec4 fov_near_far;        // x: fov, y: near clip, z: far clip
 };
 
 class Camera {
@@ -14,7 +14,7 @@ class Camera {
 	Camera();
 	~Camera() = default;
 
-    GPUCamera pack() const;
+	GPUCamera pack() const;
 	void      setTransform(const Transform& transform);
 	Transform getTransform() const;
 

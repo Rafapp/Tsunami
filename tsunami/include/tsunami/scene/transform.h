@@ -2,8 +2,8 @@
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
-#include <glm/gtx/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 class Transform {
   public:
@@ -11,13 +11,24 @@ class Transform {
 	~Transform() = default;
 
 	glm::mat4 getTransform();
-	void updateTransform();
+	void      updateTransform();
 
-	void setPosition(const glm::vec3& position) { m_position = position; updateTransform();}
-	void setRotation(const glm::vec3& rotation) { m_rotation = rotation; updateTransform();}
-	void setScale(const glm::vec3& scale) { m_scale = scale; updateTransform();}
+	void setPosition(const glm::vec3& position) {
+		m_position = position;
+		updateTransform();
+	}
+	void setRotation(const glm::vec3& rotation) {
+		m_rotation = rotation;
+		updateTransform();
+	}
+	void setScale(const glm::vec3& scale) {
+		m_scale = scale;
+		updateTransform();
+	}
 
-	glm::mat4 pack() const { return m_transform; }
+	glm::mat4 pack() const {
+		return m_transform;
+	}
 
 	glm::vec3 m_position;
 	glm::vec3 m_rotation;
