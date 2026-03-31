@@ -1,4 +1,5 @@
 #include <iostream>
+#include <array>
 
 #define VOLK_IMPLEMENTATION
 #include "volk.h"
@@ -32,9 +33,16 @@ struct SwapchainContext {
 
 struct RenderTargetContext {
 	VmaAllocator          allocator;
+
 	VkImage               storage_image;
 	VmaAllocation         storage_image_alloc;
 	VkImageView           storage_image_view;
+
+	//Added accumulation buffer for progressive rendering (not used in the shader yet, but set up for future use)
+	VkImage       accum_image;          
+    VmaAllocation accum_image_alloc;    
+    VkImageView   accum_image_view;     
+
 	VkDescriptorSetLayout descriptor_set_layout;
 	VkDescriptorPool      descriptor_pool;
 	VkDescriptorSet       descriptor_set;
@@ -58,39 +66,41 @@ struct SyncContext {
 
 static std::vector<uint32_t> compile_slang_shader(const std::string& path,
                                                   const std::string& entry_point) {
-	SlangSession*        session = spCreateSession(nullptr);
-	SlangCompileRequest* request = spCreateCompileRequest(session);
+    SlangSession*        session = spCreateSession(nullptr);
+    SlangCompileRequest* request = spCreateCompileRequest(session);
 
-	// 1. Set target to SPIR-V
-	int target_idx = spAddCodeGenTarget(request, SLANG_SPIRV);
-	spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_3"));
+    int target_idx = spAddCodeGenTarget(request, SLANG_SPIRV);
+    spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_3"));
 
-	// 2. Add the shader file
-	int unit_idx = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	spAddTranslationUnitSourceFile(request, unit_idx, path.c_str());
+    int unit_idx = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
+    spAddTranslationUnitSourceFile(request, unit_idx, path.c_str());
 
-	// 3. Add entry point
-	spAddEntryPoint(request, unit_idx, entry_point.c_str(), SLANG_STAGE_COMPUTE);
+    spAddEntryPoint(request, unit_idx, entry_point.c_str(), SLANG_STAGE_COMPUTE);
 
-	// 4. Compile
-	if (spCompile(request) != SLANG_OK) {
-		const char* diagnostics = spGetDiagnosticOutput(request);
-		spDestroyCompileRequest(request);
-		spDestroySession(session);
-		throw std::runtime_error(std::string("slang compile error:\n") + diagnostics);
-	}
+    SlangResult result = spCompile(request);
 
-	// 5. Extract SPIR-V
-	size_t      spirv_size = 0;
-	const void* spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
+    // Always print — catches warnings even on success
+    const char* diagnostics = spGetDiagnosticOutput(request);
+    if (diagnostics && diagnostics[0] != '\0') {
+        std::cerr << "[SLANG] " << path << ":\n" << diagnostics << "\n";
+    }
 
-	std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
-	memcpy(spirv.data(), spirv_data, spirv_size);
+    if (result != SLANG_OK) {
+        spDestroyCompileRequest(request);
+        spDestroySession(session);
+        throw std::runtime_error("slang compilation failed: " + path);
+    }
 
-	spDestroyCompileRequest(request);
-	spDestroySession(session);
+    size_t      spirv_size = 0;
+    const void* spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
 
-	return spirv;
+    std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
+    memcpy(spirv.data(), spirv_data, spirv_size);
+
+    spDestroyCompileRequest(request);
+    spDestroySession(session);
+
+    return spirv;
 }
 
 App::App() {
@@ -189,6 +199,8 @@ App::App() {
 	}
 	std::cout << "[INFO] Created VMA allocator\n";
 
+	render_target_ctx.allocator = allocator;  // add after vmaCreateAllocator succeeds
+
 	// ====================================
 	// === V. Create swapchain context ===
 	// ====================================
@@ -250,6 +262,33 @@ App::App() {
 	std::cout << "[INFO] Created storage image (resolution: " << image_info.extent.width << "x"
 	          << image_info.extent.height << ")\n";
 
+	VkImageCreateInfo accum_info = image_info;
+	accum_info.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+
+	if (vmaCreateImage(allocator, &accum_info, &alloc_info, &render_target_ctx.accum_image,
+					&render_target_ctx.accum_image_alloc, nullptr) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create accum image");
+	}
+
+	VkImageViewCreateInfo accum_view_info{};
+	accum_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	accum_view_info.image = render_target_ctx.accum_image;
+	accum_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	accum_view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+	accum_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	accum_view_info.subresourceRange.baseMipLevel = 0;
+	accum_view_info.subresourceRange.levelCount = 1;
+	accum_view_info.subresourceRange.baseArrayLayer = 0;
+	accum_view_info.subresourceRange.layerCount = 1;
+
+	if (vkCreateImageView(vulkan_ctx.device, &accum_view_info, nullptr,
+						&render_target_ctx.accum_image_view) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create accum image view");
+	}
+	std::cout << "[INFO] Created accum image and view\n";
+
+	
+
 	// 3. Create image view
 	VkImageViewCreateInfo view_info{};
 	view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -275,10 +314,19 @@ App::App() {
 	storage_image_binding.descriptorCount = 1;
 	storage_image_binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
+	//Accumulation buffer for progressive rendering (not used in the shader yet, but set up for future use)
+	VkDescriptorSetLayoutBinding accum_image_binding{};
+	accum_image_binding.binding         = 1;
+	accum_image_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	accum_image_binding.descriptorCount = 1;
+	accum_image_binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	std::array<VkDescriptorSetLayoutBinding, 2> bindings = {storage_image_binding, accum_image_binding};
+
 	VkDescriptorSetLayoutCreateInfo dsl_info{};
 	dsl_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	dsl_info.bindingCount = 1;
-	dsl_info.pBindings    = &storage_image_binding;
+	dsl_info.bindingCount = 2;
+	dsl_info.pBindings    = bindings.data();
 
 	if (vkCreateDescriptorSetLayout(vulkan_ctx.device, &dsl_info, nullptr,
 	                                &render_target_ctx.descriptor_set_layout) != VK_SUCCESS) {
@@ -289,7 +337,7 @@ App::App() {
 	// 5. Create descriptor pool
 	VkDescriptorPoolSize pool_size{};
 	pool_size.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	pool_size.descriptorCount = 1;
+	pool_size.descriptorCount = 2; // one for storage image, one for accumulation buffer
 
 	VkDescriptorPoolCreateInfo pool_info{};
 	pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -320,7 +368,29 @@ App::App() {
 	VkDescriptorImageInfo descriptor_image_info{};
 	descriptor_image_info.imageView   = render_target_ctx.storage_image_view;
 	descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	
+	VkDescriptorImageInfo descriptor_accum_image_info{};
+	descriptor_accum_image_info.imageView   = render_target_ctx.accum_image_view; 
+	descriptor_accum_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+	std::array<VkWriteDescriptorSet, 2> writes{};
+
+	writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writes[0].dstSet          = render_target_ctx.descriptor_set;
+	writes[0].dstBinding      = 0;
+	writes[0].descriptorCount = 1;
+	writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	writes[0].pImageInfo      = &descriptor_image_info;
+
+	writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writes[1].dstSet          = render_target_ctx.descriptor_set;
+	writes[1].dstBinding      = 1;
+	writes[1].descriptorCount = 1;
+	writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	writes[1].pImageInfo      = &descriptor_accum_image_info;
+
+
+	/**
 	VkWriteDescriptorSet write{};
 	write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 	write.dstSet          = render_target_ctx.descriptor_set;
@@ -328,8 +398,9 @@ App::App() {
 	write.descriptorCount = 1;
 	write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	write.pImageInfo      = &descriptor_image_info;
+	**/
 
-	vkUpdateDescriptorSets(vulkan_ctx.device, 1, &write, 0, nullptr);
+	vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes.data(), 0, nullptr);
 	std::cout << "[INFO] Updated descriptor set with storage image\n";
 
 	// ============================================
@@ -338,7 +409,7 @@ App::App() {
 
 	// 1. Compile shader
 	// TODO: Extract shading system/caching to "shading.h/cpp"
-	auto spirv = compile_slang_shader("shaders/random_color.slang", "main");
+	auto spirv = compile_slang_shader("shaders/cursedPathTracingAlgo.slang", "main");
 	std::cout << "[INFO] Compiled compute shader to SPIR-V (" << (spirv.size() * sizeof(uint32_t))
 	          << " bytes)\n";
 
