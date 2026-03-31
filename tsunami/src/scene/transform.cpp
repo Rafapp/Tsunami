@@ -1,16 +1,20 @@
 #include "tsunami/scene/transform.h"
 
-Transform::Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale) :
-    m_position(position), m_rotation(rotation), m_scale(scale) {
-	glm::mat4 T(1.0f);
-	glm::mat4 R(1.0f);
-	glm::mat4 S(1.0f);
+Transform::Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale) {
+	m_position = position;
+	m_rotation = rotation;
+	m_scale = scale;
+    updateTransform();
+}
 
-	T = glm::translate(glm::mat4(1.0f), m_position);
-	R = glm::rotate(R, glm::radians(rotation.x), glm::vec3(1, 0, 0));
-	R = glm::rotate(R, glm::radians(rotation.y), glm::vec3(0, 1, 0));
-	R = glm::rotate(R, glm::radians(rotation.z), glm::vec3(0, 0, 1));
-	S = glm::scale(S, m_scale);
+void Transform::updateTransform() {
+    glm::mat4 T = glm::translate(glm::mat4(1.0f), m_position);
+    glm::mat4 R = glm::toMat4(glm::quat(glm::radians(m_rotation)));
+    glm::mat4 S = glm::scale(glm::mat4(1.0f), m_scale);
+    m_transform = T * R * S;
+}
 
-	m_transform = T * R * S;
+glm::mat4 Transform::getTransform() {
+    updateTransform();
+    return m_transform;
 }

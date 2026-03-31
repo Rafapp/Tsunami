@@ -14,6 +14,5 @@ class App {
 
   private:
 	void MainLoop();
-
 	std::unique_ptr<core::Window> m_window;
 };
