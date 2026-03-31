@@ -325,7 +325,16 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
 
     RNG    rng    = RNG::make(pixel, push.frame);
     float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
-    float3 color  = tracePath(makeRay(pixel, dims, jitter), rng);
+
+
+    //Updated to have 32 samples per pixel, 
+    float3 ColorAccum = float3(0,0,0);
+    for (int i = 0; i < 32; ++i){
+        ColorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
+        jitter = float2(rng.nextFloat(), rng.nextFloat());
+    }
+
+    float3 color  = ColorAccum / 32.0f;
 
     float3 prev  = accum_image[pixel].rgb;
     float3 accum = lerp(prev, color, 1.0f / float(push.frame + 1u));
