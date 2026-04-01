@@ -10,12 +10,13 @@ set SLANG_DIR=vendors\slang-bin
 set BUILD=true
 set BUILD_TYPE=Release
 set PRESET=default
+set OUTPUT_DIR=build
 
 :: === Args ===
 :parse_args
 if "%~1"=="" goto end_args
 if /i "%~1"=="--setup-only" (set BUILD=false & shift & goto parse_args)
-if /i "%~1"=="--debug"      (set BUILD_TYPE=Debug & set PRESET=debug & shift & goto parse_args)
+if /i "%~1"=="--debug"      (set BUILD_TYPE=Debug & set PRESET=debug & set OUTPUT_DIR=build-debug & shift & goto parse_args)
 if /i "%~1"=="--help" (
     echo Usage: setup.bat [options]
     echo.
@@ -91,8 +92,19 @@ echo       OK: cppformat ready
 echo.
 
 :: === Step 4: CMake ===
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-if errorlevel 1 (echo ERROR: Could not find Visual Studio vcvars64.bat - is VS 2022 installed? & exit /b 1)
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+set "VCVARS="
+if exist "%VSWHERE%" (
+    for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find VC\Auxiliary\Build\vcvars64.bat`) do (
+        set "VCVARS=%%I"
+    )
+)
+if not defined VCVARS (
+    echo ERROR: Could not find Visual Studio vcvars64.bat. Install the Desktop development with C++ workload.
+    exit /b 1
+)
+call "%VCVARS%"
+if errorlevel 1 (echo ERROR: Failed to initialize the Visual Studio build environment & exit /b 1)
 if "%BUILD%"=="true" goto do_build
 echo [4/4] Skipping build (--setup-only)
 echo.
@@ -108,7 +120,7 @@ if errorlevel 1 (echo ERROR: CMake configure failed & exit /b 1)
 cmake --build --preset %PRESET%
 if errorlevel 1 (echo ERROR: CMake build failed & exit /b 1)
 echo.
-echo       OK: Build complete -- binary at build\tsunami.exe
+echo       OK: Build complete -- binary at %OUTPUT_DIR%\bin\tsunami.exe
 
 :done
 :: === Done ===
@@ -117,7 +129,7 @@ echo ==========================================
 echo         All done! Let it rip
 echo ==========================================
 echo.
-echo   Run: build\tsunami.exe
+echo   Run: %OUTPUT_DIR%\bin\tsunami.exe
 echo.
 pause
 endlocal
