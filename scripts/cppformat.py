@@ -69,6 +69,13 @@ def format_file(clang_format, path):
 def main():
     print("\n  tsunami > cppformat\n")
 
+    repo_root = get_git_root()
+    files = get_changed_files(repo_root)
+
+    if not files:
+        print("No C++ files changed, did not run cppformat. Have changes been committed yet?\n")
+        return 0
+
     clang_format = find_clang_format()
     if not clang_format:
         print("ERROR: clang-format not found on PATH.")
@@ -76,13 +83,6 @@ def main():
         print("  Windows: winget install LLVM.LLVM")
         print("  Linux: sudo apt install clang-format\n")
         return 1
-
-    repo_root = get_git_root()
-    files = get_changed_files(repo_root)
-
-    if not files:
-        print("No C++ files changed, did not run cppformat. Have changes been committed yet?\n")
-        return 0
 
     reformatted = []
     for f in files:
