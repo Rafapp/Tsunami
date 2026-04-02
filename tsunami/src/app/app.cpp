@@ -23,6 +23,7 @@
 
 #include "tsunami/app/app.h"
 #include "tsunami/audio/microphone_input.h"
+#include "tsunami/ui/audience_control_panel.h"
 #include "tsunami/ui/audience_overlay.h"
 
 namespace {
@@ -82,17 +83,12 @@ struct SyncContext {
 } sync_ctx{};
 
 struct OverlayContext {
-	VkRenderPass               render_pass = VK_NULL_HANDLE;
-	std::vector<VkFramebuffer> framebuffers;
-	float                      volume_level    = 0.0f;
-	uint32_t                   selection_count = 5;
-	uint32_t                   selected_index  = 0;
+	VkRenderPass                  render_pass = VK_NULL_HANDLE;
+	std::vector<VkFramebuffer>    framebuffers;
+	ui::AudienceControlPanelState controls{};
+	ui::AudienceDiagnostics       diagnostics{};
+	bool                          show_control_panel = true;
 } overlay_ctx{};
-
-constexpr float kDemoCycleHz      = 1.35f;
-constexpr float kAudioNoiseFloor  = 0.015f;
-constexpr float kAudioSensitivity = 8.0f;
-constexpr float kOverlaySmoothing = 0.18f;
 
 void check_vk_result(VkResult result) {
 	if (result == VK_SUCCESS) {
@@ -287,31 +283,61 @@ void shutdown_imgui() {
 	ImGui::DestroyContext();
 }
 
+void refresh_audio_diagnostics(const audio::MicrophoneInput* microphone) {
+	overlay_ctx.diagnostics.microphone_available =
+	    microphone != nullptr && microphone->isAvailable();
+	overlay_ctx.diagnostics.microphone_name =
+	    microphone != nullptr ? microphone->deviceName().c_str() : "Unavailable";
+	overlay_ctx.diagnostics.microphone_status = microphone != nullptr ?
+	                                                microphone->statusMessage().c_str() :
+	                                                "Microphone capture is unavailable.";
+	overlay_ctx.diagnostics.raw_microphone_level =
+	    overlay_ctx.diagnostics.microphone_available ? microphone->latestLevel() : 0.0f;
+}
+
+float calculate_demo_overlay_level() {
+	const float time_seconds = static_cast<float>(glfwGetTime());
+	const float cycle_hz     = std::max(overlay_ctx.controls.audio.demo_cycle_hz, 0.0f);
+	return 0.5f + (0.45f * std::sin(time_seconds * cycle_hz));
+}
+
+float normalize_microphone_level(float raw_level) {
+	const float noise_floor = std::clamp(overlay_ctx.controls.audio.noise_floor, 0.0f, 1.0f);
+	const float sensitivity = std::max(overlay_ctx.controls.audio.sensitivity, 0.0f);
+	return std::clamp((raw_level - noise_floor) * sensitivity, 0.0f, 1.0f);
+}
+
 void apply_overlay_level(float target_level) {
 	const float clamped_level = std::clamp(target_level, 0.0f, 1.0f);
-	overlay_ctx.volume_level += (clamped_level - overlay_ctx.volume_level) * kOverlaySmoothing;
-	overlay_ctx.selected_index =
-	    ui::quantizeSelection(overlay_ctx.volume_level, overlay_ctx.selection_count);
+	const float smoothing     = std::clamp(overlay_ctx.controls.audio.smoothing, 0.01f, 1.0f);
+	overlay_ctx.controls.overlay.volume_level +=
+	    (clamped_level - overlay_ctx.controls.overlay.volume_level) * smoothing;
+	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
+	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
 }
 
-void update_demo_overlay_state() {
-	// Demo fallback used when live capture is unavailable.
+void update_audience_overlay_state(const audio::MicrophoneInput* microphone) {
+	refresh_audio_diagnostics(microphone);
 
-	const float time_seconds = static_cast<float>(glfwGetTime());
-	const float target_level = 0.5f + (0.45f * std::sin(time_seconds * kDemoCycleHz));
-	apply_overlay_level(target_level);
-}
+	float target_level = 0.0f;
 
-void update_microphone_overlay_state(const audio::MicrophoneInput* microphone) {
-	if (microphone == nullptr || !microphone->isAvailable()) {
-		update_demo_overlay_state();
-		return;
+	switch (overlay_ctx.controls.audio.input_mode) {
+		case ui::AudienceInputMode::Automatic:
+			target_level =
+			    overlay_ctx.diagnostics.microphone_available ?
+			        normalize_microphone_level(overlay_ctx.diagnostics.raw_microphone_level) :
+			        calculate_demo_overlay_level();
+			break;
+		case ui::AudienceInputMode::Demo:
+			target_level = calculate_demo_overlay_level();
+			break;
+		case ui::AudienceInputMode::Manual:
+			target_level = std::clamp(overlay_ctx.controls.audio.manual_level, 0.0f, 1.0f);
+			break;
 	}
 
-	const float raw_level = microphone->latestLevel();
-	const float normalized_level =
-	    std::clamp((raw_level - kAudioNoiseFloor) * kAudioSensitivity, 0.0f, 1.0f);
-	apply_overlay_level(normalized_level);
+	overlay_ctx.diagnostics.normalized_level = target_level;
+	apply_overlay_level(target_level);
 }
 
 }        // namespace
@@ -848,17 +874,30 @@ void App::MainLoop() {
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
 
-		update_microphone_overlay_state(m_microphone.get());
-
 		ImGui_ImplVulkan_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
 
-		ui::AudienceOverlayState overlay_state{};
-		overlay_state.volume_level    = overlay_ctx.volume_level;
-		overlay_state.selection_count = overlay_ctx.selection_count;
-		overlay_state.selected_index  = overlay_ctx.selected_index;
-		ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_state);
+		update_audience_overlay_state(m_microphone.get());
+
+		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
+			overlay_ctx.show_control_panel = !overlay_ctx.show_control_panel;
+		}
+
+		bool controls_changed = false;
+		if (overlay_ctx.show_control_panel) {
+			controls_changed = ui::drawAudienceControlPanel(
+			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
+		}
+
+		if (controls_changed) {
+			update_audience_overlay_state(m_microphone.get());
+		}
+
+		if (overlay_ctx.controls.show_overlay) {
+			ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_ctx.controls.overlay,
+			                        overlay_ctx.controls.style);
+		}
 		ImGui::Render();
 
 		// 1. Wait for previous frame to finish

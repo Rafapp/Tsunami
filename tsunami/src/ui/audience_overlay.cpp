@@ -4,16 +4,6 @@
 
 namespace {
 
-constexpr float kOverlayWidthRatio  = 0.82f;
-constexpr float kOverlayMaxWidth    = 1100.0f;
-constexpr float kOverlayHeight      = 84.0f;
-constexpr float kOverlayBottomInset = 40.0f;
-constexpr float kOuterPadding       = 16.0f;
-constexpr float kBarHeight          = 38.0f;
-constexpr float kBarRounding        = 4.0f;
-constexpr float kOutlineThickness   = 3.0f;
-constexpr float kMarkerThickness    = 4.0f;
-
 float clamp01(float value) {
 	return std::clamp(value, 0.0f, 1.0f);
 }
@@ -32,11 +22,18 @@ uint32_t quantizeSelection(float volume_level, uint32_t selection_count) {
 	return std::min(static_cast<uint32_t>(scaled_index), selection_count - 1);
 }
 
-void drawAudienceOverlay(const ImVec2& display_size, const AudienceOverlayState& state) {
-	const float  overlay_width = std::min(display_size.x * kOverlayWidthRatio, kOverlayMaxWidth);
-	const ImVec2 overlay_size(overlay_width, kOverlayHeight);
+void drawAudienceOverlay(const ImVec2& display_size, const AudienceOverlayState& state,
+                         const AudienceOverlayStyle& style) {
+	const float width_ratio = std::clamp(style.overlay_width_ratio, 0.1f, 1.0f);
+	const float overlay_width =
+	    std::min(display_size.x,
+	             std::min(display_size.x * width_ratio, std::max(style.overlay_max_width, 180.0f)));
+	const float  overlay_height = std::max(style.overlay_height, 30.0f);
+	const ImVec2 overlay_size(overlay_width, overlay_height);
+	const float  bottom_inset = std::clamp(style.overlay_bottom_inset, 0.0f,
+	                                       std::max(0.0f, display_size.y - overlay_size.y));
 	const ImVec2 overlay_position((display_size.x - overlay_size.x) / 2.0f,
-	                              display_size.y - overlay_size.y - kOverlayBottomInset);
+	                              display_size.y - overlay_size.y - bottom_inset);
 
 	ImGui::SetNextWindowPos(overlay_position, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(overlay_size, ImGuiCond_Always);
@@ -50,27 +47,34 @@ void drawAudienceOverlay(const ImVec2& display_size, const AudienceOverlayState&
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 	ImGui::Begin("AudienceOverlay", nullptr, window_flags);
 
-	const float bar_top    = overlay_position.y + (overlay_size.y - kBarHeight) * 0.5f;
-	const float bar_left   = overlay_position.x + kOuterPadding;
-	const float bar_right  = overlay_position.x + overlay_size.x - kOuterPadding;
-	const float bar_width  = bar_right - bar_left;
-	const float bar_bottom = bar_top + kBarHeight;
+	const float outer_padding     = std::clamp(style.outer_padding, 0.0f, overlay_size.x * 0.45f);
+	const float bar_height        = std::clamp(style.bar_height, 6.0f, overlay_size.y);
+	const float bar_rounding      = std::max(style.bar_rounding, 0.0f);
+	const float outline_thickness = std::max(style.outline_thickness, 1.0f);
+	const float marker_thickness  = std::max(style.marker_thickness, 1.0f);
+	const float bar_top           = overlay_position.y + (overlay_size.y - bar_height) * 0.5f;
+	const float bar_left          = overlay_position.x + outer_padding;
+	const float bar_right         = overlay_position.x + overlay_size.x - outer_padding;
+	const float bar_width         = bar_right - bar_left;
+	const float bar_bottom        = bar_top + bar_height;
 
 	const float clamped_level = clamp01(state.volume_level);
 	const float filled_right  = bar_left + (clamped_level * bar_width);
 
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
 	draw_list->AddRectFilled(ImVec2(bar_left, bar_top), ImVec2(filled_right, bar_bottom),
-	                         IM_COL32(18, 18, 18, 220), kBarRounding);
+	                         ImGui::ColorConvertFloat4ToU32(style.fill_color), bar_rounding);
 	draw_list->AddRect(ImVec2(bar_left, bar_top), ImVec2(bar_right, bar_bottom),
-	                   IM_COL32(10, 10, 10, 255), kBarRounding, 0, kOutlineThickness);
+	                   ImGui::ColorConvertFloat4ToU32(style.outline_color), bar_rounding, 0,
+	                   outline_thickness);
 
 	if (state.selection_count > 1) {
 		for (uint32_t divider = 1; divider < state.selection_count; ++divider) {
 			const float divider_x = bar_left + (bar_width * static_cast<float>(divider) /
 			                                    static_cast<float>(state.selection_count));
 			draw_list->AddLine(ImVec2(divider_x, bar_top + 2.0f),
-			                   ImVec2(divider_x, bar_bottom - 2.0f), IM_COL32(0, 0, 0, 55));
+			                   ImVec2(divider_x, bar_bottom - 2.0f),
+			                   ImGui::ColorConvertFloat4ToU32(style.divider_color));
 		}
 	}
 
@@ -83,7 +87,7 @@ void drawAudienceOverlay(const ImVec2& display_size, const AudienceOverlayState&
 	const float selection_x      = bar_left + (selection_center * bar_width);
 
 	draw_list->AddLine(ImVec2(selection_x, bar_top), ImVec2(selection_x, bar_bottom),
-	                   IM_COL32(225, 35, 35, 255), kMarkerThickness);
+	                   ImGui::ColorConvertFloat4ToU32(style.marker_color), marker_thickness);
 
 	ImGui::End();
 	ImGui::PopStyleVar(2);
