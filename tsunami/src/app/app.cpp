@@ -1,9 +1,9 @@
 #include <array>
-#include <iostream>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -39,9 +39,9 @@ struct SwapchainContext {
 	vkb::Swapchain           swapchain{};
 	std::vector<VkImage>     images;
 	std::vector<VkImageView> image_views;
-	std::vector<bool>		 image_initialized;
-	VkFormat       			 image_format = VK_FORMAT_UNDEFINED;
-	VkExtent2D     			 extent{};
+	std::vector<bool>        image_initialized;
+	VkFormat                 image_format = VK_FORMAT_UNDEFINED;
+	VkExtent2D               extent{};
 } swapchain_ctx{};
 
 struct RenderTargetContext {
@@ -50,7 +50,7 @@ struct RenderTargetContext {
 	VkImage       storage_image       = VK_NULL_HANDLE;
 	VmaAllocation storage_image_alloc = nullptr;
 	VkImageView   storage_image_view  = VK_NULL_HANDLE;
-	bool 		  storage_initialized = false;
+	bool          storage_initialized = false;
 
 	// Added accumulation buffer for progressive rendering (not used in the shader yet, but set up
 	// for future use)
@@ -80,11 +80,11 @@ struct SyncContext {
 } sync_ctx{};
 
 struct OverlayContext {
-	VkRenderPass 			   render_pass 		= VK_NULL_HANDLE;
+	VkRenderPass               render_pass = VK_NULL_HANDLE;
 	std::vector<VkFramebuffer> framebuffers;
-	float 					   volume_level 	= 0.15f;
-	uint32_t 				   selection_count 	= 5;
-	uint32_t 				   selected_index 	= 0;
+	float                      volume_level    = 0.15f;
+	uint32_t                   selection_count = 5;
+	uint32_t                   selected_index  = 0;
 } overlay_ctx{};
 
 void check_vk_result(VkResult result) {
@@ -102,11 +102,11 @@ std::string resolve_shader_path(const std::string& relative_path) {
 	namespace fs = std::filesystem;
 
 	const std::array<fs::path, 5> candidates = {
-		fs::path(relative_path),
-		fs::path("tsunami") / relative_path,
-		fs::path("bin") / relative_path,
-		fs::path("build/bin") / relative_path,
-		fs::path("build-debug/bin") / relative_path,
+	    fs::path(relative_path),
+	    fs::path("tsunami") / relative_path,
+	    fs::path("bin") / relative_path,
+	    fs::path("build/bin") / relative_path,
+	    fs::path("build-debug/bin") / relative_path,
 	};
 
 	for (const fs::path& candidate : candidates) {
@@ -120,7 +120,6 @@ std::string resolve_shader_path(const std::string& relative_path) {
 
 static std::vector<uint32_t> compile_slang_shader(const std::string& path,
                                                   const std::string& entry_point) {
-
 	const std::string resolved_path = resolve_shader_path(path);
 
 	SlangSession*        session = spCreateSession(nullptr);
@@ -176,7 +175,7 @@ void create_overlay_render_pass() {
 	color_attachment_ref.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
 	subpass.colorAttachmentCount = 1;
 	subpass.pColorAttachments    = &color_attachment_ref;
 
@@ -186,8 +185,8 @@ void create_overlay_render_pass() {
 	dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	dependency.srcAccessMask = 0;
-	dependency.dstAccessMask = 
-		VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	dependency.dstAccessMask =
+	    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
 	VkRenderPassCreateInfo render_pass_info{};
 	render_pass_info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -241,7 +240,7 @@ void initialize_imgui(GLFWwindow* window) {
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 
-	ImGuiIO& io = ImGui::GetIO();
+	ImGuiIO& io    = ImGui::GetIO();
 	io.IniFilename = nullptr;
 
 	ImGui::StyleColorsDark();
@@ -251,20 +250,20 @@ void initialize_imgui(GLFWwindow* window) {
 	}
 
 	ImGui_ImplVulkan_InitInfo init_info{};
-	init_info.ApiVersion	   				= VK_API_VERSION_1_3;
-	init_info.Instance		   				= vulkan_ctx.instance.instance;
-	init_info.PhysicalDevice 				= vulkan_ctx.phys_device.physical_device;
-	init_info.Device         				= vulkan_ctx.device;
-	init_info.QueueFamily    				= vulkan_ctx.graphics_queue_family;
-	init_info.Queue          				= vulkan_ctx.graphics_queue;
-	init_info.DescriptorPoolSize 			= 16;
-	init_info.MinImageCount    				= static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.ImageCount        			= static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.CheckVkResultFn 				= check_vk_result;
-	init_info.MinAllocationSize 			= 1024 * 1024;
-	init_info.PipelineInfoMain.RenderPass 	= overlay_ctx.render_pass;
-	init_info.PipelineInfoMain.Subpass 		= 0;
-	init_info.PipelineInfoMain.MSAASamples 	= VK_SAMPLE_COUNT_1_BIT;
+	init_info.ApiVersion                   = VK_API_VERSION_1_3;
+	init_info.Instance                     = vulkan_ctx.instance.instance;
+	init_info.PhysicalDevice               = vulkan_ctx.phys_device.physical_device;
+	init_info.Device                       = vulkan_ctx.device;
+	init_info.QueueFamily                  = vulkan_ctx.graphics_queue_family;
+	init_info.Queue                        = vulkan_ctx.graphics_queue;
+	init_info.DescriptorPoolSize           = 16;
+	init_info.MinImageCount                = static_cast<uint32_t>(swapchain_ctx.images.size());
+	init_info.ImageCount                   = static_cast<uint32_t>(swapchain_ctx.images.size());
+	init_info.CheckVkResultFn              = check_vk_result;
+	init_info.MinAllocationSize            = 1024 * 1024;
+	init_info.PipelineInfoMain.RenderPass  = overlay_ctx.render_pass;
+	init_info.PipelineInfoMain.Subpass     = 0;
+	init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
 	if (!ImGui_ImplVulkan_Init(&init_info)) {
 		throw std::runtime_error("failed to initialize ImGui Vulkan backend");
@@ -284,10 +283,10 @@ void shutdown_imgui() {
 void update_demo_overlay_state() {
 	// Temporary stand-in until microphone-drien audience input is connected.
 
-	const float time_seconds 	= static_cast<float>(glfwGetTime());
-	overlay_ctx.volume_level 	= 0.5f + (0.45f * std::sin(time_seconds * 1.35f));
-	overlay_ctx.selected_index 	= 
-		ui::quantizeSelection(overlay_ctx.volume_level, overlay_ctx.selection_count);
+	const float time_seconds = static_cast<float>(glfwGetTime());
+	overlay_ctx.volume_level = 0.5f + (0.45f * std::sin(time_seconds * 1.35f));
+	overlay_ctx.selected_index =
+	    ui::quantizeSelection(overlay_ctx.volume_level, overlay_ctx.selection_count);
 }
 
 }        // namespace
@@ -415,7 +414,7 @@ App::App() {
 	auto images_ret = swapchain_ctx.swapchain.get_images();
 	if (!images_ret)
 		throw std::runtime_error("failed to get swapchain images");
-	swapchain_ctx.images 			= images_ret.value();
+	swapchain_ctx.images            = images_ret.value();
 	swapchain_ctx.image_initialized = std::vector<bool>(swapchain_ctx.images.size(), false);
 	std::cout << "[INFO] Acquired " << swapchain_ctx.images.size() << " swapchain images\n";
 
@@ -759,7 +758,7 @@ App::~App() {
 
 	if (render_target_ctx.descriptor_set_layout != VK_NULL_HANDLE) {
 		vkDestroyDescriptorSetLayout(vulkan_ctx.device, render_target_ctx.descriptor_set_layout,
-		                            nullptr);
+		                             nullptr);
 	}
 
 	if (render_target_ctx.accum_image_view != VK_NULL_HANDLE) {
@@ -813,7 +812,7 @@ void App::MainLoop() {
 	uint32_t frame_number = 0;
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
-		
+
 		update_demo_overlay_state();
 
 		ImGui_ImplVulkan_NewFrame();
@@ -821,23 +820,23 @@ void App::MainLoop() {
 		ImGui::NewFrame();
 
 		ui::AudienceOverlayState overlay_state{};
-		overlay_state.volume_level = overlay_ctx.volume_level;
+		overlay_state.volume_level    = overlay_ctx.volume_level;
 		overlay_state.selection_count = overlay_ctx.selection_count;
-		overlay_state.selected_index = overlay_ctx.selected_index;
+		overlay_state.selected_index  = overlay_ctx.selected_index;
 		ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_state);
 		ImGui::Render();
 
 		// 1. Wait for previous frame to finish
-		check_vk_result(vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, 
-										UINT64_MAX));
+		check_vk_result(
+		    vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX));
 		check_vk_result(vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight));
 
 		// 2. Acquire next swapchain image
 		uint32_t image_index = 0;
 		check_vk_result(vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain,
-											  UINT64_MAX, sync_ctx.image_available, VK_NULL_HANDLE, 
-											  &image_index));
-		
+		                                      UINT64_MAX, sync_ctx.image_available, VK_NULL_HANDLE,
+		                                      &image_index));
+
 		// 3. Record command buffer
 		check_vk_result(vkResetCommandBuffer(command_ctx.command_buffer, 0));
 
@@ -849,9 +848,9 @@ void App::MainLoop() {
 		// 3a. Transition storage image to GENERAL so compute can write to it
 		VkImageMemoryBarrier storage_barrier{};
 		storage_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		storage_barrier.oldLayout           = render_target_ctx.storage_initialized
-													? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-													: VK_IMAGE_LAYOUT_UNDEFINED;
+		storage_barrier.oldLayout           = render_target_ctx.storage_initialized ?
+		                                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
+		                                          VK_IMAGE_LAYOUT_UNDEFINED;
 		storage_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
 		storage_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		storage_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -899,9 +898,9 @@ void App::MainLoop() {
 		// 3e. Transition swapchain image to TRANSFER_DST for blit
 		VkImageMemoryBarrier swapchain_barrier{};
 		swapchain_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		swapchain_barrier.oldLayout           = swapchain_ctx.image_initialized[image_index]
-													? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-													: VK_IMAGE_LAYOUT_UNDEFINED;
+		swapchain_barrier.oldLayout           = swapchain_ctx.image_initialized[image_index] ?
+		                                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR :
+		                                            VK_IMAGE_LAYOUT_UNDEFINED;
 		swapchain_barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		swapchain_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		swapchain_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -938,18 +937,18 @@ void App::MainLoop() {
 		overlay_barrier.image               = swapchain_ctx.images[image_index];
 		overlay_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 		overlay_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-		overlay_barrier.dstAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-		                                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		overlay_barrier.dstAccessMask =
+		    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
 		vkCmdPipelineBarrier(command_ctx.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-		                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1,
-		                     &overlay_barrier);
+		                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0,
+		                     nullptr, 1, &overlay_barrier);
 
 		VkRenderPassBeginInfo render_pass_info{};
 		render_pass_info.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 		render_pass_info.renderPass  = overlay_ctx.render_pass;
 		render_pass_info.framebuffer = overlay_ctx.framebuffers[image_index];
-		render_pass_info.renderArea = {{0, 0}, swapchain_ctx.extent};
+		render_pass_info.renderArea  = {{0, 0}, swapchain_ctx.extent};
 
 		vkCmdBeginRenderPass(command_ctx.command_buffer, &render_pass_info,
 		                     VK_SUBPASS_CONTENTS_INLINE);
@@ -972,7 +971,7 @@ void App::MainLoop() {
 		submit_info.pSignalSemaphores    = &sync_ctx.render_finished;
 
 		check_vk_result(
-			vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight));
+		    vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight));
 
 		// 5. Present
 		VkPresentInfoKHR present_info{};
