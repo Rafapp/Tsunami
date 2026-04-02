@@ -33,7 +33,7 @@ struct GPUMaterial {
 
 // ─── constants ────────────────────────────────────────────────────────────────
 static const float PI         = 3.14159265358979f;
-static const int   MAX_BOUNCES = 8;
+static const int   MAX_BOUNCES = 4;
 static const float T_MIN      = 0.00001f;
 static const float T_MAX      = 1e30f;
 
@@ -317,10 +317,13 @@ float3 tracePath(Ray ray, inout RNG rng)
 }
 
 // ─── camera ───────────────────────────────────────────────────────────────────
+static float offset = 0.0f;
 Ray makeRay(uint2 pixel, uint2 dims, float2 jitter)
 {
     GPUCamera cam     = camera_buf[0];
     float3    origin  = cam.position.xyz;
+    offset = sin(push.frame * 0.01f) * 5.0;
+    origin.x += offset;
     float3    target  = cam.target.xyz;
     float3    worldUp = cam.up.xyz;
     float     fov     = cam.fov_near_far.x;
@@ -357,16 +360,17 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
 
     float3 colorAccum = float3(0,0,0);
-    for (int i = 0; i < 32; ++i) {
-        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
+
+    for (int i = 0; i < 6; ++i) {
         jitter = float2(rng.nextFloat(), rng.nextFloat());
+        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
     }
 
-    float3 color = colorAccum / 32.0f;
+    float3 color = colorAccum / 16.0f;
     float3 prev  = accum_image[pixel].rgb;
     float3 accum = lerp(prev, color, 1.0f / float(push.frame + 1u));
 
     accum_image[pixel] = float4(accum, 1.0f);
-    // output_image[pixel] = float4(sqrt(max(color, 0.0f)), 1.0f);
-    output_image[pixel] = float4(sqrt(max(accum, 0.0f)), 1.0f);
+    // output_image[pixel] = float4(accum, 1.0f);
+    output_image[pixel] = float4(color, 1.0f);
 }
