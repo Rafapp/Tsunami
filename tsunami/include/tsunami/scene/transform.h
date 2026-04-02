@@ -34,4 +34,5 @@ class Transform {
 	glm::vec3 m_rotation;
 	glm::vec3 m_scale;
 	glm::mat4 m_transform;
+	glm::mat4 m_inverseTransform;
 };

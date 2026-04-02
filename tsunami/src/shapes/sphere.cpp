@@ -1,11 +1,13 @@
 #include "tsunami/shapes/sphere.h"
 
-Sphere::Sphere(Transform transform, Material* material, float radius) :
-    Shape(transform, material), m_radius(radius) {
-}
+Sphere::Sphere(Transform transform, Material* material) :
+    Shape(transform, material) {}
 
 GPUShape Sphere::pack(int matIndex) const {
-	return GPUShape{m_transform.pack(), glm::vec4(m_radius, 0.0f, 0.0f, 0.0f),
-	                glm::vec4(0.0f),    0,
-	                matIndex,           {0.0f, 0.0f}};
+	return GPUShape{
+	    m_transform.pack(),
+		glm::inverse(m_transform.pack()),
+	    2, // type: sphere 
+	    matIndex
+	};
 }

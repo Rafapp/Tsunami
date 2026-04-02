@@ -3,6 +3,7 @@
 #include <memory>
 #include <stdexcept>
 
+#include "tsunami/scene/scene.h"
 #include "tsunami/core/window.h"
 
 class App {
@@ -15,4 +16,5 @@ class App {
   private:
 	void                          MainLoop();
 	std::unique_ptr<core::Window> m_window;
+	std::unique_ptr<Scene>        m_scene;
 };

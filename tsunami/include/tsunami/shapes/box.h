@@ -2,9 +2,9 @@
 
 #include "tsunami/shapes/shape.h"
 
-class Quad : public Shape {
+class Box : public Shape {
   public:
-	Quad(Transform transform, Material* material);
-	~Quad() = default;
+	Box(Transform transform, Material* material);
+	~Box() = default;
 	GPUShape pack(int matIndex) const override;
 };

@@ -13,6 +13,17 @@
 
 #include "tsunami/app/app.h"
 
+struct SceneContext {
+	VkBuffer      camera_buffer   = VK_NULL_HANDLE;
+	VmaAllocation camera_alloc    = VK_NULL_HANDLE;
+	VkBuffer      shapes_buffer   = VK_NULL_HANDLE;
+	VmaAllocation shapes_alloc    = VK_NULL_HANDLE;
+	VkBuffer      material_buffer = VK_NULL_HANDLE;
+	VmaAllocation material_alloc  = VK_NULL_HANDLE;
+	uint32_t      shape_count     = 0;
+	uint32_t      material_count  = 0;
+} scene_ctx;
+
 struct VulkanContext {
 	vkb::Instance       instance;
 	vkb::PhysicalDevice phys_device;
@@ -105,11 +116,82 @@ static std::vector<uint32_t> compile_slang_shader(const std::string& path,
 }
 
 App::App() {
+	// ======================
+	// === 0. Scene setup ===
+	// ======================
+
+	// TODO: Parse scene description from file or USD
+	m_scene = std::make_unique<Scene>();
+
+	// Camera
+	m_scene->m_camera = Camera(
+		glm::vec3(0.0f, 0.0f,  4.0f),
+		glm::vec3(0.0f, 0.0f,  0.0f),
+		glm::vec3(0.0f, 1.0f,  0.0f),
+		45.0f, 0.1f, 100.0f
+	);
+
+	// Floor (white)
+	m_scene->m_shapes.push_back(std::make_unique<Quad>(
+		Transform(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+
+	// Ceiling (white)
+	m_scene->m_shapes.push_back(std::make_unique<Quad>(
+		Transform(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+
+	// Back wall (white)
+	m_scene->m_shapes.push_back(std::make_unique<Quad>(
+		Transform(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(90.0f, 0.0f, 0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+
+	// Left wall (red)
+	m_scene->m_shapes.push_back(std::make_unique<Quad>(
+		Transform(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+		new Lambert(glm::vec3(0.8f, 0.1f, 0.1f))));
+
+	// Right wall (green)
+	m_scene->m_shapes.push_back(std::make_unique<Quad>(
+		Transform(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -90.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+		new Lambert(glm::vec3(0.1f, 0.8f, 0.1f))));
+
+	// Area light (emissive quad on ceiling)
+	m_scene->m_shapes.push_back(std::make_unique<Quad>(
+		Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f), glm::vec3(0.5f, 1.0f, 0.5f)),
+		new Lambert(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
+
+	// Tall box
+	m_scene->m_shapes.push_back(std::make_unique<Box>(
+		Transform(glm::vec3(-0.35f, -0.35f, -0.4f), glm::vec3(0.0f, 15.0f, 0.0f), glm::vec3(0.3f, 0.65f, 0.3f)),
+		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+
+	// Short box
+	m_scene->m_shapes.push_back(std::make_unique<Box>(
+		Transform(glm::vec3(0.35f, -0.65f, -0.2f), glm::vec3(0.0f, -15.0f, 0.0f), glm::vec3(0.3f, 0.35f, 0.3f)),
+		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+
+	// Pack scene data for GPU
+	GPUCamera                gpu_camera = m_scene->m_camera.pack();
+	std::vector<GPUShape>    gpu_shapes;
+	std::vector<GPUMaterial> gpu_materials;
+
+	for (auto& shape : m_scene->m_shapes) {
+		int matIndex = (int)gpu_materials.size();
+		gpu_materials.push_back(shape->m_material->pack());
+		gpu_shapes.push_back(shape->pack(matIndex));
+	}
+
+	scene_ctx.shape_count    = (uint32_t)gpu_shapes.size();
+	scene_ctx.material_count = (uint32_t)gpu_materials.size();
+
+	VkDeviceSize camera_size   = sizeof(GPUCamera);
+	VkDeviceSize shapes_size   = sizeof(GPUShape)    * gpu_shapes.size();
+	VkDeviceSize material_size = sizeof(GPUMaterial) * gpu_materials.size();
+
 	// ========================================
 	// === I. Load vulkan function pointers ===
 	// ========================================
-
-	// TODO: Logging class and functionality
 
 	if (volkInitialize() != VK_SUCCESS) {
 		throw std::runtime_error("failed to initialize volk");
@@ -127,7 +209,6 @@ App::App() {
 	// === III. Create Vulkan context ===
 	// ==================================
 
-	// 1. Create Vulkan instance
 	vkb::InstanceBuilder builder;
 	auto                 inst_ret = builder.set_app_name("tsunami")
 	                                    .request_validation_layers()
@@ -140,7 +221,6 @@ App::App() {
 	volkLoadInstance(vulkan_ctx.instance.instance);
 	std::cout << "[INFO] Created Vulkan instance\n";
 
-	// 2. Create a surface
 	vulkan_ctx.surface = VK_NULL_HANDLE;
 	if (glfwCreateWindowSurface(vulkan_ctx.instance, m_window->handle(), nullptr,
 	                            &vulkan_ctx.surface) != VK_SUCCESS) {
@@ -148,7 +228,6 @@ App::App() {
 	}
 	std::cout << "[INFO] Created window surface\n";
 
-	// 5. Select physical device (GPU)
 	auto phys_dev_ret = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
 	                        .set_surface(vulkan_ctx.surface)
 	                        .set_minimum_version(1, 3)
@@ -158,7 +237,6 @@ App::App() {
 	vulkan_ctx.phys_device = phys_dev_ret.value();
 	std::cout << "[INFO] Selected physical device\n";
 
-	// 6. Create logical device and load with volk
 	vkb::DeviceBuilder device_builder{vulkan_ctx.phys_device};
 	auto               dev_ret = device_builder.build();
 	if (!dev_ret)
@@ -168,7 +246,6 @@ App::App() {
 	volkLoadDevice(vulkan_ctx.device);
 	std::cout << "[INFO] Created logical device\n";
 
-	// 7. Create graphics queue, get queue and index
 	auto graphics_queue_ret = vulkan_ctx.log_device.get_queue(vkb::QueueType::graphics);
 	if (!graphics_queue_ret)
 		throw std::runtime_error("failed to get graphics queue");
@@ -181,7 +258,7 @@ App::App() {
 	vulkan_ctx.graphics_queue_family = family_ret.value();
 
 	// ==============================================
-	// === IV. Initialize VMA to write to VkImage ===
+	// === IV. Initialize VMA ===
 	// ==============================================
 	VmaAllocatorCreateInfo vma_info{};
 	vma_info.instance         = vulkan_ctx.instance.instance;
@@ -199,14 +276,11 @@ App::App() {
 		throw std::runtime_error("failed to create VMA allocator");
 	}
 	std::cout << "[INFO] Created VMA allocator\n";
-
-	render_target_ctx.allocator = allocator;        // add after vmaCreateAllocator succeeds
+	render_target_ctx.allocator = allocator;
 
 	// ====================================
 	// === V. Create swapchain context ===
 	// ====================================
-
-	// 1. Create swapchain
 	vkb::SwapchainBuilder swapchain_builder{vulkan_ctx.log_device};
 	auto                  swap_ret =
 	    swapchain_builder
@@ -221,14 +295,12 @@ App::App() {
 	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
 	std::cout << "[INFO] Created swapchain (format: " << swapchain_ctx.image_format << ")\n";
 
-	// 2. Create swapchain images
 	auto images_ret = swapchain_ctx.swapchain.get_images();
 	if (!images_ret)
 		throw std::runtime_error("failed to get swapchain images");
 	swapchain_ctx.images = images_ret.value();
 	std::cout << "[INFO] Acquired " << swapchain_ctx.images.size() << " swapchain images\n";
 
-	// 3. Create swapchain image views
 	auto image_views_ret = swapchain_ctx.swapchain.get_image_views();
 	if (!image_views_ret)
 		throw std::runtime_error("failed to get swapchain image views");
@@ -239,12 +311,12 @@ App::App() {
 	// === VI. Create Render Target Context ===
 	// ========================================
 
-	// 1. Define storage image info
+	// 1. Storage image
 	VkImageCreateInfo image_info{};
 	image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	image_info.imageType     = VK_IMAGE_TYPE_2D;
 	image_info.format        = VK_FORMAT_R8G8B8A8_UNORM;
-	image_info.extent        = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
+	image_info.extent        = {(uint32_t)m_window->width(), (uint32_t)m_window->height(), 1};
 	image_info.mipLevels     = 1;
 	image_info.arrayLayers   = 1;
 	image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -252,21 +324,21 @@ App::App() {
 	image_info.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-	// 2. Create storage image & allocate memory
-	VmaAllocationCreateInfo alloc_info{};
-	alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	VmaAllocationCreateInfo img_alloc_info{};
+	img_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-	if (vmaCreateImage(allocator, &image_info, &alloc_info, &render_target_ctx.storage_image,
+	if (vmaCreateImage(allocator, &image_info, &img_alloc_info, &render_target_ctx.storage_image,
 	                   &render_target_ctx.storage_image_alloc, nullptr) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create storage image");
 	}
-	std::cout << "[INFO] Created storage image (resolution: " << image_info.extent.width << "x"
+	std::cout << "[INFO] Created storage image (" << image_info.extent.width << "x"
 	          << image_info.extent.height << ")\n";
 
+	// 2. Accum image
 	VkImageCreateInfo accum_info = image_info;
 	accum_info.usage             = VK_IMAGE_USAGE_STORAGE_BIT;
 
-	if (vmaCreateImage(allocator, &accum_info, &alloc_info, &render_target_ctx.accum_image,
+	if (vmaCreateImage(allocator, &accum_info, &img_alloc_info, &render_target_ctx.accum_image,
 	                   &render_target_ctx.accum_image_alloc, nullptr) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create accum image");
 	}
@@ -288,7 +360,7 @@ App::App() {
 	}
 	std::cout << "[INFO] Created accum image and view\n";
 
-	// 3. Create image view
+	// 3. Storage image view
 	VkImageViewCreateInfo view_info{};
 	view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 	view_info.image                           = render_target_ctx.storage_image;
@@ -306,27 +378,62 @@ App::App() {
 	}
 	std::cout << "[INFO] Created storage image view\n";
 
-	// 4. Create descriptor set layout
-	VkDescriptorSetLayoutBinding storage_image_binding{};
-	storage_image_binding.binding         = 0;
-	storage_image_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	storage_image_binding.descriptorCount = 1;
-	storage_image_binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+	// =========================================
+	// === VI.5 Create Scene Buffers ===
+	// =========================================
 
-	// Accumulation buffer for progressive rendering (not used in the shader yet, but set up for
-	// future use)
-	VkDescriptorSetLayoutBinding accum_image_binding{};
-	accum_image_binding.binding         = 1;
-	accum_image_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	accum_image_binding.descriptorCount = 1;
-	accum_image_binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+	auto createAndUploadBuffer = [&](VkDeviceSize size, const void* data,
+	                                  VkBuffer& buffer, VmaAllocation& alloc) {
+		VkBufferCreateInfo buf_info{};
+		buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		buf_info.size  = size;
+		buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
-	std::array<VkDescriptorSetLayoutBinding, 2> bindings = {storage_image_binding,
-	                                                        accum_image_binding};
+		VmaAllocationCreateInfo buf_alloc_info{};
+		buf_alloc_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		buf_alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VmaAllocationInfo info;
+		if (vmaCreateBuffer(allocator, &buf_info, &buf_alloc_info, &buffer, &alloc, &info) != VK_SUCCESS)
+			throw std::runtime_error("failed to create scene buffer");
+		memcpy(info.pMappedData, data, size);
+	};
+
+	createAndUploadBuffer(camera_size,   &gpu_camera,         scene_ctx.camera_buffer,   scene_ctx.camera_alloc);
+	createAndUploadBuffer(shapes_size,    gpu_shapes.data(),   scene_ctx.shapes_buffer,   scene_ctx.shapes_alloc);
+	createAndUploadBuffer(material_size,  gpu_materials.data(),scene_ctx.material_buffer, scene_ctx.material_alloc);
+	std::cout << "[INFO] Uploaded scene buffers (shapes: " << scene_ctx.shape_count
+	          << ", materials: " << scene_ctx.material_count << ")\n";
+
+	// 4. Descriptor set layout (bindings 0-4)
+	auto makeImageBinding = [](uint32_t binding) {
+		VkDescriptorSetLayoutBinding b{};
+		b.binding         = binding;
+		b.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		b.descriptorCount = 1;
+		b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+		return b;
+	};
+	auto makeBufferBinding = [](uint32_t binding) {
+		VkDescriptorSetLayoutBinding b{};
+		b.binding         = binding;
+		b.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		b.descriptorCount = 1;
+		b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+		return b;
+	};
+
+	std::array<VkDescriptorSetLayoutBinding, 5> bindings = {
+		makeImageBinding(0),  // output image
+		makeImageBinding(1),  // accum image
+		makeBufferBinding(2), // camera
+		makeBufferBinding(3), // shapes
+		makeBufferBinding(4), // materials
+	};
 
 	VkDescriptorSetLayoutCreateInfo dsl_info{};
 	dsl_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	dsl_info.bindingCount = 2;
+	dsl_info.bindingCount = (uint32_t)bindings.size();
 	dsl_info.pBindings    = bindings.data();
 
 	if (vkCreateDescriptorSetLayout(vulkan_ctx.device, &dsl_info, nullptr,
@@ -335,16 +442,18 @@ App::App() {
 	}
 	std::cout << "[INFO] Created descriptor set layout\n";
 
-	// 5. Create descriptor pool
-	VkDescriptorPoolSize pool_size{};
-	pool_size.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	pool_size.descriptorCount = 2;        // one for storage image, one for accumulation buffer
+	// 5. Descriptor pool
+	std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+	pool_sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	pool_sizes[0].descriptorCount = 2;
+	pool_sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	pool_sizes[1].descriptorCount = 3;
 
 	VkDescriptorPoolCreateInfo pool_info{};
 	pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	pool_info.maxSets       = 1;
-	pool_info.poolSizeCount = 1;
-	pool_info.pPoolSizes    = &pool_size;
+	pool_info.poolSizeCount = (uint32_t)pool_sizes.size();
+	pool_info.pPoolSizes    = pool_sizes.data();
 
 	if (vkCreateDescriptorPool(vulkan_ctx.device, &pool_info, nullptr,
 	                           &render_target_ctx.descriptor_pool) != VK_SUCCESS) {
@@ -365,7 +474,7 @@ App::App() {
 	}
 	std::cout << "[INFO] Allocated descriptor set\n";
 
-	// 7. Update descriptor set with image info
+	// 7. Update descriptor set
 	VkDescriptorImageInfo descriptor_image_info{};
 	descriptor_image_info.imageView   = render_target_ctx.storage_image_view;
 	descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -374,7 +483,22 @@ App::App() {
 	descriptor_accum_image_info.imageView   = render_target_ctx.accum_image_view;
 	descriptor_accum_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-	std::array<VkWriteDescriptorSet, 2> writes{};
+	VkDescriptorBufferInfo camera_buf_info{};
+	camera_buf_info.buffer = scene_ctx.camera_buffer;
+	camera_buf_info.offset = 0;
+	camera_buf_info.range  = camera_size;
+
+	VkDescriptorBufferInfo shapes_buf_info{};
+	shapes_buf_info.buffer = scene_ctx.shapes_buffer;
+	shapes_buf_info.offset = 0;
+	shapes_buf_info.range  = shapes_size;
+
+	VkDescriptorBufferInfo material_buf_info{};
+	material_buf_info.buffer = scene_ctx.material_buffer;
+	material_buf_info.offset = 0;
+	material_buf_info.range  = material_size;
+
+	std::array<VkWriteDescriptorSet, 5> writes{};
 
 	writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 	writes[0].dstSet          = render_target_ctx.descriptor_set;
@@ -390,47 +514,54 @@ App::App() {
 	writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	writes[1].pImageInfo      = &descriptor_accum_image_info;
 
-	/**
-	VkWriteDescriptorSet write{};
-	write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	write.dstSet          = render_target_ctx.descriptor_set;
-	write.dstBinding      = 0;
-	write.descriptorCount = 1;
-	write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	write.pImageInfo      = &descriptor_image_info;
-	**/
+	writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writes[2].dstSet          = render_target_ctx.descriptor_set;
+	writes[2].dstBinding      = 2;
+	writes[2].descriptorCount = 1;
+	writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writes[2].pBufferInfo     = &camera_buf_info;
 
-	vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes.data(), 0, nullptr);
-	std::cout << "[INFO] Updated descriptor set with storage image\n";
+	writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writes[3].dstSet          = render_target_ctx.descriptor_set;
+	writes[3].dstBinding      = 3;
+	writes[3].descriptorCount = 1;
+	writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writes[3].pBufferInfo     = &shapes_buf_info;
+
+	writes[4].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writes[4].dstSet          = render_target_ctx.descriptor_set;
+	writes[4].dstBinding      = 4;
+	writes[4].descriptorCount = 1;
+	writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writes[4].pBufferInfo     = &material_buf_info;
+
+	vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
+	std::cout << "[INFO] Updated descriptor sets\n";
 
 	// ============================================
 	// === VII. Create Compute Pipeline Context ===
 	// ============================================
 
-	// 1. Compile shader
-	// TODO: Extract shading system/caching to "shading.h/cpp"
 	auto spirv = compile_slang_shader("shaders/cursedPathTracingAlgo.slang", "main");
 	std::cout << "[INFO] Compiled compute shader to SPIR-V (" << (spirv.size() * sizeof(uint32_t))
 	          << " bytes)\n";
 
-	// 2. Create shader module
 	VkShaderModuleCreateInfo module_info{};
 	module_info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 	module_info.codeSize = spirv.size() * sizeof(uint32_t);
 	module_info.pCode    = spirv.data();
 
 	VkShaderModule shader_module;
-	if (vkCreateShaderModule(vulkan_ctx.device, &module_info, nullptr, &shader_module) !=
-	    VK_SUCCESS) {
+	if (vkCreateShaderModule(vulkan_ctx.device, &module_info, nullptr, &shader_module) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create shader module");
 	}
 	std::cout << "[INFO] Created shader module\n";
 
-	// 3. Pipeline layout, references our descriptor set layout
+	// Push constants: frame, shape_count, material_count
 	VkPushConstantRange push_constant_range{};
 	push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 	push_constant_range.offset     = 0;
-	push_constant_range.size       = sizeof(uint32_t);
+	push_constant_range.size       = sizeof(uint32_t) * 3;
 
 	VkPipelineLayoutCreateInfo pipeline_layout_info{};
 	pipeline_layout_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -445,7 +576,6 @@ App::App() {
 	}
 	std::cout << "[INFO] Created pipeline layout\n";
 
-	// 4. Create compute pipeline
 	VkPipelineShaderStageCreateInfo stage_info{};
 	stage_info.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -463,14 +593,12 @@ App::App() {
 	}
 	std::cout << "[INFO] Created compute pipeline\n";
 
-	// 5. Shader module baked into pipeline, safe to destroy now
 	vkDestroyShaderModule(vulkan_ctx.device, shader_module, nullptr);
 
 	// ==========================================
 	// === VIII. Create command pool & buffer ===
 	// ==========================================
 
-	// 1. Create command pool, allocator for command buffers, tied to a queue family
 	VkCommandPoolCreateInfo cmd_pool_info{};
 	cmd_pool_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 	cmd_pool_info.queueFamilyIndex = vulkan_ctx.graphics_queue_family;
@@ -482,18 +610,58 @@ App::App() {
 	}
 	std::cout << "[INFO] Created command pool\n";
 
-	// 2. Create command buffer, allocated from the pool (one is enough for now)
 	VkCommandBufferAllocateInfo cmd_alloc_info{};
 	cmd_alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	cmd_alloc_info.commandPool        = command_ctx.command_pool;
 	cmd_alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	cmd_alloc_info.commandBufferCount = 1;
 
-	if (vkAllocateCommandBuffers(vulkan_ctx.device, &cmd_alloc_info, &command_ctx.command_buffer) !=
-	    VK_SUCCESS) {
+	if (vkAllocateCommandBuffers(vulkan_ctx.device, &cmd_alloc_info,
+	                             &command_ctx.command_buffer) != VK_SUCCESS) {
 		throw std::runtime_error("failed to allocate command buffer");
 	}
 	std::cout << "[INFO] Allocated command buffer\n";
+
+	// === One-time image transitions ===
+	VkCommandBufferAllocateInfo one_time_alloc{};
+	one_time_alloc.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	one_time_alloc.commandPool        = command_ctx.command_pool;
+	one_time_alloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	one_time_alloc.commandBufferCount = 1;
+
+	VkCommandBuffer one_time_cmd;
+	vkAllocateCommandBuffers(vulkan_ctx.device, &one_time_alloc, &one_time_cmd);
+
+	VkCommandBufferBeginInfo one_time_begin{};
+	one_time_begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	one_time_begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(one_time_cmd, &one_time_begin);
+
+	VkImageMemoryBarrier accum_init_barrier{};
+	accum_init_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	accum_init_barrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+	accum_init_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+	accum_init_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	accum_init_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	accum_init_barrier.image               = render_target_ctx.accum_image;
+	accum_init_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+	accum_init_barrier.srcAccessMask       = 0;
+	accum_init_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+
+	vkCmdPipelineBarrier(one_time_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+						VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+						1, &accum_init_barrier);
+
+	vkEndCommandBuffer(one_time_cmd);
+
+	VkSubmitInfo one_time_submit{};
+	one_time_submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	one_time_submit.commandBufferCount = 1;
+	one_time_submit.pCommandBuffers    = &one_time_cmd;
+	vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &one_time_submit, VK_NULL_HANDLE);
+	vkQueueWaitIdle(vulkan_ctx.graphics_queue);
+	vkFreeCommandBuffers(vulkan_ctx.device, command_ctx.command_pool, 1, &one_time_cmd);
+	std::cout << "[INFO] Transitioned accum image to GENERAL\n";
 
 	// ========================
 	// === IX. Sync Context ===
@@ -506,18 +674,12 @@ App::App() {
 	fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	// 1. Create semaphore
-	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) !=
-	        VK_SUCCESS ||
-	    vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.render_finished) !=
-	        VK_SUCCESS ||
-	    // 2. Create fence
-
+	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) != VK_SUCCESS ||
+	    vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.render_finished) != VK_SUCCESS ||
 	    vkCreateFence(vulkan_ctx.device, &fence_info, nullptr, &sync_ctx.in_flight) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create sync objects");
 	}
-
-	std::cout << "[INFO] Created sync objects (image_available, render_finished, in_flight)\n";
+	std::cout << "[INFO] Created sync objects\n";
 }
 
 void App::run() {
@@ -530,16 +692,13 @@ void App::MainLoop() {
 		m_window->pollEvents();
 		glfwPollEvents();
 
-		// 1. Wait for previous frame to finish
 		vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX);
 		vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight);
 
-		// 2. Acquire next swapchain image
 		uint32_t image_index;
 		vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain, UINT64_MAX,
 		                      sync_ctx.image_available, VK_NULL_HANDLE, &image_index);
 
-		// 3. Record command buffer
 		vkResetCommandBuffer(command_ctx.command_buffer, 0);
 
 		VkCommandBufferBeginInfo begin_info{};
@@ -547,7 +706,7 @@ void App::MainLoop() {
 		begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 		vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
 
-		// 3a. Transition storage image to GENERAL so compute can write to it
+		// Transition storage image to GENERAL
 		VkImageMemoryBarrier storage_barrier{};
 		storage_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		storage_barrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -563,22 +722,25 @@ void App::MainLoop() {
 		                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
 		                     &storage_barrier);
 
-		// 3b. Bind compute pipeline and descriptor set
+		// Bind pipeline and descriptor set
 		vkCmdBindPipeline(command_ctx.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
 		                  compute_ctx.pipeline);
 		vkCmdBindDescriptorSets(command_ctx.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
 		                        compute_ctx.pipeline_layout, 0, 1,
 		                        &render_target_ctx.descriptor_set, 0, nullptr);
 
-		// 3c. Dispatch — one thread per pixel, groups of 16x16
-		uint32_t group_x = (m_window->width() + 15) / 16;
-		uint32_t group_y = (m_window->height() + 15) / 16;
+		// Push constants: frame, shape_count, material_count
+		struct PushConstants { uint32_t frame; uint32_t shape_count; uint32_t material_count; };
+		PushConstants pc{ frame_number, scene_ctx.shape_count, scene_ctx.material_count };
 		vkCmdPushConstants(command_ctx.command_buffer, compute_ctx.pipeline_layout,
-		                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &frame_number);
+		                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+
+		uint32_t group_x = (m_window->width()  + 15) / 16;
+		uint32_t group_y = (m_window->height() + 15) / 16;
 		vkCmdDispatch(command_ctx.command_buffer, group_x, group_y, 1);
 		frame_number++;
 
-		// 3d. Transition storage image to TRANSFER_SRC for blit
+		// Transition storage image to TRANSFER_SRC
 		VkImageMemoryBarrier transfer_barrier{};
 		transfer_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		transfer_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
@@ -594,7 +756,7 @@ void App::MainLoop() {
 		                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
 		                     &transfer_barrier);
 
-		// 3e. Transition swapchain image to TRANSFER_DST for blit
+		// Transition swapchain image to TRANSFER_DST
 		VkImageMemoryBarrier swapchain_barrier{};
 		swapchain_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		swapchain_barrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -610,21 +772,21 @@ void App::MainLoop() {
 		                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
 		                     &swapchain_barrier);
 
-		// 3f. Blit storage image → swapchain image
+		// Blit storage image → swapchain image
 		VkImageBlit blit{};
 		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.srcOffsets[0]  = {0, 0, 0};
-		blit.srcOffsets[1]  = {(int32_t) m_window->width(), (int32_t) m_window->height(), 1};
+		blit.srcOffsets[1]  = {(int32_t)m_window->width(), (int32_t)m_window->height(), 1};
 		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.dstOffsets[0]  = {0, 0, 0};
-		blit.dstOffsets[1]  = {(int32_t) swapchain_ctx.swapchain.extent.width,
-		                       (int32_t) swapchain_ctx.swapchain.extent.height, 1};
+		blit.dstOffsets[1]  = {(int32_t)swapchain_ctx.swapchain.extent.width,
+		                       (int32_t)swapchain_ctx.swapchain.extent.height, 1};
 
 		vkCmdBlitImage(command_ctx.command_buffer, render_target_ctx.storage_image,
 		               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchain_ctx.images[image_index],
 		               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
 
-		// 3g. Transition swapchain image to PRESENT_SRC
+		// Transition swapchain image to PRESENT_SRC
 		VkImageMemoryBarrier present_barrier{};
 		present_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		present_barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -642,7 +804,6 @@ void App::MainLoop() {
 
 		vkEndCommandBuffer(command_ctx.command_buffer);
 
-		// 4. Submit to queue
 		VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
 		VkSubmitInfo submit_info{};
@@ -657,7 +818,6 @@ void App::MainLoop() {
 
 		vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight);
 
-		// 5. Present
 		VkPresentInfoKHR present_info{};
 		present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 		present_info.waitSemaphoreCount = 1;
@@ -667,8 +827,8 @@ void App::MainLoop() {
 		present_info.pImageIndices      = &image_index;
 
 		vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info);
+		// vkQueueWaitIdle(vulkan_ctx.graphics_queue); // TODO: Remove this and handle synchronization properly
 	}
 
-	// wait for GPU to finish before cleanup
 	vkDeviceWaitIdle(vulkan_ctx.device);
 }
