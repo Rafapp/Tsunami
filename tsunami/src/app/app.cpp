@@ -124,52 +124,55 @@ App::App() {
 	m_scene = std::make_unique<Scene>();
 
 	// Camera
-	m_scene->m_camera = Camera(
-		glm::vec3(0.0f, 0.0f,  4.0f),
-		glm::vec3(0.0f, 0.0f,  0.0f),
-		glm::vec3(0.0f, 1.0f,  0.0f),
-		45.0f, 0.1f, 100.0f
-	);
+	m_scene->m_camera = Camera(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+	                           glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, 0.1f, 100.0f);
 
 	// Floor (white)
 	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+	    Transform(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+	    new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Ceiling (white)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Back wall (white)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(90.0f, 0.0f, 0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(90.0f, 0.0f, 0.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Left wall (red)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-		new Lambert(glm::vec3(0.8f, 0.1f, 0.1f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           new Lambert(glm::vec3(0.8f, 0.1f, 0.1f))));
 
 	// Right wall (green)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -90.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-		new Lambert(glm::vec3(0.1f, 0.8f, 0.1f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -90.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           new Lambert(glm::vec3(0.1f, 0.8f, 0.1f))));
 
 	// Area light (emissive quad on ceiling)
 	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f), glm::vec3(0.5f, 1.0f, 0.5f)),
-		new Lambert(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
+	    Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
+	              glm::vec3(0.5f, 1.0f, 0.5f)),
+	    new Lambert(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
 
 	// Tall box
-	m_scene->m_shapes.push_back(std::make_unique<Box>(
-		Transform(glm::vec3(-0.35f, -0.35f, -0.4f), glm::vec3(0.0f, 15.0f, 0.0f), glm::vec3(0.3f, 0.65f, 0.3f)),
-		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Box>(Transform(glm::vec3(-0.35f, -0.35f, -0.4f),
+	                                    glm::vec3(0.0f, 15.0f, 0.0f), glm::vec3(0.3f, 0.65f, 0.3f)),
+	                          new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Short box
-	m_scene->m_shapes.push_back(std::make_unique<Box>(
-		Transform(glm::vec3(0.35f, -0.65f, -0.2f), glm::vec3(0.0f, -15.0f, 0.0f), glm::vec3(0.3f, 0.35f, 0.3f)),
-		new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(std::make_unique<Box>(Transform(glm::vec3(0.35f, -0.65f, -0.2f),
+	                                                            glm::vec3(0.0f, -15.0f, 0.0f),
+	                                                            glm::vec3(0.3f, 0.35f, 0.3f)),
+	                                                  new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Pack scene data for GPU
 	GPUCamera                gpu_camera = m_scene->m_camera.pack();
@@ -177,16 +180,16 @@ App::App() {
 	std::vector<GPUMaterial> gpu_materials;
 
 	for (auto& shape : m_scene->m_shapes) {
-		int matIndex = (int)gpu_materials.size();
+		int matIndex = (int) gpu_materials.size();
 		gpu_materials.push_back(shape->m_material->pack());
 		gpu_shapes.push_back(shape->pack(matIndex));
 	}
 
-	scene_ctx.shape_count    = (uint32_t)gpu_shapes.size();
-	scene_ctx.material_count = (uint32_t)gpu_materials.size();
+	scene_ctx.shape_count    = (uint32_t) gpu_shapes.size();
+	scene_ctx.material_count = (uint32_t) gpu_materials.size();
 
 	VkDeviceSize camera_size   = sizeof(GPUCamera);
-	VkDeviceSize shapes_size   = sizeof(GPUShape)    * gpu_shapes.size();
+	VkDeviceSize shapes_size   = sizeof(GPUShape) * gpu_shapes.size();
 	VkDeviceSize material_size = sizeof(GPUMaterial) * gpu_materials.size();
 
 	// ========================================
@@ -316,7 +319,7 @@ App::App() {
 	image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	image_info.imageType     = VK_IMAGE_TYPE_2D;
 	image_info.format        = VK_FORMAT_R8G8B8A8_UNORM;
-	image_info.extent        = {(uint32_t)m_window->width(), (uint32_t)m_window->height(), 1};
+	image_info.extent        = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
 	image_info.mipLevels     = 1;
 	image_info.arrayLayers   = 1;
 	image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -382,8 +385,8 @@ App::App() {
 	// === VI.5 Create Scene Buffers ===
 	// =========================================
 
-	auto createAndUploadBuffer = [&](VkDeviceSize size, const void* data,
-	                                  VkBuffer& buffer, VmaAllocation& alloc) {
+	auto createAndUploadBuffer = [&](VkDeviceSize size, const void* data, VkBuffer& buffer,
+	                                 VmaAllocation& alloc) {
 		VkBufferCreateInfo buf_info{};
 		buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		buf_info.size  = size;
@@ -394,14 +397,18 @@ App::App() {
 		buf_alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 		VmaAllocationInfo info;
-		if (vmaCreateBuffer(allocator, &buf_info, &buf_alloc_info, &buffer, &alloc, &info) != VK_SUCCESS)
+		if (vmaCreateBuffer(allocator, &buf_info, &buf_alloc_info, &buffer, &alloc, &info) !=
+		    VK_SUCCESS)
 			throw std::runtime_error("failed to create scene buffer");
 		memcpy(info.pMappedData, data, size);
 	};
 
-	createAndUploadBuffer(camera_size,   &gpu_camera,         scene_ctx.camera_buffer,   scene_ctx.camera_alloc);
-	createAndUploadBuffer(shapes_size,    gpu_shapes.data(),   scene_ctx.shapes_buffer,   scene_ctx.shapes_alloc);
-	createAndUploadBuffer(material_size,  gpu_materials.data(),scene_ctx.material_buffer, scene_ctx.material_alloc);
+	createAndUploadBuffer(camera_size, &gpu_camera, scene_ctx.camera_buffer,
+	                      scene_ctx.camera_alloc);
+	createAndUploadBuffer(shapes_size, gpu_shapes.data(), scene_ctx.shapes_buffer,
+	                      scene_ctx.shapes_alloc);
+	createAndUploadBuffer(material_size, gpu_materials.data(), scene_ctx.material_buffer,
+	                      scene_ctx.material_alloc);
 	std::cout << "[INFO] Uploaded scene buffers (shapes: " << scene_ctx.shape_count
 	          << ", materials: " << scene_ctx.material_count << ")\n";
 
@@ -424,16 +431,16 @@ App::App() {
 	};
 
 	std::array<VkDescriptorSetLayoutBinding, 5> bindings = {
-		makeImageBinding(0),  // output image
-		makeImageBinding(1),  // accum image
-		makeBufferBinding(2), // camera
-		makeBufferBinding(3), // shapes
-		makeBufferBinding(4), // materials
+	    makeImageBinding(0),         // output image
+	    makeImageBinding(1),         // accum image
+	    makeBufferBinding(2),        // camera
+	    makeBufferBinding(3),        // shapes
+	    makeBufferBinding(4),        // materials
 	};
 
 	VkDescriptorSetLayoutCreateInfo dsl_info{};
 	dsl_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	dsl_info.bindingCount = (uint32_t)bindings.size();
+	dsl_info.bindingCount = (uint32_t) bindings.size();
 	dsl_info.pBindings    = bindings.data();
 
 	if (vkCreateDescriptorSetLayout(vulkan_ctx.device, &dsl_info, nullptr,
@@ -452,7 +459,7 @@ App::App() {
 	VkDescriptorPoolCreateInfo pool_info{};
 	pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	pool_info.maxSets       = 1;
-	pool_info.poolSizeCount = (uint32_t)pool_sizes.size();
+	pool_info.poolSizeCount = (uint32_t) pool_sizes.size();
 	pool_info.pPoolSizes    = pool_sizes.data();
 
 	if (vkCreateDescriptorPool(vulkan_ctx.device, &pool_info, nullptr,
@@ -535,7 +542,7 @@ App::App() {
 	writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	writes[4].pBufferInfo     = &material_buf_info;
 
-	vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
+	vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t) writes.size(), writes.data(), 0, nullptr);
 	std::cout << "[INFO] Updated descriptor sets\n";
 
 	// ============================================
@@ -552,7 +559,8 @@ App::App() {
 	module_info.pCode    = spirv.data();
 
 	VkShaderModule shader_module;
-	if (vkCreateShaderModule(vulkan_ctx.device, &module_info, nullptr, &shader_module) != VK_SUCCESS) {
+	if (vkCreateShaderModule(vulkan_ctx.device, &module_info, nullptr, &shader_module) !=
+	    VK_SUCCESS) {
 		throw std::runtime_error("failed to create shader module");
 	}
 	std::cout << "[INFO] Created shader module\n";
@@ -616,8 +624,8 @@ App::App() {
 	cmd_alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	cmd_alloc_info.commandBufferCount = 1;
 
-	if (vkAllocateCommandBuffers(vulkan_ctx.device, &cmd_alloc_info,
-	                             &command_ctx.command_buffer) != VK_SUCCESS) {
+	if (vkAllocateCommandBuffers(vulkan_ctx.device, &cmd_alloc_info, &command_ctx.command_buffer) !=
+	    VK_SUCCESS) {
 		throw std::runtime_error("failed to allocate command buffer");
 	}
 	std::cout << "[INFO] Allocated command buffer\n";
@@ -649,8 +657,8 @@ App::App() {
 	accum_init_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
 
 	vkCmdPipelineBarrier(one_time_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-						VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
-						1, &accum_init_barrier);
+	                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+	                     &accum_init_barrier);
 
 	vkEndCommandBuffer(one_time_cmd);
 
@@ -674,8 +682,10 @@ App::App() {
 	fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) != VK_SUCCESS ||
-	    vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.render_finished) != VK_SUCCESS ||
+	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) !=
+	        VK_SUCCESS ||
+	    vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.render_finished) !=
+	        VK_SUCCESS ||
 	    vkCreateFence(vulkan_ctx.device, &fence_info, nullptr, &sync_ctx.in_flight) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create sync objects");
 	}
@@ -730,12 +740,16 @@ void App::MainLoop() {
 		                        &render_target_ctx.descriptor_set, 0, nullptr);
 
 		// Push constants: frame, shape_count, material_count
-		struct PushConstants { uint32_t frame; uint32_t shape_count; uint32_t material_count; };
-		PushConstants pc{ frame_number, scene_ctx.shape_count, scene_ctx.material_count };
+		struct PushConstants {
+			uint32_t frame;
+			uint32_t shape_count;
+			uint32_t material_count;
+		};
+		PushConstants pc{frame_number, scene_ctx.shape_count, scene_ctx.material_count};
 		vkCmdPushConstants(command_ctx.command_buffer, compute_ctx.pipeline_layout,
 		                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
 
-		uint32_t group_x = (m_window->width()  + 15) / 16;
+		uint32_t group_x = (m_window->width() + 15) / 16;
 		uint32_t group_y = (m_window->height() + 15) / 16;
 		vkCmdDispatch(command_ctx.command_buffer, group_x, group_y, 1);
 		frame_number++;
@@ -776,11 +790,11 @@ void App::MainLoop() {
 		VkImageBlit blit{};
 		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.srcOffsets[0]  = {0, 0, 0};
-		blit.srcOffsets[1]  = {(int32_t)m_window->width(), (int32_t)m_window->height(), 1};
+		blit.srcOffsets[1]  = {(int32_t) m_window->width(), (int32_t) m_window->height(), 1};
 		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.dstOffsets[0]  = {0, 0, 0};
-		blit.dstOffsets[1]  = {(int32_t)swapchain_ctx.swapchain.extent.width,
-		                       (int32_t)swapchain_ctx.swapchain.extent.height, 1};
+		blit.dstOffsets[1]  = {(int32_t) swapchain_ctx.swapchain.extent.width,
+		                       (int32_t) swapchain_ctx.swapchain.extent.height, 1};
 
 		vkCmdBlitImage(command_ctx.command_buffer, render_target_ctx.storage_image,
 		               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchain_ctx.images[image_index],
@@ -827,7 +841,8 @@ void App::MainLoop() {
 		present_info.pImageIndices      = &image_index;
 
 		vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info);
-		// vkQueueWaitIdle(vulkan_ctx.graphics_queue); // TODO: Remove this and handle synchronization properly
+		// vkQueueWaitIdle(vulkan_ctx.graphics_queue); // TODO: Remove this and handle
+		// synchronization properly
 	}
 
 	vkDeviceWaitIdle(vulkan_ctx.device);

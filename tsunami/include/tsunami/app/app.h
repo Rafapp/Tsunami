@@ -3,8 +3,8 @@
 #include <memory>
 #include <stdexcept>
 
-#include "tsunami/scene/scene.h"
 #include "tsunami/core/window.h"
+#include "tsunami/scene/scene.h"
 
 class App {
   public:

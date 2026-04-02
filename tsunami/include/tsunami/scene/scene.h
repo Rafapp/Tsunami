@@ -2,12 +2,12 @@
 #include "tsunami/camera/camera.h"
 #include "tsunami/light/light.h"
 
-#include "tsunami/materials/material.h"
 #include "tsunami/materials/lambert.h"
+#include "tsunami/materials/material.h"
 
-#include "tsunami/shapes/shape.h"
 #include "tsunami/shapes/box.h"
 #include "tsunami/shapes/quad.h"
+#include "tsunami/shapes/shape.h"
 #include "tsunami/shapes/sphere.h"
 #include <vector>
 
@@ -20,11 +20,11 @@ struct GPUScene {
 
 class Scene {
   public:
-	Scene() = default;
+	Scene()  = default;
 	~Scene() = default;
 	GPUScene pack() const;
 
-	Camera              m_camera;
+	Camera                              m_camera;
 	std::vector<std::unique_ptr<Light>> m_lights;
 	std::vector<std::unique_ptr<Shape>> m_shapes;
 };
