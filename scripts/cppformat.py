@@ -23,21 +23,6 @@ def find_clang_format():
             return name
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
-
-    if sys.platform == "win32":
-        windows_candidates = [
-            Path(r"C:\Program Files\LLVM\bin\clang-format.exe"),
-            Path(r"C:\Program Files\LLVM\bin\clang-format-18.exe"),
-            Path(r"C:\Program Files\LLVM\bin\clang-format-17.exe"),
-            Path(r"C:\Program Files\LLVM\bin\clang-format-16.exe"),
-        ]
-        for candidate in windows_candidates:
-            if candidate.exists():
-                try:
-                    subprocess.run([str(candidate), "--version"], capture_output=True, check=True)
-                    return str(candidate)
-                except subprocess.CalledProcessError:
-                    continue
     return None
 
 
