@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include "vk_mem_alloc.h"
 
 #include "tsunami/app/app.h"
+#include "tsunami/audio/microphone_input.h"
 #include "tsunami/ui/audience_overlay.h"
 
 namespace {
@@ -82,10 +84,15 @@ struct SyncContext {
 struct OverlayContext {
 	VkRenderPass               render_pass = VK_NULL_HANDLE;
 	std::vector<VkFramebuffer> framebuffers;
-	float                      volume_level    = 0.15f;
+	float                      volume_level    = 0.0f;
 	uint32_t                   selection_count = 5;
 	uint32_t                   selected_index  = 0;
 } overlay_ctx{};
+
+constexpr float kDemoCycleHz      = 1.35f;
+constexpr float kAudioNoiseFloor  = 0.015f;
+constexpr float kAudioSensitivity = 8.0f;
+constexpr float kOverlaySmoothing = 0.18f;
 
 void check_vk_result(VkResult result) {
 	if (result == VK_SUCCESS) {
@@ -280,13 +287,31 @@ void shutdown_imgui() {
 	ImGui::DestroyContext();
 }
 
-void update_demo_overlay_state() {
-	// Temporary stand-in until microphone-drien audience input is connected.
-
-	const float time_seconds = static_cast<float>(glfwGetTime());
-	overlay_ctx.volume_level = 0.5f + (0.45f * std::sin(time_seconds * 1.35f));
+void apply_overlay_level(float target_level) {
+	const float clamped_level = std::clamp(target_level, 0.0f, 1.0f);
+	overlay_ctx.volume_level += (clamped_level - overlay_ctx.volume_level) * kOverlaySmoothing;
 	overlay_ctx.selected_index =
 	    ui::quantizeSelection(overlay_ctx.volume_level, overlay_ctx.selection_count);
+}
+
+void update_demo_overlay_state() {
+	// Demo fallback used when live capture is unavailable.
+
+	const float time_seconds = static_cast<float>(glfwGetTime());
+	const float target_level = 0.5f + (0.45f * std::sin(time_seconds * kDemoCycleHz));
+	apply_overlay_level(target_level);
+}
+
+void update_microphone_overlay_state(const audio::MicrophoneInput* microphone) {
+	if (microphone == nullptr || !microphone->isAvailable()) {
+		update_demo_overlay_state();
+		return;
+	}
+
+	const float raw_level = microphone->latestLevel();
+	const float normalized_level =
+	    std::clamp((raw_level - kAudioNoiseFloor) * kAudioSensitivity, 0.0f, 1.0f);
+	apply_overlay_level(normalized_level);
 }
 
 }        // namespace
@@ -716,9 +741,19 @@ App::App() {
 	create_overlay_render_pass();
 	initialize_imgui(m_window->handle());
 	std::cout << "[INFO] Initialized ImGui overlay\n";
+
+	m_microphone = std::make_unique<audio::MicrophoneInput>();
+	if (m_microphone->isAvailable()) {
+		std::cout << "[INFO] Live microphone capture ready: " << m_microphone->deviceName() << "\n";
+	} else {
+		std::cout << "[WARN] " << m_microphone->statusMessage()
+		          << " Falling back to the demo audience signal.\n";
+	}
 }
 
 App::~App() {
+	m_microphone.reset();
+
 	if (vulkan_ctx.device == VK_NULL_HANDLE) {
 		return;
 	}
@@ -813,7 +848,7 @@ void App::MainLoop() {
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
 
-		update_demo_overlay_state();
+		update_microphone_overlay_state(m_microphone.get());
 
 		ImGui_ImplVulkan_NewFrame();
 		ImGui_ImplGlfw_NewFrame();

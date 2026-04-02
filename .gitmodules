@@ -16,3 +16,6 @@
 [submodule "vendors/imgui"]
 	path = vendors/imgui
 	url = https://github.com/ocornut/imgui
+[submodule "vendors/miniaudio"]
+	path = vendors/miniaudio
+	url = https://github.com/mackron/miniaudio

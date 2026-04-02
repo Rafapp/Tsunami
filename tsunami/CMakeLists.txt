@@ -15,6 +15,7 @@ target_link_libraries(tsunami PRIVATE
     VulkanMemoryAllocator
     glfw
     imgui
+    miniaudio
     volk
     glm
 )

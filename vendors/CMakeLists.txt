@@ -37,6 +37,13 @@ target_link_libraries(imgui PUBLIC
     volk
 )
 
+# === miniaudio ===
+set(MINIAUDIO_INSTALL OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+add_subdirectory(miniaudio EXCLUDE_FROM_ALL)
+
 # === Slang (prebuilt binary, downloaded by setup.sh) ===
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/slang-bin/include/slang.h)
     add_library(slang SHARED IMPORTED GLOBAL)
