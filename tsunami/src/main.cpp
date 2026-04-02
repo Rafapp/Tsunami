@@ -3,11 +3,11 @@
 #include "tsunami/app/app.h"
 
 int main() {
-	App app;
 	try {
+		App app;
 		app.run();
 	} catch (const std::exception& e) {
-		std::cerr << "[tsunami] fatal: " << e.what() << "\n";
+		std::cerr << "[Tsunami] fatal: " << e.what() << "\n";
 		return 1;
 	}
 

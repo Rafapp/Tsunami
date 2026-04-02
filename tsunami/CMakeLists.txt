@@ -14,6 +14,7 @@ target_link_libraries(tsunami PRIVATE
     vk-bootstrap
     VulkanMemoryAllocator
     glfw
+    imgui
     volk
     glm
 )

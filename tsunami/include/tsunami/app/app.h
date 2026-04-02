@@ -8,7 +8,7 @@
 class App {
   public:
 	App();
-	~App() = default;
+	~App();
 
 	void run();
 

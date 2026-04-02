@@ -1,5 +1,15 @@
 #include <array>
 #include <iostream>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <stdexcept>
+#include <vector>
+
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
 
 #define VOLK_IMPLEMENTATION
 #include "volk.h"
@@ -8,65 +18,111 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "VkBootstrap.h"
 #include "slang.h"
-#include "tsunami/app/app.h"
 #include "vk_mem_alloc.h"
 
 #include "tsunami/app/app.h"
+#include "tsunami/ui/audience_overlay.h"
+
+namespace {
 
 struct VulkanContext {
-	vkb::Instance       instance;
-	vkb::PhysicalDevice phys_device;
-	vkb::Device         log_device;
-	VkDevice            device;
-	VkSurfaceKHR        surface;
-	VkQueue             graphics_queue;
-	uint32_t            graphics_queue_family;
-} vulkan_ctx;
+	vkb::Instance       instance{};
+	vkb::PhysicalDevice phys_device{};
+	vkb::Device         log_device{};
+	VkDevice            device                = VK_NULL_HANDLE;
+	VkSurfaceKHR        surface               = VK_NULL_HANDLE;
+	VkQueue             graphics_queue        = VK_NULL_HANDLE;
+	uint32_t            graphics_queue_family = 0;
+} vulkan_ctx{};
 
 struct SwapchainContext {
-	vkb::Swapchain           swapchain;
+	vkb::Swapchain           swapchain{};
 	std::vector<VkImage>     images;
 	std::vector<VkImageView> image_views;
-	VkFormat                 image_format;
-	VkExtent2D               extent;
-} swapchain_ctx;
+	std::vector<bool>		 image_initialized;
+	VkFormat       			 image_format = VK_FORMAT_UNDEFINED;
+	VkExtent2D     			 extent{};
+} swapchain_ctx{};
 
 struct RenderTargetContext {
-	VmaAllocator allocator;
+	VmaAllocator allocator = nullptr;
 
-	VkImage       storage_image;
-	VmaAllocation storage_image_alloc;
-	VkImageView   storage_image_view;
+	VkImage       storage_image       = VK_NULL_HANDLE;
+	VmaAllocation storage_image_alloc = nullptr;
+	VkImageView   storage_image_view  = VK_NULL_HANDLE;
+	bool 		  storage_initialized = false;
 
 	// Added accumulation buffer for progressive rendering (not used in the shader yet, but set up
 	// for future use)
-	VkImage       accum_image;
-	VmaAllocation accum_image_alloc;
-	VkImageView   accum_image_view;
+	VkImage       accum_image       = VK_NULL_HANDLE;
+	VmaAllocation accum_image_alloc = nullptr;
+	VkImageView   accum_image_view  = VK_NULL_HANDLE;
 
-	VkDescriptorSetLayout descriptor_set_layout;
-	VkDescriptorPool      descriptor_pool;
-	VkDescriptorSet       descriptor_set;
-} render_target_ctx;
+	VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
+	VkDescriptorPool      descriptor_pool       = VK_NULL_HANDLE;
+	VkDescriptorSet       descriptor_set        = VK_NULL_HANDLE;
+} render_target_ctx{};
 
 struct ComputePipelineContext {
-	VkPipelineLayout pipeline_layout;
-	VkPipeline       pipeline;
-} compute_ctx;
+	VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+	VkPipeline       pipeline        = VK_NULL_HANDLE;
+} compute_ctx{};
 
 struct CommandContext {
-	VkCommandPool   command_pool;
-	VkCommandBuffer command_buffer;
-} command_ctx;
+	VkCommandPool   command_pool   = VK_NULL_HANDLE;
+	VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+} command_ctx{};
 
 struct SyncContext {
-	VkSemaphore image_available;
-	VkSemaphore render_finished;
-	VkFence     in_flight;
-} sync_ctx;
+	VkSemaphore image_available = VK_NULL_HANDLE;
+	VkSemaphore render_finished = VK_NULL_HANDLE;
+	VkFence     in_flight       = VK_NULL_HANDLE;
+} sync_ctx{};
+
+struct OverlayContext {
+	VkRenderPass 			   render_pass 		= VK_NULL_HANDLE;
+	std::vector<VkFramebuffer> framebuffers;
+	float 					   volume_level 	= 0.15f;
+	uint32_t 				   selection_count 	= 5;
+	uint32_t 				   selected_index 	= 0;
+} overlay_ctx{};
+
+void check_vk_result(VkResult result) {
+	if (result == VK_SUCCESS) {
+		return;
+	}
+
+	std::cerr << "[Vulkan] VkResult = " << result << "\n";
+	if (result < 0) {
+		throw std::runtime_error("Vulkan call failed");
+	}
+}
+
+std::string resolve_shader_path(const std::string& relative_path) {
+	namespace fs = std::filesystem;
+
+	const std::array<fs::path, 5> candidates = {
+		fs::path(relative_path),
+		fs::path("tsunami") / relative_path,
+		fs::path("bin") / relative_path,
+		fs::path("build/bin") / relative_path,
+		fs::path("build-debug/bin") / relative_path,
+	};
+
+	for (const fs::path& candidate : candidates) {
+		if (fs::exists(candidate)) {
+			return candidate.string();
+		}
+	}
+
+	throw std::runtime_error("could not find shader source: " + relative_path);
+}
 
 static std::vector<uint32_t> compile_slang_shader(const std::string& path,
                                                   const std::string& entry_point) {
+
+	const std::string resolved_path = resolve_shader_path(path);
+
 	SlangSession*        session = spCreateSession(nullptr);
 	SlangCompileRequest* request = spCreateCompileRequest(session);
 
@@ -74,7 +130,7 @@ static std::vector<uint32_t> compile_slang_shader(const std::string& path,
 	spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_3"));
 
 	int unit_idx = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	spAddTranslationUnitSourceFile(request, unit_idx, path.c_str());
+	spAddTranslationUnitSourceFile(request, unit_idx, resolved_path.c_str());
 
 	spAddEntryPoint(request, unit_idx, entry_point.c_str(), SLANG_STAGE_COMPUTE);
 
@@ -83,26 +139,158 @@ static std::vector<uint32_t> compile_slang_shader(const std::string& path,
 	// Always print — catches warnings even on success
 	const char* diagnostics = spGetDiagnosticOutput(request);
 	if (diagnostics && diagnostics[0] != '\0') {
-		std::cerr << "[SLANG] " << path << ":\n" << diagnostics << "\n";
+		std::cerr << "[SLANG] " << resolved_path << ":\n" << diagnostics << "\n";
 	}
 
 	if (result != SLANG_OK) {
 		spDestroyCompileRequest(request);
 		spDestroySession(session);
-		throw std::runtime_error("slang compilation failed: " + path);
+		throw std::runtime_error("slang compilation failed: " + resolved_path);
 	}
 
 	size_t      spirv_size = 0;
 	const void* spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
 
 	std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
-	memcpy(spirv.data(), spirv_data, spirv_size);
+	std::memcpy(spirv.data(), spirv_data, spirv_size);
 
 	spDestroyCompileRequest(request);
 	spDestroySession(session);
 
 	return spirv;
 }
+
+void create_overlay_render_pass() {
+	VkAttachmentDescription color_attachment{};
+	color_attachment.format         = swapchain_ctx.image_format;
+	color_attachment.samples        = VK_SAMPLE_COUNT_1_BIT;
+	color_attachment.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
+	color_attachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+	color_attachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	color_attachment.initialLayout  = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	color_attachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	VkAttachmentReference color_attachment_ref{};
+	color_attachment_ref.attachment = 0;
+	color_attachment_ref.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	VkSubpassDescription subpass{};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments    = &color_attachment_ref;
+
+	VkSubpassDependency dependency{};
+	dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass    = 0;
+	dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstAccessMask = 
+		VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	VkRenderPassCreateInfo render_pass_info{};
+	render_pass_info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	render_pass_info.attachmentCount = 1;
+	render_pass_info.pAttachments    = &color_attachment;
+	render_pass_info.subpassCount    = 1;
+	render_pass_info.pSubpasses      = &subpass;
+	render_pass_info.dependencyCount = 1;
+	render_pass_info.pDependencies   = &dependency;
+
+	if (vkCreateRenderPass(vulkan_ctx.device, &render_pass_info, nullptr,
+	                       &overlay_ctx.render_pass) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create overlay render pass");
+	}
+
+	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
+	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
+		VkImageView attachments[] = {swapchain_ctx.image_views[i]};
+
+		VkFramebufferCreateInfo framebuffer_info{};
+		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.renderPass      = overlay_ctx.render_pass;
+		framebuffer_info.attachmentCount = 1;
+		framebuffer_info.pAttachments    = attachments;
+		framebuffer_info.width           = swapchain_ctx.extent.width;
+		framebuffer_info.height          = swapchain_ctx.extent.height;
+		framebuffer_info.layers          = 1;
+
+		if (vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
+		                        &overlay_ctx.framebuffers[i]) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create overlay framebuffer");
+		}
+	}
+}
+
+void destroy_overlay_render_resources() {
+	for (VkFramebuffer framebuffer : overlay_ctx.framebuffers) {
+		if (framebuffer != VK_NULL_HANDLE) {
+			vkDestroyFramebuffer(vulkan_ctx.device, framebuffer, nullptr);
+		}
+	}
+	overlay_ctx.framebuffers.clear();
+
+	if (overlay_ctx.render_pass != VK_NULL_HANDLE) {
+		vkDestroyRenderPass(vulkan_ctx.device, overlay_ctx.render_pass, nullptr);
+		overlay_ctx.render_pass = VK_NULL_HANDLE;
+	}
+}
+
+void initialize_imgui(GLFWwindow* window) {
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+
+	ImGuiIO& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+
+	ImGui::StyleColorsDark();
+
+	if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
+		throw std::runtime_error("failed to initialize ImGui for Vulkan");
+	}
+
+	ImGui_ImplVulkan_InitInfo init_info{};
+	init_info.ApiVersion	   				= VK_API_VERSION_1_3;
+	init_info.Instance		   				= vulkan_ctx.instance.instance;
+	init_info.PhysicalDevice 				= vulkan_ctx.phys_device.physical_device;
+	init_info.Device         				= vulkan_ctx.device;
+	init_info.QueueFamily    				= vulkan_ctx.graphics_queue_family;
+	init_info.Queue          				= vulkan_ctx.graphics_queue;
+	init_info.DescriptorPoolSize 			= 16;
+	init_info.MinImageCount    				= static_cast<uint32_t>(swapchain_ctx.images.size());
+	init_info.ImageCount        			= static_cast<uint32_t>(swapchain_ctx.images.size());
+	init_info.CheckVkResultFn 				= check_vk_result;
+	init_info.MinAllocationSize 			= 1024 * 1024;
+	init_info.PipelineInfoMain.RenderPass 	= overlay_ctx.render_pass;
+	init_info.PipelineInfoMain.Subpass 		= 0;
+	init_info.PipelineInfoMain.MSAASamples 	= VK_SAMPLE_COUNT_1_BIT;
+
+	if (!ImGui_ImplVulkan_Init(&init_info)) {
+		throw std::runtime_error("failed to initialize ImGui Vulkan backend");
+	}
+}
+
+void shutdown_imgui() {
+	if (ImGui::GetCurrentContext() == nullptr) {
+		return;
+	}
+
+	ImGui_ImplVulkan_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImGui::DestroyContext();
+}
+
+void update_demo_overlay_state() {
+	// Temporary stand-in until microphone-drien audience input is connected.
+
+	const float time_seconds 	= static_cast<float>(glfwGetTime());
+	overlay_ctx.volume_level 	= 0.5f + (0.45f * std::sin(time_seconds * 1.35f));
+	overlay_ctx.selected_index 	= 
+		ui::quantizeSelection(overlay_ctx.volume_level, overlay_ctx.selection_count);
+}
+
+}        // namespace
 
 App::App() {
 	// ========================================
@@ -213,19 +401,22 @@ App::App() {
 	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
 	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
 	        .set_desired_extent(m_window->width(), m_window->height())
-	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+	                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
 	        .build();
 	if (!swap_ret)
 		throw std::runtime_error("failed to create swapchain");
 	swapchain_ctx.swapchain    = swap_ret.value();
 	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
 	std::cout << "[INFO] Created swapchain (format: " << swapchain_ctx.image_format << ")\n";
 
 	// 2. Create swapchain images
 	auto images_ret = swapchain_ctx.swapchain.get_images();
 	if (!images_ret)
 		throw std::runtime_error("failed to get swapchain images");
-	swapchain_ctx.images = images_ret.value();
+	swapchain_ctx.images 			= images_ret.value();
+	swapchain_ctx.image_initialized = std::vector<bool>(swapchain_ctx.images.size(), false);
 	std::cout << "[INFO] Acquired " << swapchain_ctx.images.size() << " swapchain images\n";
 
 	// 3. Create swapchain image views
@@ -518,6 +709,100 @@ App::App() {
 	}
 
 	std::cout << "[INFO] Created sync objects (image_available, render_finished, in_flight)\n";
+
+	// ===============================
+	// === X. Initialize UI layer ===
+	// ===============================
+
+	create_overlay_render_pass();
+	initialize_imgui(m_window->handle());
+	std::cout << "[INFO] Initialized ImGui overlay\n";
+}
+
+App::~App() {
+	if (vulkan_ctx.device == VK_NULL_HANDLE) {
+		return;
+	}
+
+	vkDeviceWaitIdle(vulkan_ctx.device);
+
+	shutdown_imgui();
+	destroy_overlay_render_resources();
+
+	if (sync_ctx.in_flight != VK_NULL_HANDLE) {
+		vkDestroyFence(vulkan_ctx.device, sync_ctx.in_flight, nullptr);
+	}
+
+	if (sync_ctx.render_finished != VK_NULL_HANDLE) {
+		vkDestroySemaphore(vulkan_ctx.device, sync_ctx.render_finished, nullptr);
+	}
+
+	if (sync_ctx.image_available != VK_NULL_HANDLE) {
+		vkDestroySemaphore(vulkan_ctx.device, sync_ctx.image_available, nullptr);
+	}
+
+	if (command_ctx.command_pool != VK_NULL_HANDLE) {
+		vkDestroyCommandPool(vulkan_ctx.device, command_ctx.command_pool, nullptr);
+	}
+
+	if (compute_ctx.pipeline != VK_NULL_HANDLE) {
+		vkDestroyPipeline(vulkan_ctx.device, compute_ctx.pipeline, nullptr);
+	}
+
+	if (compute_ctx.pipeline_layout != VK_NULL_HANDLE) {
+		vkDestroyPipelineLayout(vulkan_ctx.device, compute_ctx.pipeline_layout, nullptr);
+	}
+
+	if (render_target_ctx.descriptor_pool != VK_NULL_HANDLE) {
+		vkDestroyDescriptorPool(vulkan_ctx.device, render_target_ctx.descriptor_pool, nullptr);
+	}
+
+	if (render_target_ctx.descriptor_set_layout != VK_NULL_HANDLE) {
+		vkDestroyDescriptorSetLayout(vulkan_ctx.device, render_target_ctx.descriptor_set_layout,
+		                            nullptr);
+	}
+
+	if (render_target_ctx.accum_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	}
+
+	if (render_target_ctx.storage_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	}
+
+	if (render_target_ctx.accum_image != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.accum_image,
+		                render_target_ctx.accum_image_alloc);
+	}
+
+	if (render_target_ctx.storage_image != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.storage_image,
+		                render_target_ctx.storage_image_alloc);
+	}
+
+	if (render_target_ctx.allocator != VK_NULL_HANDLE) {
+		vmaDestroyAllocator(render_target_ctx.allocator);
+	}
+
+	if (!swapchain_ctx.image_views.empty()) {
+		swapchain_ctx.swapchain.destroy_image_views(swapchain_ctx.image_views);
+	}
+
+	if (swapchain_ctx.swapchain.swapchain != VK_NULL_HANDLE) {
+		vkb::destroy_swapchain(swapchain_ctx.swapchain);
+	}
+
+	if (vulkan_ctx.surface != VK_NULL_HANDLE) {
+		vkb::destroy_surface(vulkan_ctx.instance, vulkan_ctx.surface);
+	}
+
+	if (vulkan_ctx.device != VK_NULL_HANDLE) {
+		vkb::destroy_device(vulkan_ctx.log_device);
+	}
+
+	if (vulkan_ctx.instance.instance != VK_NULL_HANDLE) {
+		vkb::destroy_instance(vulkan_ctx.instance);
+	}
 }
 
 void App::run() {
@@ -528,29 +813,45 @@ void App::MainLoop() {
 	uint32_t frame_number = 0;
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
-		glfwPollEvents();
+		
+		update_demo_overlay_state();
+
+		ImGui_ImplVulkan_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
+
+		ui::AudienceOverlayState overlay_state{};
+		overlay_state.volume_level = overlay_ctx.volume_level;
+		overlay_state.selection_count = overlay_ctx.selection_count;
+		overlay_state.selected_index = overlay_ctx.selected_index;
+		ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_state);
+		ImGui::Render();
 
 		// 1. Wait for previous frame to finish
-		vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX);
-		vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight);
+		check_vk_result(vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, 
+										UINT64_MAX));
+		check_vk_result(vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight));
 
 		// 2. Acquire next swapchain image
-		uint32_t image_index;
-		vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain, UINT64_MAX,
-		                      sync_ctx.image_available, VK_NULL_HANDLE, &image_index);
-
+		uint32_t image_index = 0;
+		check_vk_result(vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain,
+											  UINT64_MAX, sync_ctx.image_available, VK_NULL_HANDLE, 
+											  &image_index));
+		
 		// 3. Record command buffer
-		vkResetCommandBuffer(command_ctx.command_buffer, 0);
+		check_vk_result(vkResetCommandBuffer(command_ctx.command_buffer, 0));
 
 		VkCommandBufferBeginInfo begin_info{};
 		begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-		vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
+		check_vk_result(vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info));
 
 		// 3a. Transition storage image to GENERAL so compute can write to it
 		VkImageMemoryBarrier storage_barrier{};
 		storage_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		storage_barrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+		storage_barrier.oldLayout           = render_target_ctx.storage_initialized
+													? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+													: VK_IMAGE_LAYOUT_UNDEFINED;
 		storage_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
 		storage_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		storage_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -571,12 +872,13 @@ void App::MainLoop() {
 		                        &render_target_ctx.descriptor_set, 0, nullptr);
 
 		// 3c. Dispatch — one thread per pixel, groups of 16x16
-		uint32_t group_x = (m_window->width() + 15) / 16;
-		uint32_t group_y = (m_window->height() + 15) / 16;
+		const uint32_t group_x = (m_window->width() + 15) / 16;
+		const uint32_t group_y = (m_window->height() + 15) / 16;
 		vkCmdPushConstants(command_ctx.command_buffer, compute_ctx.pipeline_layout,
 		                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &frame_number);
 		vkCmdDispatch(command_ctx.command_buffer, group_x, group_y, 1);
-		frame_number++;
+		++frame_number;
+		render_target_ctx.storage_initialized = true;
 
 		// 3d. Transition storage image to TRANSFER_SRC for blit
 		VkImageMemoryBarrier transfer_barrier{};
@@ -597,7 +899,9 @@ void App::MainLoop() {
 		// 3e. Transition swapchain image to TRANSFER_DST for blit
 		VkImageMemoryBarrier swapchain_barrier{};
 		swapchain_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		swapchain_barrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+		swapchain_barrier.oldLayout           = swapchain_ctx.image_initialized[image_index]
+													? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+													: VK_IMAGE_LAYOUT_UNDEFINED;
 		swapchain_barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		swapchain_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		swapchain_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -617,33 +921,45 @@ void App::MainLoop() {
 		blit.srcOffsets[1]  = {(int32_t) m_window->width(), (int32_t) m_window->height(), 1};
 		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.dstOffsets[0]  = {0, 0, 0};
-		blit.dstOffsets[1]  = {(int32_t) swapchain_ctx.swapchain.extent.width,
-		                       (int32_t) swapchain_ctx.swapchain.extent.height, 1};
+		blit.dstOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.swapchain.extent.width),
+		                       static_cast<int32_t>(swapchain_ctx.swapchain.extent.height), 1};
 
 		vkCmdBlitImage(command_ctx.command_buffer, render_target_ctx.storage_image,
 		               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchain_ctx.images[image_index],
 		               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
 
 		// 3g. Transition swapchain image to PRESENT_SRC
-		VkImageMemoryBarrier present_barrier{};
-		present_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		present_barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-		present_barrier.newLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		present_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		present_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		present_barrier.image               = swapchain_ctx.images[image_index];
-		present_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-		present_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-		present_barrier.dstAccessMask       = 0;
+		VkImageMemoryBarrier overlay_barrier{};
+		overlay_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		overlay_barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		overlay_barrier.newLayout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		overlay_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		overlay_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		overlay_barrier.image               = swapchain_ctx.images[image_index];
+		overlay_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		overlay_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+		overlay_barrier.dstAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+		                                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
 		vkCmdPipelineBarrier(command_ctx.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-		                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
-		                     &present_barrier);
+		                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1,
+		                     &overlay_barrier);
 
-		vkEndCommandBuffer(command_ctx.command_buffer);
+		VkRenderPassBeginInfo render_pass_info{};
+		render_pass_info.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		render_pass_info.renderPass  = overlay_ctx.render_pass;
+		render_pass_info.framebuffer = overlay_ctx.framebuffers[image_index];
+		render_pass_info.renderArea = {{0, 0}, swapchain_ctx.extent};
+
+		vkCmdBeginRenderPass(command_ctx.command_buffer, &render_pass_info,
+		                     VK_SUBPASS_CONTENTS_INLINE);
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), command_ctx.command_buffer);
+		vkCmdEndRenderPass(command_ctx.command_buffer);
+
+		check_vk_result(vkEndCommandBuffer(command_ctx.command_buffer));
 
 		// 4. Submit to queue
-		VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 
 		VkSubmitInfo submit_info{};
 		submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -655,7 +971,8 @@ void App::MainLoop() {
 		submit_info.signalSemaphoreCount = 1;
 		submit_info.pSignalSemaphores    = &sync_ctx.render_finished;
 
-		vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight);
+		check_vk_result(
+			vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight));
 
 		// 5. Present
 		VkPresentInfoKHR present_info{};
@@ -666,9 +983,7 @@ void App::MainLoop() {
 		present_info.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
 		present_info.pImageIndices      = &image_index;
 
-		vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info);
+		check_vk_result(vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info));
+		swapchain_ctx.image_initialized[image_index] = true;
 	}
-
-	// wait for GPU to finish before cleanup
-	vkDeviceWaitIdle(vulkan_ctx.device);
 }
