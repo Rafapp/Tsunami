@@ -26,7 +26,7 @@ float normalizeMicrophoneLevel(float raw_level, const audio::ReactiveAudioSettin
 
 namespace audio {
 
-float ReactiveAudioController::update(const ReactiveAudioSettings& settings,
+float ReactiveAudioController::update(const ReactiveAudioSettings&   settings,
                                       const ReactiveAudioInputFrame& input_frame) {
 	m_diagnostics.source_available = input_frame.source_available;
 	m_diagnostics.raw_level        = input_frame.source_available ? input_frame.raw_level : 0.0f;
@@ -36,10 +36,9 @@ float ReactiveAudioController::update(const ReactiveAudioSettings& settings,
 	float target_level = 0.0f;
 	switch (settings.input_mode) {
 		case ReactiveAudioInputMode::Automatic:
-			target_level =
-			    input_frame.source_available ?
-			        normalizeMicrophoneLevel(input_frame.raw_level, settings) :
-			        calculateDemoLevel(input_frame.time_seconds, settings.demo_cycle_hz);
+			target_level = input_frame.source_available ?
+			                   normalizeMicrophoneLevel(input_frame.raw_level, settings) :
+			                   calculateDemoLevel(input_frame.time_seconds, settings.demo_cycle_hz);
 			break;
 		case ReactiveAudioInputMode::Demo:
 			target_level = calculateDemoLevel(input_frame.time_seconds, settings.demo_cycle_hz);
@@ -49,7 +48,7 @@ float ReactiveAudioController::update(const ReactiveAudioSettings& settings,
 			break;
 	}
 
-	const float smoothing = std::clamp(settings.smoothing, 0.01f, 1.0f);
+	const float smoothing          = std::clamp(settings.smoothing, 0.01f, 1.0f);
 	m_diagnostics.normalized_level = clamp01(target_level);
 	m_diagnostics.smoothed_level +=
 	    (m_diagnostics.normalized_level - m_diagnostics.smoothed_level) * smoothing;

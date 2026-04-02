@@ -70,7 +70,7 @@ std::vector<uint32_t> compileSlangShader(const std::string& path, const std::str
 	spAddTranslationUnitSourceFile(request, unit_index, resolved_path.c_str());
 	spAddEntryPoint(request, unit_index, entry_point.c_str(), SLANG_STAGE_COMPUTE);
 
-	const SlangResult result = spCompile(request);
+	const SlangResult result      = spCompile(request);
 	const char*       diagnostics = spGetDiagnosticOutput(request);
 	if (diagnostics != nullptr && diagnostics[0] != '\0') {
 		std::cerr << "[SLANG] " << resolved_path << ":\n" << diagnostics << "\n";
@@ -82,8 +82,8 @@ std::vector<uint32_t> compileSlangShader(const std::string& path, const std::str
 		throw std::runtime_error("slang compilation failed: " + resolved_path);
 	}
 
-	size_t      spirv_size = 0;
-	const void* spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
+	size_t                spirv_size = 0;
+	const void*           spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
 	std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
 	std::memcpy(spirv.data(), spirv_data, spirv_size);
 
@@ -142,12 +142,15 @@ namespace simulation {
 
 struct WaterSurfaceSimulation::PushConstants : ::PushConstants {};
 
-WaterSurfaceSimulation::WaterSurfaceSimulation(const WaterSurfaceCreateInfo& create_info)
-    : m_device(create_info.device), m_allocator(create_info.allocator),
-      m_output_extent(create_info.output_extent), m_push_constants(new PushConstants()) {
+WaterSurfaceSimulation::WaterSurfaceSimulation(const WaterSurfaceCreateInfo& create_info) :
+    m_device(create_info.device),
+    m_allocator(create_info.allocator),
+    m_output_extent(create_info.output_extent),
+    m_push_constants(new PushConstants()) {
 	if (m_device == VK_NULL_HANDLE || m_allocator == nullptr || m_output_extent.width == 0 ||
 	    m_output_extent.height == 0) {
-		throw std::runtime_error("water surface simulation requires a valid Vulkan device and extent");
+		throw std::runtime_error(
+		    "water surface simulation requires a valid Vulkan device and extent");
 	}
 
 	createImages();
@@ -200,17 +203,18 @@ WaterSurfaceSimulation::~WaterSurfaceSimulation() {
 	}
 }
 
-const WaterSurfaceDiagnostics& WaterSurfaceSimulation::prepareFrame(
-    const WaterSurfaceSettings& settings, float audio_level, float time_seconds, float delta_time) {
+const WaterSurfaceDiagnostics&
+    WaterSurfaceSimulation::prepareFrame(const WaterSurfaceSettings& settings, float audio_level,
+                                         float time_seconds, float delta_time) {
 	const float clamped_delta_time = std::clamp(delta_time, 1.0f / 240.0f, 1.0f / 12.0f);
 	const float time_scale         = std::clamp(clamped_delta_time * 60.0f, 0.25f, 2.0f);
 	const float clamped_audio      = clamp01(audio_level);
 	const float gated_audio        = clamp01((clamped_audio - 0.025f) / 0.975f);
-	const bool  advance_state      = m_last_prepare_time < 0.0f ||
-	                            std::abs(time_seconds - m_last_prepare_time) > 1.0e-5f;
+	const bool  advance_state =
+	    m_last_prepare_time < 0.0f || std::abs(time_seconds - m_last_prepare_time) > 1.0e-5f;
 
 	if (advance_state) {
-		const float attack = std::max(gated_audio - m_previous_audio_level, 0.0f);
+		const float attack         = std::max(gated_audio - m_previous_audio_level, 0.0f);
 		const float activity_decay = std::exp(-clamped_delta_time * 4.0f);
 		m_recent_activity          = std::max(gated_audio, m_recent_activity * activity_decay);
 
@@ -230,14 +234,14 @@ const WaterSurfaceDiagnostics& WaterSurfaceSimulation::prepareFrame(
 			if (cadence_pulse || attack_pulse) {
 				const float energy = clamp01(speed_drive * 0.80f + attack * 2.00f);
 				impulse_strength   = std::max(settings.base_impulse, 0.0f) +
-				                   energy * std::max(settings.audio_impulse_scale, 0.0f) *
-				                       (0.70f + speed_drive * 0.90f);
+				                     energy * std::max(settings.audio_impulse_scale, 0.0f) *
+				                         (0.70f + speed_drive * 0.90f);
 			}
 		} else {
 			m_emission_accumulator = 0.0f;
 		}
 
-		m_pending_impulse     = impulse_strength;
+		m_pending_impulse      = impulse_strength;
 		m_previous_audio_level = gated_audio;
 		m_last_prepare_time    = time_seconds;
 	}
@@ -247,18 +251,16 @@ const WaterSurfaceDiagnostics& WaterSurfaceSimulation::prepareFrame(
 	    std::clamp(settings.propagation * (0.55f + speed_drive * 0.85f) * time_scale * time_scale,
 	               0.0f, 0.47f);
 	const float damping =
-	    std::clamp(settings.damping + ((1.0f - speed_drive) * 0.0075f) -
-	                   (speed_drive * 0.0035f),
+	    std::clamp(settings.damping + ((1.0f - speed_drive) * 0.0075f) - (speed_drive * 0.0035f),
 	               0.0010f, 0.080f);
-	const float restoring_force =
-	    std::clamp(settings.restoring_force * (0.80f + speed_drive * 1.20f) *
-	                   time_scale * time_scale,
-	               0.0f, 0.35f);
-	const float orbit_radius     = std::clamp(settings.orbit_radius, 0.0f, 0.45f);
-	const float orbit_speed      = std::max(settings.orbit_speed, 0.0f);
-	const float orbit_angle      = time_seconds * orbit_speed * kPi * 2.0f;
-	const float emitter_u        = 0.5f + std::cos(orbit_angle) * orbit_radius;
-	const float emitter_v        = 0.5f + std::sin(orbit_angle * 1.618f) * orbit_radius * 0.65f;
+	const float restoring_force = std::clamp(
+	    settings.restoring_force * (0.80f + speed_drive * 1.20f) * time_scale * time_scale, 0.0f,
+	    0.35f);
+	const float orbit_radius = std::clamp(settings.orbit_radius, 0.0f, 0.45f);
+	const float orbit_speed  = std::max(settings.orbit_speed, 0.0f);
+	const float orbit_angle  = time_seconds * orbit_speed * kPi * 2.0f;
+	const float emitter_u    = 0.5f + std::cos(orbit_angle) * orbit_radius;
+	const float emitter_v    = 0.5f + std::sin(orbit_angle * 1.618f) * orbit_radius * 0.65f;
 	const float ripple_radius =
 	    std::clamp(settings.ripple_radius * (0.80f + speed_drive * 0.90f), 0.001f, 0.35f);
 	const float height_scale =
@@ -296,9 +298,9 @@ void WaterSurfaceSimulation::requestReset() {
 
 void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 	VkImageMemoryBarrier output_barrier{};
-	output_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	output_barrier.oldLayout           = m_output_in_transfer_src ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-	                                                              : VK_IMAGE_LAYOUT_UNDEFINED;
+	output_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	output_barrier.oldLayout =
+	    m_output_in_transfer_src ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
 	output_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
 	output_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	output_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -315,16 +317,16 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 
 	std::array<VkImageMemoryBarrier, 2> height_barriers{};
 	for (size_t index = 0; index < height_barriers.size(); ++index) {
-		height_barriers[index].sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		height_barriers[index].oldLayout           = m_height_layout_initialized ?
-		                                                 VK_IMAGE_LAYOUT_GENERAL :
-		                                                 VK_IMAGE_LAYOUT_UNDEFINED;
+		height_barriers[index].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		height_barriers[index].oldLayout =
+		    m_height_layout_initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
 		height_barriers[index].newLayout           = VK_IMAGE_LAYOUT_GENERAL;
 		height_barriers[index].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		height_barriers[index].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		height_barriers[index].image               = m_height_images[index];
 		height_barriers[index].subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-		height_barriers[index].srcAccessMask = m_height_layout_initialized ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+		height_barriers[index].srcAccessMask =
+		    m_height_layout_initialized ? VK_ACCESS_SHADER_WRITE_BIT : 0;
 		height_barriers[index].dstAccessMask =
 		    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 	}
@@ -339,8 +341,8 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 		const VkImageSubresourceRange clear_range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 		const VkClearColorValue       clear_value = {};
 
-		vkCmdClearColorImage(command_buffer, m_output_image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1,
-		                     &clear_range);
+		vkCmdClearColorImage(command_buffer, m_output_image, VK_IMAGE_LAYOUT_GENERAL, &clear_value,
+		                     1, &clear_range);
 		for (VkImage image : m_height_images) {
 			vkCmdClearColorImage(command_buffer, image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1,
 			                     &clear_range);
@@ -524,8 +526,7 @@ void WaterSurfaceSimulation::createPipeline() {
 	layout_info.pushConstantRangeCount = 1;
 	layout_info.pPushConstantRanges    = &push_constant_range;
 
-	if (vkCreatePipelineLayout(m_device, &layout_info, nullptr, &m_pipeline_layout) !=
-	    VK_SUCCESS) {
+	if (vkCreatePipelineLayout(m_device, &layout_info, nullptr, &m_pipeline_layout) != VK_SUCCESS) {
 		vkDestroyShaderModule(m_device, shader_module, nullptr);
 		throw std::runtime_error("failed to create water simulation pipeline layout");
 	}

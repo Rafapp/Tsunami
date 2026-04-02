@@ -8,7 +8,7 @@
 namespace audio {
 class MicrophoneInput;
 class ReactiveAudioController;
-}
+}        // namespace audio
 
 namespace simulation {
 class WaterSurfaceSimulation;
@@ -22,9 +22,9 @@ class App {
 	void run();
 
   private:
-	void                                    MainLoop();
-	std::unique_ptr<audio::ReactiveAudioController> m_audio_controller;
-	std::unique_ptr<audio::MicrophoneInput> m_microphone;
+	void                                                MainLoop();
+	std::unique_ptr<audio::ReactiveAudioController>     m_audio_controller;
+	std::unique_ptr<audio::MicrophoneInput>             m_microphone;
 	std::unique_ptr<simulation::WaterSurfaceSimulation> m_water_surface;
-	std::unique_ptr<core::Window>           m_window;
+	std::unique_ptr<core::Window>                       m_window;
 };

@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "volk.h"
 #include "vk_mem_alloc.h"
+#include "volk.h"
 
 #include "tsunami/simulation/water_surface_types.h"
 
@@ -26,8 +26,8 @@ class WaterSurfaceSimulation {
 	const WaterSurfaceDiagnostics& prepareFrame(const WaterSurfaceSettings& settings,
 	                                            float audio_level, float time_seconds,
 	                                            float delta_time);
-	void requestReset();
-	void record(VkCommandBuffer command_buffer);
+	void                           requestReset();
+	void                           record(VkCommandBuffer command_buffer);
 
 	VkImage outputImage() const {
 		return m_output_image;
@@ -42,9 +42,9 @@ class WaterSurfaceSimulation {
 	VmaAllocator m_allocator     = nullptr;
 	VkExtent2D   m_output_extent = {};
 
-	VkImage       m_output_image       = VK_NULL_HANDLE;
-	VmaAllocation m_output_allocation  = nullptr;
-	VkImageView   m_output_image_view  = VK_NULL_HANDLE;
+	VkImage       m_output_image      = VK_NULL_HANDLE;
+	VmaAllocation m_output_allocation = nullptr;
+	VkImageView   m_output_image_view = VK_NULL_HANDLE;
 
 	VkImage       m_height_images[2]      = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 	VmaAllocation m_height_allocations[2] = {nullptr, nullptr};

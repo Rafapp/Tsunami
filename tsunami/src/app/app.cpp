@@ -2,8 +2,8 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -62,11 +62,11 @@ struct SyncContext {
 } sync_ctx{};
 
 struct OverlayContext {
-	VkRenderPass               render_pass = VK_NULL_HANDLE;
-	std::vector<VkFramebuffer> framebuffers;
+	VkRenderPass                  render_pass = VK_NULL_HANDLE;
+	std::vector<VkFramebuffer>    framebuffers;
 	ui::AudienceControlPanelState controls{};
 	ui::AudienceDiagnostics       diagnostics{};
-	bool                         show_control_panel = true;
+	bool                          show_control_panel = true;
 } overlay_ctx{};
 
 void check_vk_result(VkResult result) {
@@ -202,7 +202,7 @@ void shutdown_imgui() {
 }
 
 audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput* microphone,
-                                                    float time_seconds) {
+                                                    float                         time_seconds) {
 	audio::ReactiveAudioInputFrame input_frame{};
 	input_frame.source_available = microphone != nullptr && microphone->isAvailable();
 	input_frame.raw_level        = input_frame.source_available ? microphone->latestLevel() : 0.0f;
@@ -216,7 +216,7 @@ audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput
 }
 
 void applyOverlayLevel(float value) {
-	overlay_ctx.controls.overlay.volume_level = std::clamp(value, 0.0f, 1.0f);
+	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
 	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
 	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
 }
@@ -333,8 +333,8 @@ App::App() {
 	swapchain_ctx.image_views = image_views_ret.value();
 	std::cout << "[INFO] Created swapchain image views\n";
 
-	m_water_surface = std::make_unique<simulation::WaterSurfaceSimulation>(
-	    simulation::WaterSurfaceCreateInfo{
+	m_water_surface =
+	    std::make_unique<simulation::WaterSurfaceSimulation>(simulation::WaterSurfaceCreateInfo{
 	        .device        = vulkan_ctx.device,
 	        .allocator     = render_resources_ctx.allocator,
 	        .output_extent = {(uint32_t) m_window->width(), (uint32_t) m_window->height()},
@@ -475,7 +475,7 @@ void App::MainLoop() {
 
 		float audio_level = 0.0f;
 		if (m_audio_controller != nullptr) {
-			audio_level                   = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+			audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
 			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 		}
 		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
@@ -506,7 +506,8 @@ void App::MainLoop() {
 
 			if (m_water_surface != nullptr) {
 				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
-				    overlay_ctx.controls.water, updated_water_audio_level, time_seconds, delta_time);
+				    overlay_ctx.controls.water, updated_water_audio_level, time_seconds,
+				    delta_time);
 			}
 		}
 

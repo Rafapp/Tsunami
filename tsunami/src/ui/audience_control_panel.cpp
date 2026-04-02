@@ -40,9 +40,9 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::Checkbox("Show audience overlay", &state.show_overlay);
 	ImGui::SameLine();
 	if (ImGui::Button("Reset defaults")) {
-		state                        = AudienceControlPanelState{};
-		state.reset_water_requested  = true;
-		changed                      = true;
+		state                       = AudienceControlPanelState{};
+		state.reset_water_requested = true;
+		changed                     = true;
 	}
 
 	ImGui::Separator();
@@ -66,18 +66,17 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	ImGui::TextUnformatted("Water Surface");
 	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.45f, "%.3f");
 	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.0f, 0.15f, "%.3f");
-	changed |= ImGui::SliderFloat("Restoring force", &state.water.restoring_force, 0.0f, 0.35f,
-	                              "%.3f");
+	changed |=
+	    ImGui::SliderFloat("Restoring force", &state.water.restoring_force, 0.0f, 0.35f, "%.3f");
 	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 80.0f, "%.1f");
 	changed |=
 	    ImGui::SliderFloat("Ripple radius", &state.water.ripple_radius, 0.005f, 0.20f, "%.3f");
 	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.010f, "%.4f");
-	changed |= ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f,
-	                              "%.4f");
 	changed |=
-	    ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f, "%.2f");
-	changed |=
-	    ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
+	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f, "%.4f");
+	changed |= ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f,
+	                              "%.2f");
+	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
 	                              8.0f, "%.2f");
 	if (ImGui::Button("Reset water state")) {
@@ -135,7 +134,8 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	drawMeter("Displayed level", state.overlay.volume_level);
 	drawMeter("Water drive", diagnostics.water.audio_drive_level);
 	drawMeter("Water impulse", diagnostics.water.impulse_strength * 12.0f);
-	ImGui::Text("Emitter UV: (%.2f, %.2f)", diagnostics.water.emitter_u, diagnostics.water.emitter_v);
+	ImGui::Text("Emitter UV: (%.2f, %.2f)", diagnostics.water.emitter_u,
+	            diagnostics.water.emitter_v);
 
 	const uint32_t selected_index =
 	    state.overlay.selection_count == 0 ?
