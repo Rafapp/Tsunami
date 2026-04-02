@@ -1,10 +1,8 @@
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
-#include <filesystem>
 #include <iostream>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -18,11 +16,12 @@
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "VkBootstrap.h"
-#include "slang.h"
 #include "vk_mem_alloc.h"
 
 #include "tsunami/app/app.h"
 #include "tsunami/audio/microphone_input.h"
+#include "tsunami/audio/reactive_audio_controller.h"
+#include "tsunami/simulation/water_surface_simulation.h"
 #include "tsunami/ui/audience_control_panel.h"
 #include "tsunami/ui/audience_overlay.h"
 
@@ -47,29 +46,9 @@ struct SwapchainContext {
 	VkExtent2D               extent{};
 } swapchain_ctx{};
 
-struct RenderTargetContext {
+struct RenderResourcesContext {
 	VmaAllocator allocator = nullptr;
-
-	VkImage       storage_image       = VK_NULL_HANDLE;
-	VmaAllocation storage_image_alloc = nullptr;
-	VkImageView   storage_image_view  = VK_NULL_HANDLE;
-	bool          storage_initialized = false;
-
-	// Added accumulation buffer for progressive rendering (not used in the shader yet, but set up
-	// for future use)
-	VkImage       accum_image       = VK_NULL_HANDLE;
-	VmaAllocation accum_image_alloc = nullptr;
-	VkImageView   accum_image_view  = VK_NULL_HANDLE;
-
-	VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
-	VkDescriptorPool      descriptor_pool       = VK_NULL_HANDLE;
-	VkDescriptorSet       descriptor_set        = VK_NULL_HANDLE;
-} render_target_ctx{};
-
-struct ComputePipelineContext {
-	VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
-	VkPipeline       pipeline        = VK_NULL_HANDLE;
-} compute_ctx{};
+} render_resources_ctx{};
 
 struct CommandContext {
 	VkCommandPool   command_pool   = VK_NULL_HANDLE;
@@ -83,11 +62,11 @@ struct SyncContext {
 } sync_ctx{};
 
 struct OverlayContext {
-	VkRenderPass                  render_pass = VK_NULL_HANDLE;
-	std::vector<VkFramebuffer>    framebuffers;
+	VkRenderPass               render_pass = VK_NULL_HANDLE;
+	std::vector<VkFramebuffer> framebuffers;
 	ui::AudienceControlPanelState controls{};
 	ui::AudienceDiagnostics       diagnostics{};
-	bool                          show_control_panel = true;
+	bool                         show_control_panel = true;
 } overlay_ctx{};
 
 void check_vk_result(VkResult result) {
@@ -99,67 +78,6 @@ void check_vk_result(VkResult result) {
 	if (result < 0) {
 		throw std::runtime_error("Vulkan call failed");
 	}
-}
-
-std::string resolve_shader_path(const std::string& relative_path) {
-	namespace fs = std::filesystem;
-
-	const std::array<fs::path, 5> candidates = {
-	    fs::path(relative_path),
-	    fs::path("tsunami") / relative_path,
-	    fs::path("bin") / relative_path,
-	    fs::path("build/bin") / relative_path,
-	    fs::path("build-debug/bin") / relative_path,
-	};
-
-	for (const fs::path& candidate : candidates) {
-		if (fs::exists(candidate)) {
-			return candidate.string();
-		}
-	}
-
-	throw std::runtime_error("could not find shader source: " + relative_path);
-}
-
-static std::vector<uint32_t> compile_slang_shader(const std::string& path,
-                                                  const std::string& entry_point) {
-	const std::string resolved_path = resolve_shader_path(path);
-
-	SlangSession*        session = spCreateSession(nullptr);
-	SlangCompileRequest* request = spCreateCompileRequest(session);
-
-	int target_idx = spAddCodeGenTarget(request, SLANG_SPIRV);
-	spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_3"));
-
-	int unit_idx = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	spAddTranslationUnitSourceFile(request, unit_idx, resolved_path.c_str());
-
-	spAddEntryPoint(request, unit_idx, entry_point.c_str(), SLANG_STAGE_COMPUTE);
-
-	SlangResult result = spCompile(request);
-
-	// Always print — catches warnings even on success
-	const char* diagnostics = spGetDiagnosticOutput(request);
-	if (diagnostics && diagnostics[0] != '\0') {
-		std::cerr << "[SLANG] " << resolved_path << ":\n" << diagnostics << "\n";
-	}
-
-	if (result != SLANG_OK) {
-		spDestroyCompileRequest(request);
-		spDestroySession(session);
-		throw std::runtime_error("slang compilation failed: " + resolved_path);
-	}
-
-	size_t      spirv_size = 0;
-	const void* spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
-
-	std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
-	std::memcpy(spirv.data(), spirv_data, spirv_size);
-
-	spDestroyCompileRequest(request);
-	spDestroySession(session);
-
-	return spirv;
 }
 
 void create_overlay_render_pass() {
@@ -283,144 +201,90 @@ void shutdown_imgui() {
 	ImGui::DestroyContext();
 }
 
-void refresh_audio_diagnostics(const audio::MicrophoneInput* microphone) {
-	overlay_ctx.diagnostics.microphone_available =
-	    microphone != nullptr && microphone->isAvailable();
-	overlay_ctx.diagnostics.microphone_name =
-	    microphone != nullptr ? microphone->deviceName().c_str() : "Unavailable";
-	overlay_ctx.diagnostics.microphone_status = microphone != nullptr ?
-	                                                microphone->statusMessage().c_str() :
-	                                                "Microphone capture is unavailable.";
-	overlay_ctx.diagnostics.raw_microphone_level =
-	    overlay_ctx.diagnostics.microphone_available ? microphone->latestLevel() : 0.0f;
+audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput* microphone,
+                                                    float time_seconds) {
+	audio::ReactiveAudioInputFrame input_frame{};
+	input_frame.source_available = microphone != nullptr && microphone->isAvailable();
+	input_frame.raw_level        = input_frame.source_available ? microphone->latestLevel() : 0.0f;
+	input_frame.time_seconds     = time_seconds;
+	input_frame.source_name =
+	    microphone != nullptr ? microphone->deviceName() : std::string("Unavailable");
+	input_frame.source_status = microphone != nullptr ?
+	                                microphone->statusMessage() :
+	                                std::string("Microphone capture is unavailable.");
+	return input_frame;
 }
 
-float calculate_demo_overlay_level() {
-	const float time_seconds = static_cast<float>(glfwGetTime());
-	const float cycle_hz     = std::max(overlay_ctx.controls.audio.demo_cycle_hz, 0.0f);
-	return 0.5f + (0.45f * std::sin(time_seconds * cycle_hz));
-}
-
-float normalize_microphone_level(float raw_level) {
-	const float noise_floor = std::clamp(overlay_ctx.controls.audio.noise_floor, 0.0f, 1.0f);
-	const float sensitivity = std::max(overlay_ctx.controls.audio.sensitivity, 0.0f);
-	return std::clamp((raw_level - noise_floor) * sensitivity, 0.0f, 1.0f);
-}
-
-void apply_overlay_level(float target_level) {
-	const float clamped_level = std::clamp(target_level, 0.0f, 1.0f);
-	const float smoothing     = std::clamp(overlay_ctx.controls.audio.smoothing, 0.01f, 1.0f);
-	overlay_ctx.controls.overlay.volume_level +=
-	    (clamped_level - overlay_ctx.controls.overlay.volume_level) * smoothing;
+void applyOverlayLevel(float value) {
+	overlay_ctx.controls.overlay.volume_level = std::clamp(value, 0.0f, 1.0f);
 	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
 	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
-}
-
-void update_audience_overlay_state(const audio::MicrophoneInput* microphone) {
-	refresh_audio_diagnostics(microphone);
-
-	float target_level = 0.0f;
-
-	switch (overlay_ctx.controls.audio.input_mode) {
-		case ui::AudienceInputMode::Automatic:
-			target_level =
-			    overlay_ctx.diagnostics.microphone_available ?
-			        normalize_microphone_level(overlay_ctx.diagnostics.raw_microphone_level) :
-			        calculate_demo_overlay_level();
-			break;
-		case ui::AudienceInputMode::Demo:
-			target_level = calculate_demo_overlay_level();
-			break;
-		case ui::AudienceInputMode::Manual:
-			target_level = std::clamp(overlay_ctx.controls.audio.manual_level, 0.0f, 1.0f);
-			break;
-	}
-
-	overlay_ctx.diagnostics.normalized_level = target_level;
-	apply_overlay_level(target_level);
 }
 
 }        // namespace
 
 App::App() {
-	// ========================================
-	// === I. Load vulkan function pointers ===
-	// ========================================
-
-	// TODO: Logging class and functionality
-
 	if (volkInitialize() != VK_SUCCESS) {
 		throw std::runtime_error("failed to initialize volk");
 	}
 	std::cout << "[INFO] Initialized volk\n";
 
-	// =========================
-	// === II. Create window ===
-	// =========================
 	m_window = std::make_unique<core::Window>(
 	    core::WindowConfig{.width = 1280, .height = 720, .title = "tsunami 🌊"});
 	std::cout << "[INFO] Created window\n";
 
-	// ==================================
-	// === III. Create Vulkan context ===
-	// ==================================
-
-	// 1. Create Vulkan instance
 	vkb::InstanceBuilder builder;
 	auto                 inst_ret = builder.set_app_name("tsunami")
 	                                    .request_validation_layers()
 	                                    .use_default_debug_messenger()
 	                                    .require_api_version(1, 3, 0)
 	                                    .build();
-	if (!inst_ret)
+	if (!inst_ret) {
 		throw std::runtime_error("failed to create Vulkan instance");
+	}
 	vulkan_ctx.instance = inst_ret.value();
 	volkLoadInstance(vulkan_ctx.instance.instance);
 	std::cout << "[INFO] Created Vulkan instance\n";
 
-	// 2. Create a surface
-	vulkan_ctx.surface = VK_NULL_HANDLE;
 	if (glfwCreateWindowSurface(vulkan_ctx.instance, m_window->handle(), nullptr,
 	                            &vulkan_ctx.surface) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create window surface");
 	}
 	std::cout << "[INFO] Created window surface\n";
 
-	// 5. Select physical device (GPU)
 	auto phys_dev_ret = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
 	                        .set_surface(vulkan_ctx.surface)
 	                        .set_minimum_version(1, 3)
 	                        .select();
-	if (!phys_dev_ret)
+	if (!phys_dev_ret) {
 		throw std::runtime_error("failed to select physical device");
+	}
 	vulkan_ctx.phys_device = phys_dev_ret.value();
 	std::cout << "[INFO] Selected physical device\n";
 
-	// 6. Create logical device and load with volk
 	vkb::DeviceBuilder device_builder{vulkan_ctx.phys_device};
 	auto               dev_ret = device_builder.build();
-	if (!dev_ret)
+	if (!dev_ret) {
 		throw std::runtime_error("failed to create logical device");
+	}
 	vulkan_ctx.log_device = dev_ret.value();
 	vulkan_ctx.device     = vulkan_ctx.log_device.device;
 	volkLoadDevice(vulkan_ctx.device);
 	std::cout << "[INFO] Created logical device\n";
 
-	// 7. Create graphics queue, get queue and index
 	auto graphics_queue_ret = vulkan_ctx.log_device.get_queue(vkb::QueueType::graphics);
-	if (!graphics_queue_ret)
+	if (!graphics_queue_ret) {
 		throw std::runtime_error("failed to get graphics queue");
+	}
 	vulkan_ctx.graphics_queue = graphics_queue_ret.value();
 	std::cout << "[INFO] Created graphics queue\n";
 
 	auto family_ret = vulkan_ctx.log_device.get_queue_index(vkb::QueueType::graphics);
-	if (!family_ret)
+	if (!family_ret) {
 		throw std::runtime_error("failed to get graphics queue family");
+	}
 	vulkan_ctx.graphics_queue_family = family_ret.value();
 
-	// ==============================================
-	// === IV. Initialize VMA to write to VkImage ===
-	// ==============================================
 	VmaAllocatorCreateInfo vma_info{};
 	vma_info.instance         = vulkan_ctx.instance.instance;
 	vma_info.physicalDevice   = vulkan_ctx.phys_device.physical_device;
@@ -432,19 +296,11 @@ App::App() {
 	vma_vulkan_funcs.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
 	vma_info.pVulkanFunctions              = &vma_vulkan_funcs;
 
-	VmaAllocator allocator;
-	if (vmaCreateAllocator(&vma_info, &allocator) != VK_SUCCESS) {
+	if (vmaCreateAllocator(&vma_info, &render_resources_ctx.allocator) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create VMA allocator");
 	}
 	std::cout << "[INFO] Created VMA allocator\n";
 
-	render_target_ctx.allocator = allocator;        // add after vmaCreateAllocator succeeds
-
-	// ====================================
-	// === V. Create swapchain context ===
-	// ====================================
-
-	// 1. Create swapchain
 	vkb::SwapchainBuilder swapchain_builder{vulkan_ctx.log_device};
 	auto                  swap_ret =
 	    swapchain_builder
@@ -454,264 +310,37 @@ App::App() {
 	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
 	                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
 	        .build();
-	if (!swap_ret)
+	if (!swap_ret) {
 		throw std::runtime_error("failed to create swapchain");
+	}
 	swapchain_ctx.swapchain    = swap_ret.value();
 	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
 	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
 	std::cout << "[INFO] Created swapchain (format: " << swapchain_ctx.image_format << ")\n";
 
-	// 2. Create swapchain images
 	auto images_ret = swapchain_ctx.swapchain.get_images();
-	if (!images_ret)
+	if (!images_ret) {
 		throw std::runtime_error("failed to get swapchain images");
+	}
 	swapchain_ctx.images            = images_ret.value();
 	swapchain_ctx.image_initialized = std::vector<bool>(swapchain_ctx.images.size(), false);
 	std::cout << "[INFO] Acquired " << swapchain_ctx.images.size() << " swapchain images\n";
 
-	// 3. Create swapchain image views
 	auto image_views_ret = swapchain_ctx.swapchain.get_image_views();
-	if (!image_views_ret)
+	if (!image_views_ret) {
 		throw std::runtime_error("failed to get swapchain image views");
+	}
 	swapchain_ctx.image_views = image_views_ret.value();
 	std::cout << "[INFO] Created swapchain image views\n";
 
-	// ========================================
-	// === VI. Create Render Target Context ===
-	// ========================================
+	m_water_surface = std::make_unique<simulation::WaterSurfaceSimulation>(
+	    simulation::WaterSurfaceCreateInfo{
+	        .device        = vulkan_ctx.device,
+	        .allocator     = render_resources_ctx.allocator,
+	        .output_extent = {(uint32_t) m_window->width(), (uint32_t) m_window->height()},
+	    });
+	std::cout << "[INFO] Created water surface simulation resources\n";
 
-	// 1. Define storage image info
-	VkImageCreateInfo image_info{};
-	image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-	image_info.imageType     = VK_IMAGE_TYPE_2D;
-	image_info.format        = VK_FORMAT_R8G8B8A8_UNORM;
-	image_info.extent        = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
-	image_info.mipLevels     = 1;
-	image_info.arrayLayers   = 1;
-	image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
-	image_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
-	image_info.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-	image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-	// 2. Create storage image & allocate memory
-	VmaAllocationCreateInfo alloc_info{};
-	alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-	if (vmaCreateImage(allocator, &image_info, &alloc_info, &render_target_ctx.storage_image,
-	                   &render_target_ctx.storage_image_alloc, nullptr) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create storage image");
-	}
-	std::cout << "[INFO] Created storage image (resolution: " << image_info.extent.width << "x"
-	          << image_info.extent.height << ")\n";
-
-	VkImageCreateInfo accum_info = image_info;
-	accum_info.usage             = VK_IMAGE_USAGE_STORAGE_BIT;
-
-	if (vmaCreateImage(allocator, &accum_info, &alloc_info, &render_target_ctx.accum_image,
-	                   &render_target_ctx.accum_image_alloc, nullptr) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create accum image");
-	}
-
-	VkImageViewCreateInfo accum_view_info{};
-	accum_view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	accum_view_info.image                           = render_target_ctx.accum_image;
-	accum_view_info.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-	accum_view_info.format                          = VK_FORMAT_R8G8B8A8_UNORM;
-	accum_view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-	accum_view_info.subresourceRange.baseMipLevel   = 0;
-	accum_view_info.subresourceRange.levelCount     = 1;
-	accum_view_info.subresourceRange.baseArrayLayer = 0;
-	accum_view_info.subresourceRange.layerCount     = 1;
-
-	if (vkCreateImageView(vulkan_ctx.device, &accum_view_info, nullptr,
-	                      &render_target_ctx.accum_image_view) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create accum image view");
-	}
-	std::cout << "[INFO] Created accum image and view\n";
-
-	// 3. Create image view
-	VkImageViewCreateInfo view_info{};
-	view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	view_info.image                           = render_target_ctx.storage_image;
-	view_info.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-	view_info.format                          = VK_FORMAT_R8G8B8A8_UNORM;
-	view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-	view_info.subresourceRange.baseMipLevel   = 0;
-	view_info.subresourceRange.levelCount     = 1;
-	view_info.subresourceRange.baseArrayLayer = 0;
-	view_info.subresourceRange.layerCount     = 1;
-
-	if (vkCreateImageView(vulkan_ctx.device, &view_info, nullptr,
-	                      &render_target_ctx.storage_image_view) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create storage image view");
-	}
-	std::cout << "[INFO] Created storage image view\n";
-
-	// 4. Create descriptor set layout
-	VkDescriptorSetLayoutBinding storage_image_binding{};
-	storage_image_binding.binding         = 0;
-	storage_image_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	storage_image_binding.descriptorCount = 1;
-	storage_image_binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-
-	// Accumulation buffer for progressive rendering (not used in the shader yet, but set up for
-	// future use)
-	VkDescriptorSetLayoutBinding accum_image_binding{};
-	accum_image_binding.binding         = 1;
-	accum_image_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	accum_image_binding.descriptorCount = 1;
-	accum_image_binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-
-	std::array<VkDescriptorSetLayoutBinding, 2> bindings = {storage_image_binding,
-	                                                        accum_image_binding};
-
-	VkDescriptorSetLayoutCreateInfo dsl_info{};
-	dsl_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	dsl_info.bindingCount = 2;
-	dsl_info.pBindings    = bindings.data();
-
-	if (vkCreateDescriptorSetLayout(vulkan_ctx.device, &dsl_info, nullptr,
-	                                &render_target_ctx.descriptor_set_layout) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create descriptor set layout");
-	}
-	std::cout << "[INFO] Created descriptor set layout\n";
-
-	// 5. Create descriptor pool
-	VkDescriptorPoolSize pool_size{};
-	pool_size.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	pool_size.descriptorCount = 2;        // one for storage image, one for accumulation buffer
-
-	VkDescriptorPoolCreateInfo pool_info{};
-	pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	pool_info.maxSets       = 1;
-	pool_info.poolSizeCount = 1;
-	pool_info.pPoolSizes    = &pool_size;
-
-	if (vkCreateDescriptorPool(vulkan_ctx.device, &pool_info, nullptr,
-	                           &render_target_ctx.descriptor_pool) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create descriptor pool");
-	}
-	std::cout << "[INFO] Created descriptor pool\n";
-
-	// 6. Allocate descriptor set
-	VkDescriptorSetAllocateInfo descriptor_alloc_info{};
-	descriptor_alloc_info.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-	descriptor_alloc_info.descriptorPool     = render_target_ctx.descriptor_pool;
-	descriptor_alloc_info.descriptorSetCount = 1;
-	descriptor_alloc_info.pSetLayouts        = &render_target_ctx.descriptor_set_layout;
-
-	if (vkAllocateDescriptorSets(vulkan_ctx.device, &descriptor_alloc_info,
-	                             &render_target_ctx.descriptor_set) != VK_SUCCESS) {
-		throw std::runtime_error("failed to allocate descriptor set");
-	}
-	std::cout << "[INFO] Allocated descriptor set\n";
-
-	// 7. Update descriptor set with image info
-	VkDescriptorImageInfo descriptor_image_info{};
-	descriptor_image_info.imageView   = render_target_ctx.storage_image_view;
-	descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-	VkDescriptorImageInfo descriptor_accum_image_info{};
-	descriptor_accum_image_info.imageView   = render_target_ctx.accum_image_view;
-	descriptor_accum_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-	std::array<VkWriteDescriptorSet, 2> writes{};
-
-	writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writes[0].dstSet          = render_target_ctx.descriptor_set;
-	writes[0].dstBinding      = 0;
-	writes[0].descriptorCount = 1;
-	writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	writes[0].pImageInfo      = &descriptor_image_info;
-
-	writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writes[1].dstSet          = render_target_ctx.descriptor_set;
-	writes[1].dstBinding      = 1;
-	writes[1].descriptorCount = 1;
-	writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	writes[1].pImageInfo      = &descriptor_accum_image_info;
-
-	/**
-	VkWriteDescriptorSet write{};
-	write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	write.dstSet          = render_target_ctx.descriptor_set;
-	write.dstBinding      = 0;
-	write.descriptorCount = 1;
-	write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	write.pImageInfo      = &descriptor_image_info;
-	**/
-
-	vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes.data(), 0, nullptr);
-	std::cout << "[INFO] Updated descriptor set with storage image\n";
-
-	// ============================================
-	// === VII. Create Compute Pipeline Context ===
-	// ============================================
-
-	// 1. Compile shader
-	// TODO: Extract shading system/caching to "shading.h/cpp"
-	auto spirv = compile_slang_shader("shaders/cursedPathTracingAlgo.slang", "main");
-	std::cout << "[INFO] Compiled compute shader to SPIR-V (" << (spirv.size() * sizeof(uint32_t))
-	          << " bytes)\n";
-
-	// 2. Create shader module
-	VkShaderModuleCreateInfo module_info{};
-	module_info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-	module_info.codeSize = spirv.size() * sizeof(uint32_t);
-	module_info.pCode    = spirv.data();
-
-	VkShaderModule shader_module;
-	if (vkCreateShaderModule(vulkan_ctx.device, &module_info, nullptr, &shader_module) !=
-	    VK_SUCCESS) {
-		throw std::runtime_error("failed to create shader module");
-	}
-	std::cout << "[INFO] Created shader module\n";
-
-	// 3. Pipeline layout, references our descriptor set layout
-	VkPushConstantRange push_constant_range{};
-	push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-	push_constant_range.offset     = 0;
-	push_constant_range.size       = sizeof(uint32_t);
-
-	VkPipelineLayoutCreateInfo pipeline_layout_info{};
-	pipeline_layout_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipeline_layout_info.setLayoutCount         = 1;
-	pipeline_layout_info.pSetLayouts            = &render_target_ctx.descriptor_set_layout;
-	pipeline_layout_info.pushConstantRangeCount = 1;
-	pipeline_layout_info.pPushConstantRanges    = &push_constant_range;
-
-	if (vkCreatePipelineLayout(vulkan_ctx.device, &pipeline_layout_info, nullptr,
-	                           &compute_ctx.pipeline_layout) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create pipeline layout");
-	}
-	std::cout << "[INFO] Created pipeline layout\n";
-
-	// 4. Create compute pipeline
-	VkPipelineShaderStageCreateInfo stage_info{};
-	stage_info.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-	stage_info.module = shader_module;
-	stage_info.pName  = "main";
-
-	VkComputePipelineCreateInfo pipeline_info{};
-	pipeline_info.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-	pipeline_info.stage  = stage_info;
-	pipeline_info.layout = compute_ctx.pipeline_layout;
-
-	if (vkCreateComputePipelines(vulkan_ctx.device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr,
-	                             &compute_ctx.pipeline) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create compute pipeline");
-	}
-	std::cout << "[INFO] Created compute pipeline\n";
-
-	// 5. Shader module baked into pipeline, safe to destroy now
-	vkDestroyShaderModule(vulkan_ctx.device, shader_module, nullptr);
-
-	// ==========================================
-	// === VIII. Create command pool & buffer ===
-	// ==========================================
-
-	// 1. Create command pool, allocator for command buffers, tied to a queue family
 	VkCommandPoolCreateInfo cmd_pool_info{};
 	cmd_pool_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 	cmd_pool_info.queueFamilyIndex = vulkan_ctx.graphics_queue_family;
@@ -723,7 +352,6 @@ App::App() {
 	}
 	std::cout << "[INFO] Created command pool\n";
 
-	// 2. Create command buffer, allocated from the pool (one is enough for now)
 	VkCommandBufferAllocateInfo cmd_alloc_info{};
 	cmd_alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	cmd_alloc_info.commandPool        = command_ctx.command_pool;
@@ -736,10 +364,6 @@ App::App() {
 	}
 	std::cout << "[INFO] Allocated command buffer\n";
 
-	// ========================
-	// === IX. Sync Context ===
-	// ========================
-
 	VkSemaphoreCreateInfo semaphore_info{};
 	semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -747,28 +371,21 @@ App::App() {
 	fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	// 1. Create semaphore
 	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) !=
 	        VK_SUCCESS ||
 	    vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.render_finished) !=
 	        VK_SUCCESS ||
-	    // 2. Create fence
-
 	    vkCreateFence(vulkan_ctx.device, &fence_info, nullptr, &sync_ctx.in_flight) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create sync objects");
 	}
-
 	std::cout << "[INFO] Created sync objects (image_available, render_finished, in_flight)\n";
-
-	// ===============================
-	// === X. Initialize UI layer ===
-	// ===============================
 
 	create_overlay_render_pass();
 	initialize_imgui(m_window->handle());
 	std::cout << "[INFO] Initialized ImGui overlay\n";
 
-	m_microphone = std::make_unique<audio::MicrophoneInput>();
+	m_audio_controller = std::make_unique<audio::ReactiveAudioController>();
+	m_microphone       = std::make_unique<audio::MicrophoneInput>();
 	if (m_microphone->isAvailable()) {
 		std::cout << "[INFO] Live microphone capture ready: " << m_microphone->deviceName() << "\n";
 	} else {
@@ -778,13 +395,18 @@ App::App() {
 }
 
 App::~App() {
-	m_microphone.reset();
-
 	if (vulkan_ctx.device == VK_NULL_HANDLE) {
+		m_water_surface.reset();
+		m_audio_controller.reset();
+		m_microphone.reset();
 		return;
 	}
 
 	vkDeviceWaitIdle(vulkan_ctx.device);
+
+	m_water_surface.reset();
+	m_audio_controller.reset();
+	m_microphone.reset();
 
 	shutdown_imgui();
 	destroy_overlay_render_resources();
@@ -805,43 +427,8 @@ App::~App() {
 		vkDestroyCommandPool(vulkan_ctx.device, command_ctx.command_pool, nullptr);
 	}
 
-	if (compute_ctx.pipeline != VK_NULL_HANDLE) {
-		vkDestroyPipeline(vulkan_ctx.device, compute_ctx.pipeline, nullptr);
-	}
-
-	if (compute_ctx.pipeline_layout != VK_NULL_HANDLE) {
-		vkDestroyPipelineLayout(vulkan_ctx.device, compute_ctx.pipeline_layout, nullptr);
-	}
-
-	if (render_target_ctx.descriptor_pool != VK_NULL_HANDLE) {
-		vkDestroyDescriptorPool(vulkan_ctx.device, render_target_ctx.descriptor_pool, nullptr);
-	}
-
-	if (render_target_ctx.descriptor_set_layout != VK_NULL_HANDLE) {
-		vkDestroyDescriptorSetLayout(vulkan_ctx.device, render_target_ctx.descriptor_set_layout,
-		                             nullptr);
-	}
-
-	if (render_target_ctx.accum_image_view != VK_NULL_HANDLE) {
-		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
-	}
-
-	if (render_target_ctx.storage_image_view != VK_NULL_HANDLE) {
-		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
-	}
-
-	if (render_target_ctx.accum_image != VK_NULL_HANDLE) {
-		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.accum_image,
-		                render_target_ctx.accum_image_alloc);
-	}
-
-	if (render_target_ctx.storage_image != VK_NULL_HANDLE) {
-		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.storage_image,
-		                render_target_ctx.storage_image_alloc);
-	}
-
-	if (render_target_ctx.allocator != VK_NULL_HANDLE) {
-		vmaDestroyAllocator(render_target_ctx.allocator);
+	if (render_resources_ctx.allocator != VK_NULL_HANDLE) {
+		vmaDestroyAllocator(render_resources_ctx.allocator);
 	}
 
 	if (!swapchain_ctx.image_views.empty()) {
@@ -870,15 +457,34 @@ void App::run() {
 }
 
 void App::MainLoop() {
-	uint32_t frame_number = 0;
+	float last_frame_time = static_cast<float>(glfwGetTime());
+
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
+
+		const float time_seconds = static_cast<float>(glfwGetTime());
+		const float delta_time   = std::max(time_seconds - last_frame_time, 1.0f / 240.0f);
+		last_frame_time          = time_seconds;
 
 		ImGui_ImplVulkan_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
 
-		update_audience_overlay_state(m_microphone.get());
+		const audio::ReactiveAudioInputFrame audio_input =
+		    buildAudioInputFrame(m_microphone.get(), time_seconds);
+
+		float audio_level = 0.0f;
+		if (m_audio_controller != nullptr) {
+			audio_level                   = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
+		}
+		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
+		applyOverlayLevel(audio_level);
+
+		if (m_water_surface != nullptr) {
+			overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
+			    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
+		}
 
 		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
 			overlay_ctx.show_control_panel = !overlay_ctx.show_control_panel;
@@ -891,7 +497,24 @@ void App::MainLoop() {
 		}
 
 		if (controls_changed) {
-			update_audience_overlay_state(m_microphone.get());
+			if (m_audio_controller != nullptr) {
+				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+				overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
+			}
+			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
+			applyOverlayLevel(audio_level);
+
+			if (m_water_surface != nullptr) {
+				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
+				    overlay_ctx.controls.water, updated_water_audio_level, time_seconds, delta_time);
+			}
+		}
+
+		if (overlay_ctx.controls.reset_water_requested) {
+			if (m_water_surface != nullptr) {
+				m_water_surface->requestReset();
+			}
+			overlay_ctx.controls.reset_water_requested = false;
 		}
 
 		if (overlay_ctx.controls.show_overlay) {
@@ -900,18 +523,15 @@ void App::MainLoop() {
 		}
 		ImGui::Render();
 
-		// 1. Wait for previous frame to finish
 		check_vk_result(
 		    vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX));
 		check_vk_result(vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight));
 
-		// 2. Acquire next swapchain image
 		uint32_t image_index = 0;
 		check_vk_result(vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain,
 		                                      UINT64_MAX, sync_ctx.image_available, VK_NULL_HANDLE,
 		                                      &image_index));
 
-		// 3. Record command buffer
 		check_vk_result(vkResetCommandBuffer(command_ctx.command_buffer, 0));
 
 		VkCommandBufferBeginInfo begin_info{};
@@ -919,57 +539,10 @@ void App::MainLoop() {
 		begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 		check_vk_result(vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info));
 
-		// 3a. Transition storage image to GENERAL so compute can write to it
-		VkImageMemoryBarrier storage_barrier{};
-		storage_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		storage_barrier.oldLayout           = render_target_ctx.storage_initialized ?
-		                                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
-		                                          VK_IMAGE_LAYOUT_UNDEFINED;
-		storage_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-		storage_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		storage_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		storage_barrier.image               = render_target_ctx.storage_image;
-		storage_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-		storage_barrier.srcAccessMask       = 0;
-		storage_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+		if (m_water_surface != nullptr) {
+			m_water_surface->record(command_ctx.command_buffer);
+		}
 
-		vkCmdPipelineBarrier(command_ctx.command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-		                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-		                     &storage_barrier);
-
-		// 3b. Bind compute pipeline and descriptor set
-		vkCmdBindPipeline(command_ctx.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-		                  compute_ctx.pipeline);
-		vkCmdBindDescriptorSets(command_ctx.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-		                        compute_ctx.pipeline_layout, 0, 1,
-		                        &render_target_ctx.descriptor_set, 0, nullptr);
-
-		// 3c. Dispatch — one thread per pixel, groups of 16x16
-		const uint32_t group_x = (m_window->width() + 15) / 16;
-		const uint32_t group_y = (m_window->height() + 15) / 16;
-		vkCmdPushConstants(command_ctx.command_buffer, compute_ctx.pipeline_layout,
-		                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &frame_number);
-		vkCmdDispatch(command_ctx.command_buffer, group_x, group_y, 1);
-		++frame_number;
-		render_target_ctx.storage_initialized = true;
-
-		// 3d. Transition storage image to TRANSFER_SRC for blit
-		VkImageMemoryBarrier transfer_barrier{};
-		transfer_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		transfer_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
-		transfer_barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		transfer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		transfer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		transfer_barrier.image               = render_target_ctx.storage_image;
-		transfer_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-		transfer_barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-		transfer_barrier.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-
-		vkCmdPipelineBarrier(command_ctx.command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-		                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-		                     &transfer_barrier);
-
-		// 3e. Transition swapchain image to TRANSFER_DST for blit
 		VkImageMemoryBarrier swapchain_barrier{};
 		swapchain_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		swapchain_barrier.oldLayout           = swapchain_ctx.image_initialized[image_index] ?
@@ -987,7 +560,6 @@ void App::MainLoop() {
 		                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
 		                     &swapchain_barrier);
 
-		// 3f. Blit storage image → swapchain image
 		VkImageBlit blit{};
 		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.srcOffsets[0]  = {0, 0, 0};
@@ -997,11 +569,10 @@ void App::MainLoop() {
 		blit.dstOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.swapchain.extent.width),
 		                       static_cast<int32_t>(swapchain_ctx.swapchain.extent.height), 1};
 
-		vkCmdBlitImage(command_ctx.command_buffer, render_target_ctx.storage_image,
+		vkCmdBlitImage(command_ctx.command_buffer, m_water_surface->outputImage(),
 		               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchain_ctx.images[image_index],
 		               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
 
-		// 3g. Transition swapchain image to PRESENT_SRC
 		VkImageMemoryBarrier overlay_barrier{};
 		overlay_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		overlay_barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -1031,7 +602,6 @@ void App::MainLoop() {
 
 		check_vk_result(vkEndCommandBuffer(command_ctx.command_buffer));
 
-		// 4. Submit to queue
 		const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 
 		VkSubmitInfo submit_info{};
@@ -1047,7 +617,6 @@ void App::MainLoop() {
 		check_vk_result(
 		    vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight));
 
-		// 5. Present
 		VkPresentInfoKHR present_info{};
 		present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 		present_info.waitSemaphoreCount = 1;

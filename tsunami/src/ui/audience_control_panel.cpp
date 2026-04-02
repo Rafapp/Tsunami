@@ -40,8 +40,9 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::Checkbox("Show audience overlay", &state.show_overlay);
 	ImGui::SameLine();
 	if (ImGui::Button("Reset defaults")) {
-		state   = AudienceControlPanelState{};
-		changed = true;
+		state                        = AudienceControlPanelState{};
+		state.reset_water_requested  = true;
+		changed                      = true;
 	}
 
 	ImGui::Separator();
@@ -50,16 +51,38 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	int         input_mode    = static_cast<int>(state.audio.input_mode);
 	const char* input_items[] = {"Automatic", "Demo wave", "Manual level"};
 	changed |= ImGui::Combo("Input source", &input_mode, input_items, IM_ARRAYSIZE(input_items));
-	state.audio.input_mode = static_cast<AudienceInputMode>(input_mode);
+	state.audio.input_mode = static_cast<audio::ReactiveAudioInputMode>(input_mode);
 	changed |= ImGui::SliderFloat("Noise floor", &state.audio.noise_floor, 0.0f, 0.100f, "%.3f");
 	changed |= ImGui::SliderFloat("Sensitivity", &state.audio.sensitivity, 1.0f, 100.0f, "%.1f");
 	changed |= ImGui::SliderFloat("Smoothing", &state.audio.smoothing, 0.01f, 1.0f, "%.2f");
 	changed |=
 	    ImGui::SliderFloat("Demo cycle (Hz)", &state.audio.demo_cycle_hz, 0.10f, 6.0f, "%.2f");
 
-	ImGui::BeginDisabled(state.audio.input_mode != AudienceInputMode::Manual);
+	ImGui::BeginDisabled(state.audio.input_mode != audio::ReactiveAudioInputMode::Manual);
 	changed |= ImGui::SliderFloat("Manual level", &state.audio.manual_level, 0.0f, 1.0f, "%.2f");
 	ImGui::EndDisabled();
+
+	ImGui::Separator();
+	ImGui::TextUnformatted("Water Surface");
+	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.45f, "%.3f");
+	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.0f, 0.15f, "%.3f");
+	changed |= ImGui::SliderFloat("Restoring force", &state.water.restoring_force, 0.0f, 0.35f,
+	                              "%.3f");
+	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 80.0f, "%.1f");
+	changed |=
+	    ImGui::SliderFloat("Ripple radius", &state.water.ripple_radius, 0.005f, 0.20f, "%.3f");
+	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.010f, "%.4f");
+	changed |= ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f,
+	                              "%.4f");
+	changed |=
+	    ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f, "%.2f");
+	changed |=
+	    ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
+	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
+	                              8.0f, "%.2f");
+	if (ImGui::Button("Reset water state")) {
+		state.reset_water_requested = true;
+	}
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Bar / Slider");
@@ -100,16 +123,19 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Diagnostics");
-	ImGui::Text("Microphone: %s", diagnostics.microphone_name);
-	if (diagnostics.microphone_available) {
+	ImGui::Text("Microphone: %s", diagnostics.audio.source_name.c_str());
+	if (diagnostics.audio.source_available) {
 		ImGui::TextUnformatted("Status: live capture active");
 	} else {
 		ImGui::TextUnformatted("Status: microphone unavailable, auto mode falls back to demo");
 	}
-	ImGui::TextWrapped("%s", diagnostics.microphone_status);
-	drawMeter("Raw microphone RMS", diagnostics.raw_microphone_level);
-	drawMeter("Normalized input", diagnostics.normalized_level);
+	ImGui::TextWrapped("%s", diagnostics.audio.source_status.c_str());
+	drawMeter("Raw microphone RMS", diagnostics.audio.raw_level);
+	drawMeter("Normalized input", diagnostics.audio.normalized_level);
 	drawMeter("Displayed level", state.overlay.volume_level);
+	drawMeter("Water drive", diagnostics.water.audio_drive_level);
+	drawMeter("Water impulse", diagnostics.water.impulse_strength * 12.0f);
+	ImGui::Text("Emitter UV: (%.2f, %.2f)", diagnostics.water.emitter_u, diagnostics.water.emitter_v);
 
 	const uint32_t selected_index =
 	    state.overlay.selection_count == 0 ?
