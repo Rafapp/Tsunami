@@ -318,12 +318,16 @@ float3 tracePath(Ray ray, inout RNG rng)
 
 // ─── camera ───────────────────────────────────────────────────────────────────
 static float offset = 0.0f;
+static float offset2 = 0.0f;
 Ray makeRay(uint2 pixel, uint2 dims, float2 jitter)
 {
     GPUCamera cam     = camera_buf[0];
     float3    origin  = cam.position.xyz;
-    offset = sin(push.frame * 0.01f) * 5.0;
+    offset = sin(push.frame * 0.1f) * 1.0;
+    offset2 = cos(push.frame * 0.1f) * 1.0;
     origin.x += offset;
+    origin.y += offset2;
+    origin.z += offset2;
     float3    target  = cam.target.xyz;
     float3    worldUp = cam.up.xyz;
     float     fov     = cam.fov_near_far.x;
@@ -361,12 +365,12 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
 
     float3 colorAccum = float3(0,0,0);
 
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 8; ++i) {
         jitter = float2(rng.nextFloat(), rng.nextFloat());
         colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
     }
 
-    float3 color = colorAccum / 16.0f;
+    float3 color = colorAccum / 8.0f;
     float3 prev  = accum_image[pixel].rgb;
     float3 accum = lerp(prev, color, 1.0f / float(push.frame + 1u));
 

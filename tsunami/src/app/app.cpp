@@ -159,7 +159,7 @@ App::App() {
 	// Area light (emissive quad on ceiling)
 	m_scene->m_shapes.push_back(std::make_unique<Quad>(
 	    Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
-	              glm::vec3(0.5f, 1.0f, 0.5f)),
+	              glm::vec3(2.5f, 1.0f, 2.5f)),
 	    new Lambert(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
 
 	// Tall box
