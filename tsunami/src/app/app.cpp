@@ -72,7 +72,7 @@ struct CommandContext {
 
 struct SyncContext {
 	VkSemaphore image_available;
-	VkSemaphore render_finished;
+	std::vector<VkSemaphore> render_finished;
 	VkFence     in_flight;
 } sync_ctx;
 
@@ -247,10 +247,46 @@ App::App() {
 	                        .set_minimum_version(1, 3)
 	                        .add_required_extensions(device_extensions)
 	                        .select();
-	if (!phys_dev_ret)
+
+	// Fail graciously if there is no hardware ray tracing support
+	// TODO: Create compute-only version of Tsunami based in current foundation
+	if (!phys_dev_ret) {
+		std::cout << "[ERROR] Device selection failed. Checking devices:\n";
+
+		uint32_t count = 0;
+		vkEnumeratePhysicalDevices(vulkan_ctx.instance, &count, nullptr);
+		std::vector<VkPhysicalDevice> devs(count);
+		vkEnumeratePhysicalDevices(vulkan_ctx.instance, &count, devs.data());
+
+		for (auto d : devs) {
+			VkPhysicalDeviceProperties p{};
+			vkGetPhysicalDeviceProperties(d, &p);
+
+			VkPhysicalDeviceRayQueryFeaturesKHR rq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+			VkPhysicalDeviceAccelerationStructureFeaturesKHR as{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+			VkPhysicalDeviceBufferDeviceAddressFeatures bda{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
+
+			rq.pNext = &as;
+			as.pNext = &bda;
+
+			VkPhysicalDeviceFeatures2 f{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+			f.pNext = &rq;
+			vkGetPhysicalDeviceFeatures2(d, &f);
+
+			std::cout << "  " << p.deviceName
+					<< " | rayQuery=" << rq.rayQuery
+					<< " accelStruct=" << as.accelerationStructure
+					<< " bda=" << bda.bufferDeviceAddress << "\n";
+		}
+
 		throw std::runtime_error("failed to select physical device");
+	}
+
 	vulkan_ctx.phys_device = phys_dev_ret.value();
-	std::cout << "[INFO] Selected physical device\n";
+	
+	VkPhysicalDeviceProperties props{};
+	vkGetPhysicalDeviceProperties(vulkan_ctx.phys_device.physical_device, &props);
+	std::cout << "[INFO] Selected physical device: " << props.deviceName << "\n";
 
 	VkPhysicalDeviceAccelerationStructureFeaturesKHR as_features{};
 	as_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
@@ -709,13 +745,22 @@ App::App() {
 	fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) !=
-	        VK_SUCCESS ||
-	    vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.render_finished) !=
-	        VK_SUCCESS ||
-	    vkCreateFence(vulkan_ctx.device, &fence_info, nullptr, &sync_ctx.in_flight) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create sync objects");
+	sync_ctx.render_finished.resize(swapchain_ctx.images.size());
+
+	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create image available semaphore");
 	}
+
+	for (auto& sem : sync_ctx.render_finished) {
+		if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sem) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create render finished semaphore");
+		}
+	}
+
+	if (vkCreateFence(vulkan_ctx.device, &fence_info, nullptr, &sync_ctx.in_flight) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create in-flight fence");
+	}
+
 	std::cout << "[INFO] Created sync objects\n";
 }
 
@@ -855,14 +900,14 @@ void App::MainLoop() {
 		submit_info.commandBufferCount   = 1;
 		submit_info.pCommandBuffers      = &command_ctx.command_buffer;
 		submit_info.signalSemaphoreCount = 1;
-		submit_info.pSignalSemaphores    = &sync_ctx.render_finished;
+		submit_info.pSignalSemaphores    = &sync_ctx.render_finished[image_index];
 
 		vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight);
 
 		VkPresentInfoKHR present_info{};
 		present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 		present_info.waitSemaphoreCount = 1;
-		present_info.pWaitSemaphores    = &sync_ctx.render_finished;
+		present_info.pWaitSemaphores     = &sync_ctx.render_finished[image_index];
 		present_info.swapchainCount     = 1;
 		present_info.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
 		present_info.pImageIndices      = &image_index;
