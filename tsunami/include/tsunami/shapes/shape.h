@@ -16,11 +16,12 @@ struct alignas(16) GPUShape {
 
 class Shape {
   public:
-	Shape(Transform transform, std::shared_ptr<Material> material) : m_transform(transform), m_material(material) {
+	Shape(Transform transform, std::shared_ptr<Material> material) :
+	    m_transform(transform), m_material(material) {
 	}
 	virtual ~Shape()                          = default;
 	virtual GPUShape pack(int matIndex) const = 0;
 
-	Transform m_transform;
+	Transform                 m_transform;
 	std::shared_ptr<Material> m_material;
 };

@@ -30,7 +30,7 @@ struct VulkanContext {
 	vkb::Instance       instance;
 	vkb::PhysicalDevice phys_device;
 	vkb::Device         log_device;
-	uint32_t scratch_alignment;
+	uint32_t            scratch_alignment;
 	VkDevice            device;
 	VkSurfaceKHR        surface;
 	VkQueue             graphics_queue;
@@ -79,9 +79,9 @@ struct SyncContext {
 
 // Holds one BLAS and the buffers that back it.
 struct BLAS {
-	VkAccelerationStructureKHR handle        = VK_NULL_HANDLE;
-	VkBuffer                   buffer        = VK_NULL_HANDLE;
-	VmaAllocation              buffer_alloc  = VK_NULL_HANDLE;
+	VkAccelerationStructureKHR handle         = VK_NULL_HANDLE;
+	VkBuffer                   buffer         = VK_NULL_HANDLE;
+	VmaAllocation              buffer_alloc   = VK_NULL_HANDLE;
 	VkDeviceAddress            device_address = 0;
 };
 
@@ -103,24 +103,24 @@ struct AccelerationStructureContext {
 static VkBuffer create_gpu_buffer(VmaAllocator allocator, VkDeviceSize size,
                                   VkBufferUsageFlags usage, VmaAllocation& out_alloc,
                                   VkDeviceSize alignment = 0) {
-    VkBufferCreateInfo buf_info{};
-    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buf_info.size  = size;
-    buf_info.usage = usage;
+	VkBufferCreateInfo buf_info{};
+	buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	buf_info.size  = size;
+	buf_info.usage = usage;
 
-    VmaAllocationCreateInfo alloc_info{};
-    alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	VmaAllocationCreateInfo alloc_info{};
+	alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-    VkBuffer buffer;
-    VkResult result = alignment > 0
-        ? vmaCreateBufferWithAlignment(allocator, &buf_info, &alloc_info,
-                                       alignment, &buffer, &out_alloc, nullptr)
-        : vmaCreateBuffer(allocator, &buf_info, &alloc_info,
-                          &buffer, &out_alloc, nullptr);
+	VkBuffer buffer;
+	VkResult result =
+	    alignment > 0 ?
+	        vmaCreateBufferWithAlignment(allocator, &buf_info, &alloc_info, alignment, &buffer,
+	                                     &out_alloc, nullptr) :
+	        vmaCreateBuffer(allocator, &buf_info, &alloc_info, &buffer, &out_alloc, nullptr);
 
-    if (result != VK_SUCCESS)
-        throw std::runtime_error("failed to create gpu buffer");
-    return buffer;
+	if (result != VK_SUCCESS)
+		throw std::runtime_error("failed to create gpu buffer");
+	return buffer;
 }
 
 // Create a CPU→GPU buffer pre-filled with data.
@@ -326,144 +326,143 @@ static constexpr VkBufferUsageFlags SCRATCH_BUFFER_USAGE =
 static BLAS build_blas(VmaAllocator allocator, VkDevice device, VkCommandPool pool, VkQueue queue,
                        const void* vertices, uint32_t vertex_count, uint32_t vertex_stride,
                        const void* indices, uint32_t index_count) {
+	std::cout << "[build_blas] enter:"
+	          << " vertex_count=" << vertex_count << " vertex_stride=" << vertex_stride
+	          << " index_count=" << index_count << "\n";
 
-    std::cout << "[build_blas] enter:"
-              << " vertex_count="  << vertex_count
-              << " vertex_stride=" << vertex_stride
-              << " index_count="   << index_count << "\n";
+	const VkDeviceSize vertex_size = (VkDeviceSize) vertex_stride * vertex_count;
+	const VkDeviceSize index_size  = sizeof(uint32_t) * index_count;
 
-    const VkDeviceSize vertex_size = (VkDeviceSize) vertex_stride * vertex_count;
-    const VkDeviceSize index_size  = sizeof(uint32_t) * index_count;
+	std::cout << "[build_blas] buffer sizes: vertex=" << vertex_size << " index=" << index_size
+	          << "\n";
 
-    std::cout << "[build_blas] buffer sizes: vertex=" << vertex_size
-              << " index=" << index_size << "\n";
+	// --- Upload vertex and index data ---
+	VmaAllocation vertex_alloc, index_alloc;
 
-    // --- Upload vertex and index data ---
-    VmaAllocation vertex_alloc, index_alloc;
+	std::cout << "[build_blas] creating vertex buffer...\n";
+	VkBuffer vertex_buf = create_and_upload_buffer(
+	    allocator, vertex_size, vertices, AS_INPUT_BUFFER_USAGE | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+	    vertex_alloc);
+	std::cout << "[build_blas] vertex buffer OK\n";
 
-    std::cout << "[build_blas] creating vertex buffer...\n";
-    VkBuffer vertex_buf = create_and_upload_buffer(
-        allocator, vertex_size, vertices,
-        AS_INPUT_BUFFER_USAGE | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        vertex_alloc);
-    std::cout << "[build_blas] vertex buffer OK\n";
+	std::cout << "[build_blas] creating index buffer...\n";
+	VkBuffer index_buf = create_and_upload_buffer(
+	    allocator, index_size, indices, AS_INPUT_BUFFER_USAGE | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+	    index_alloc);
+	std::cout << "[build_blas] index buffer OK\n";
 
-    std::cout << "[build_blas] creating index buffer...\n";
-    VkBuffer index_buf = create_and_upload_buffer(
-        allocator, index_size, indices,
-        AS_INPUT_BUFFER_USAGE | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        index_alloc);
-    std::cout << "[build_blas] index buffer OK\n";
+	VkDeviceAddress vertex_addr = get_buffer_device_address(device, vertex_buf);
+	VkDeviceAddress index_addr  = get_buffer_device_address(device, index_buf);
 
-    VkDeviceAddress vertex_addr = get_buffer_device_address(device, vertex_buf);
-    VkDeviceAddress index_addr  = get_buffer_device_address(device, index_buf);
+	if (vertex_addr == 0)
+		throw std::runtime_error("[build_blas] vertex buffer address is null");
+	if (index_addr == 0)
+		throw std::runtime_error("[build_blas] index buffer address is null");
 
-    if (vertex_addr == 0) throw std::runtime_error("[build_blas] vertex buffer address is null");
-    if (index_addr  == 0) throw std::runtime_error("[build_blas] index buffer address is null");
+	// --- Describe geometry ---
+	VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
+	triangles.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+	triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+	triangles.vertexData   = {.deviceAddress = vertex_addr};
+	triangles.vertexStride = vertex_stride;
+	triangles.maxVertex    = vertex_count - 1;
+	triangles.indexType    = VK_INDEX_TYPE_UINT32;
+	triangles.indexData    = {.deviceAddress = index_addr};
 
-    // --- Describe geometry ---
-    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
-    triangles.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData   = {.deviceAddress = vertex_addr};
-    triangles.vertexStride = vertex_stride;
-    triangles.maxVertex    = vertex_count - 1;
-    triangles.indexType    = VK_INDEX_TYPE_UINT32;
-    triangles.indexData    = {.deviceAddress = index_addr};
+	VkAccelerationStructureGeometryKHR geometry{};
+	geometry.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+	geometry.geometryType       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+	geometry.geometry.triangles = triangles;
+	geometry.flags              = VK_GEOMETRY_OPAQUE_BIT_KHR;
 
-    VkAccelerationStructureGeometryKHR geometry{};
-    geometry.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    geometry.geometryType       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.geometry.triangles = triangles;
-    geometry.flags              = VK_GEOMETRY_OPAQUE_BIT_KHR;
+	// --- Query build sizes ---
+	const uint32_t triangle_count = index_count / 3;
 
-    // --- Query build sizes ---
-    const uint32_t triangle_count = index_count / 3;
+	VkAccelerationStructureBuildGeometryInfoKHR build_info{};
+	build_info.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+	build_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+	build_info.flags         = AS_BUILD_FLAGS;
+	build_info.geometryCount = 1;
+	build_info.pGeometries   = &geometry;
 
-    VkAccelerationStructureBuildGeometryInfoKHR build_info{};
-    build_info.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-    build_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    build_info.flags         = AS_BUILD_FLAGS;
-    build_info.geometryCount = 1;
-    build_info.pGeometries   = &geometry;
+	std::cout << "[build_blas] querying build sizes (triangle_count=" << triangle_count << ")...\n";
 
-    std::cout << "[build_blas] querying build sizes (triangle_count=" << triangle_count << ")...\n";
+	VkAccelerationStructureBuildSizesInfoKHR size_info{};
+	size_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+	vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+	                                        &build_info, &triangle_count, &size_info);
 
-    VkAccelerationStructureBuildSizesInfoKHR size_info{};
-    size_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-    vkGetAccelerationStructureBuildSizesKHR(device,
-                                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                            &build_info, &triangle_count, &size_info);
+	if (size_info.accelerationStructureSize == 0)
+		throw std::runtime_error("[build_blas] AS size is zero — geometry is malformed");
+	if (size_info.buildScratchSize == 0)
+		throw std::runtime_error("[build_blas] scratch size is zero");
 
-    if (size_info.accelerationStructureSize == 0)
-        throw std::runtime_error("[build_blas] AS size is zero — geometry is malformed");
-    if (size_info.buildScratchSize == 0)
-        throw std::runtime_error("[build_blas] scratch size is zero");
+	// --- Allocate BLAS storage and scratch buffers ---
+	BLAS blas;
 
-    // --- Allocate BLAS storage and scratch buffers ---
-    BLAS blas;
+	std::cout << "[build_blas] creating AS storage buffer...\n";
+	blas.buffer = create_gpu_buffer(allocator, size_info.accelerationStructureSize, AS_BUFFER_USAGE,
+	                                blas.buffer_alloc);
+	std::cout << "[build_blas] AS storage buffer OK\n";
 
-    std::cout << "[build_blas] creating AS storage buffer...\n";
-    blas.buffer = create_gpu_buffer(allocator, size_info.accelerationStructureSize,
-                                    AS_BUFFER_USAGE, blas.buffer_alloc);
-    std::cout << "[build_blas] AS storage buffer OK\n";
+	VmaAllocation scratch_alloc;
+	std::cout << "[build_blas] creating scratch buffer...\n";
+	VkBuffer scratch_buf =
+	    create_gpu_buffer(allocator, size_info.buildScratchSize, SCRATCH_BUFFER_USAGE,
+	                      scratch_alloc, vulkan_ctx.scratch_alignment);
+	std::cout << "[build_blas] scratch buffer OK\n";
 
-    VmaAllocation scratch_alloc;
-    std::cout << "[build_blas] creating scratch buffer...\n";
-    VkBuffer scratch_buf = create_gpu_buffer(allocator, size_info.buildScratchSize,
-                                             SCRATCH_BUFFER_USAGE, scratch_alloc, vulkan_ctx.scratch_alignment);
-    std::cout << "[build_blas] scratch buffer OK\n";
+	// --- Create the BLAS object ---
+	std::cout << "[build_blas] creating AS object...\n";
+	VkAccelerationStructureCreateInfoKHR as_create_info{};
+	as_create_info.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+	as_create_info.buffer = blas.buffer;
+	as_create_info.size   = size_info.accelerationStructureSize;
+	as_create_info.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 
-    // --- Create the BLAS object ---
-    std::cout << "[build_blas] creating AS object...\n";
-    VkAccelerationStructureCreateInfoKHR as_create_info{};
-    as_create_info.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-    as_create_info.buffer = blas.buffer;
-    as_create_info.size   = size_info.accelerationStructureSize;
-    as_create_info.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+	VkResult create_result =
+	    vkCreateAccelerationStructureKHR(device, &as_create_info, nullptr, &blas.handle);
+	std::cout << "[build_blas] vkCreateAccelerationStructureKHR result=" << create_result << "\n";
+	if (create_result != VK_SUCCESS)
+		throw std::runtime_error("[build_blas] failed to create BLAS, VkResult=" +
+		                         std::to_string(create_result));
 
-    VkResult create_result = vkCreateAccelerationStructureKHR(device, &as_create_info, nullptr, &blas.handle);
-    std::cout << "[build_blas] vkCreateAccelerationStructureKHR result=" << create_result << "\n";
-    if (create_result != VK_SUCCESS)
-        throw std::runtime_error("[build_blas] failed to create BLAS, VkResult=" +
-                                 std::to_string(create_result));
+	VkDeviceAddress scratch_addr = get_buffer_device_address(device, scratch_buf);
+	if (scratch_addr == 0)
+		throw std::runtime_error("[build_blas] scratch buffer address is null");
 
-    VkDeviceAddress scratch_addr = get_buffer_device_address(device, scratch_buf);
-    if (scratch_addr == 0)
-        throw std::runtime_error("[build_blas] scratch buffer address is null");
+	// --- Record and submit build ---
+	build_info.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+	build_info.dstAccelerationStructure  = blas.handle;
+	build_info.scratchData.deviceAddress = scratch_addr;
 
-    // --- Record and submit build ---
-    build_info.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    build_info.dstAccelerationStructure  = blas.handle;
-    build_info.scratchData.deviceAddress = scratch_addr;
+	VkAccelerationStructureBuildRangeInfoKHR range_info{};
+	range_info.primitiveCount                               = triangle_count;
+	range_info.primitiveOffset                              = 0;
+	range_info.firstVertex                                  = 0;
+	range_info.transformOffset                              = 0;
+	const VkAccelerationStructureBuildRangeInfoKHR* p_range = &range_info;
 
-    VkAccelerationStructureBuildRangeInfoKHR range_info{};
-    range_info.primitiveCount  = triangle_count;
-    range_info.primitiveOffset = 0;
-    range_info.firstVertex     = 0;
-    range_info.transformOffset = 0;
-    const VkAccelerationStructureBuildRangeInfoKHR* p_range = &range_info;
+	std::cout << "[build_blas] beginning command buffer...\n";
+	VkCommandBuffer cmd = begin_one_time_cmd(device, pool);
+	std::cout << "[build_blas] recording vkCmdBuildAccelerationStructuresKHR...\n";
+	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build_info, &p_range);
+	std::cout << "[build_blas] submitting...\n";
+	end_one_time_cmd(device, pool, queue, cmd);
+	std::cout << "[build_blas] build complete\n";
 
-    std::cout << "[build_blas] beginning command buffer...\n";
-    VkCommandBuffer cmd = begin_one_time_cmd(device, pool);
-    std::cout << "[build_blas] recording vkCmdBuildAccelerationStructuresKHR...\n";
-    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build_info, &p_range);
-    std::cout << "[build_blas] submitting...\n";
-    end_one_time_cmd(device, pool, queue, cmd);
-    std::cout << "[build_blas] build complete\n";
+	// --- Get device address ---
+	VkAccelerationStructureDeviceAddressInfoKHR addr_info{};
+	addr_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+	addr_info.accelerationStructure = blas.handle;
+	blas.device_address = vkGetAccelerationStructureDeviceAddressKHR(device, &addr_info);
 
-    // --- Get device address ---
-    VkAccelerationStructureDeviceAddressInfoKHR addr_info{};
-    addr_info.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    addr_info.accelerationStructure = blas.handle;
-    blas.device_address             = vkGetAccelerationStructureDeviceAddressKHR(device, &addr_info);
+	vmaDestroyBuffer(allocator, scratch_buf, scratch_alloc);
+	vmaDestroyBuffer(allocator, vertex_buf, vertex_alloc);
+	vmaDestroyBuffer(allocator, index_buf, index_alloc);
 
-    vmaDestroyBuffer(allocator, scratch_buf, scratch_alloc);
-    vmaDestroyBuffer(allocator, vertex_buf, vertex_alloc);
-    vmaDestroyBuffer(allocator, index_buf, index_alloc);
-
-    std::cout << "[build_blas] done\n";
-    return blas;
+	std::cout << "[build_blas] done\n";
+	return blas;
 }
 
 // Build a TLAS from a list of already-built BLASes.
@@ -477,27 +476,27 @@ static void build_tlas(VmaAllocator allocator, VkDevice device, VkCommandPool po
 	for (uint32_t i = 0; i < (uint32_t) blases.size(); ++i) {
 		VkAccelerationStructureInstanceKHR inst{};
 		// Identity transform (row-major 3x4)
-		inst.transform = {{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}}};
+		inst.transform                              = {{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}}};
 		inst.instanceCustomIndex                    = i;
 		inst.mask                                   = 0xFF;
 		inst.instanceShaderBindingTableRecordOffset = 0;
-		inst.flags                                  = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-		inst.accelerationStructureReference         = blases[i].device_address;
+		inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+		inst.accelerationStructureReference = blases[i].device_address;
 		instances.push_back(inst);
 	}
 
-	const VkDeviceSize instance_size = sizeof(VkAccelerationStructureInstanceKHR) * instances.size();
+	const VkDeviceSize instance_size =
+	    sizeof(VkAccelerationStructureInstanceKHR) * instances.size();
 
 	VmaAllocation instance_alloc;
-	VkBuffer instance_buf = create_and_upload_buffer(
-	    allocator, instance_size, instances.data(),
-	    AS_INPUT_BUFFER_USAGE, instance_alloc);
+	VkBuffer instance_buf = create_and_upload_buffer(allocator, instance_size, instances.data(),
+	                                                 AS_INPUT_BUFFER_USAGE, instance_alloc);
 
 	VkDeviceAddress instance_addr = get_buffer_device_address(device, instance_buf);
 
 	// --- Describe TLAS geometry ---
 	VkAccelerationStructureGeometryInstancesDataKHR instances_data{};
-	instances_data.sType           = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+	instances_data.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
 	instances_data.data.deviceAddress = instance_addr;
 
 	VkAccelerationStructureGeometryKHR geometry{};
@@ -516,8 +515,7 @@ static void build_tlas(VmaAllocator allocator, VkDevice device, VkCommandPool po
 	const uint32_t                           instance_count = (uint32_t) instances.size();
 	VkAccelerationStructureBuildSizesInfoKHR size_info{};
 	size_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-	vkGetAccelerationStructureBuildSizesKHR(device,
-	                                        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+	vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
 	                                        &build_info, &instance_count, &size_info);
 
 	// --- Allocate TLAS ---
@@ -525,7 +523,8 @@ static void build_tlas(VmaAllocator allocator, VkDevice device, VkCommandPool po
 	as_ctx.tlas_buffer = create_gpu_buffer(allocator, size_info.accelerationStructureSize,
 	                                       AS_BUFFER_USAGE, as_ctx.tlas_buffer_alloc);
 	VkBuffer scratch_buf =
-	    create_gpu_buffer(allocator, size_info.buildScratchSize, SCRATCH_BUFFER_USAGE, scratch_alloc, vulkan_ctx.scratch_alignment);
+	    create_gpu_buffer(allocator, size_info.buildScratchSize, SCRATCH_BUFFER_USAGE,
+	                      scratch_alloc, vulkan_ctx.scratch_alignment);
 
 	VkAccelerationStructureCreateInfoKHR as_create_info{};
 	as_create_info.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
@@ -538,8 +537,8 @@ static void build_tlas(VmaAllocator allocator, VkDevice device, VkCommandPool po
 		throw std::runtime_error("failed to create TLAS");
 
 	// --- Build ---
-	build_info.mode                     = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build_info.dstAccelerationStructure = as_ctx.tlas;
+	build_info.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+	build_info.dstAccelerationStructure  = as_ctx.tlas;
 	build_info.scratchData.deviceAddress = get_buffer_device_address(device, scratch_buf);
 
 	VkAccelerationStructureBuildRangeInfoKHR range_info{};
@@ -552,9 +551,9 @@ static void build_tlas(VmaAllocator allocator, VkDevice device, VkCommandPool po
 	end_one_time_cmd(device, pool, queue, cmd);
 
 	VkAccelerationStructureDeviceAddressInfoKHR addr_info{};
-	addr_info.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+	addr_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
 	addr_info.accelerationStructure = as_ctx.tlas;
-	as_ctx.tlas_address             = vkGetAccelerationStructureDeviceAddressKHR(device, &addr_info);
+	as_ctx.tlas_address = vkGetAccelerationStructureDeviceAddressKHR(device, &addr_info);
 
 	vmaDestroyBuffer(allocator, scratch_buf, scratch_alloc);
 	vmaDestroyBuffer(allocator, instance_buf, instance_alloc);
@@ -576,56 +575,56 @@ App::App() {
 
 	// Floor (white)
 	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
+	    Transform(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
+	    std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Ceiling (white)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
-				glm::vec3(2.0f, 1.0f, 2.0f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Back wall (white)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(90.0f, 0.0f, 0.0f),
-				glm::vec3(2.0f, 1.0f, 2.0f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(90.0f, 0.0f, 0.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Left wall (red)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f),
-				glm::vec3(2.0f, 1.0f, 2.0f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.1f, 0.1f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           std::make_shared<Lambert>(glm::vec3(0.8f, 0.1f, 0.1f))));
 
 	// Right wall (green)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -90.0f),
-				glm::vec3(2.0f, 1.0f, 2.0f)),
-		std::make_shared<Lambert>(glm::vec3(0.1f, 0.8f, 0.1f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Quad>(Transform(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -90.0f),
+	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
+	                           std::make_shared<Lambert>(glm::vec3(0.1f, 0.8f, 0.1f))));
 
 	// Area light (emissive quad on ceiling)
 	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-		Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
-				glm::vec3(2.5f, 1.0f, 2.5f)),
-		std::make_shared<Lambert>(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
+	    Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
+	              glm::vec3(2.5f, 1.0f, 2.5f)),
+	    std::make_shared<Lambert>(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
 
 	// Tall box
-	m_scene->m_shapes.push_back(std::make_unique<Box>(
-		Transform(glm::vec3(-0.35f, -0.35f, -0.4f), glm::vec3(0.0f, 15.0f, 0.0f),
-				glm::vec3(0.3f, 0.65f, 0.3f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_shapes.push_back(
+	    std::make_unique<Box>(Transform(glm::vec3(-0.35f, -0.35f, -0.4f),
+	                                    glm::vec3(0.0f, 15.0f, 0.0f), glm::vec3(0.3f, 0.65f, 0.3f)),
+	                          std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Short box
 	m_scene->m_shapes.push_back(std::make_unique<Box>(
-		Transform(glm::vec3(0.35f, -0.65f, -0.2f), glm::vec3(0.0f, -15.0f, 0.0f),
-				glm::vec3(0.3f, 0.35f, 0.3f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
+	    Transform(glm::vec3(0.35f, -0.65f, -0.2f), glm::vec3(0.0f, -15.0f, 0.0f),
+	              glm::vec3(0.3f, 0.35f, 0.3f)),
+	    std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Teapot (mesh)
 	m_scene->m_meshes.push_back(std::make_unique<Mesh>(
-		"resources/meshes/teapot.obj",
-		Transform(glm::vec3(0.0f, -0.5f, 0.5f), glm::vec3(0.0f, 45.0f, 0.0f), glm::vec3(0.5f)),
-		std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
+	    "resources/meshes/teapot.obj",
+	    Transform(glm::vec3(0.0f, -0.5f, 0.5f), glm::vec3(0.0f, 45.0f, 0.0f), glm::vec3(0.5f)),
+	    std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// --- Pack scene data for GPU ---
 	GPUCamera                gpu_camera = m_scene->m_camera.pack();
@@ -663,11 +662,11 @@ App::App() {
 
 	{
 		vkb::InstanceBuilder builder;
-		auto inst_ret = builder.set_app_name("tsunami")
-		                    .request_validation_layers()
-		                    .use_default_debug_messenger()
-		                    .require_api_version(1, 3, 0)
-		                    .build();
+		auto                 inst_ret = builder.set_app_name("tsunami")
+		                                    .request_validation_layers()
+		                                    .use_default_debug_messenger()
+		                                    .require_api_version(1, 3, 0)
+		                                    .build();
 		if (!inst_ret)
 			throw std::runtime_error("failed to create Vulkan instance");
 		vulkan_ctx.instance = inst_ret.value();
@@ -710,8 +709,8 @@ App::App() {
 				    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
 				VkPhysicalDeviceBufferDeviceAddressFeatures bda{
 				    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
-				rq.pNext  = &as;
-				as.pNext  = &bda;
+				rq.pNext = &as;
+				as.pNext = &bda;
 
 				VkPhysicalDeviceFeatures2 f{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
 				f.pNext = &rq;
@@ -734,7 +733,7 @@ App::App() {
 
 	{
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR as_features{};
-		as_features.sType                 = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+		as_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
 		as_features.accelerationStructure = VK_TRUE;
 
 		VkPhysicalDeviceRayQueryFeaturesKHR rq_features{};
@@ -742,7 +741,7 @@ App::App() {
 		rq_features.rayQuery = VK_TRUE;
 
 		VkPhysicalDeviceBufferDeviceAddressFeatures bda_features{};
-		bda_features.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+		bda_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 		bda_features.bufferDeviceAddress = VK_TRUE;
 
 		auto dev_ret = vkb::DeviceBuilder{vulkan_ctx.phys_device}
@@ -877,8 +876,8 @@ App::App() {
 		render_target_ctx.accum_image_view = create_image_view_2d(
 		    vulkan_ctx.device, render_target_ctx.accum_image, VK_FORMAT_R8G8B8A8_UNORM);
 
-		std::cout << "[INFO] Created storage and accum images ("
-		          << extent.width << "x" << extent.height << ")\n";
+		std::cout << "[INFO] Created storage and accum images (" << extent.width << "x"
+		          << extent.height << ")\n";
 	}
 
 	// =================================
@@ -891,12 +890,12 @@ App::App() {
 
 		scene_ctx.camera_buffer = create_and_upload_buffer(
 		    allocator, sizeof(GPUCamera), &gpu_camera, SCENE_BUF, scene_ctx.camera_alloc);
-		scene_ctx.shapes_buffer = create_and_upload_buffer(
-		    allocator, sizeof(GPUShape) * gpu_shapes.size(), gpu_shapes.data(), SCENE_BUF,
-		    scene_ctx.shapes_alloc);
-		scene_ctx.material_buffer = create_and_upload_buffer(
-		    allocator, sizeof(GPUMaterial) * gpu_materials.size(), gpu_materials.data(), SCENE_BUF,
-		    scene_ctx.material_alloc);
+		scene_ctx.shapes_buffer =
+		    create_and_upload_buffer(allocator, sizeof(GPUShape) * gpu_shapes.size(),
+		                             gpu_shapes.data(), SCENE_BUF, scene_ctx.shapes_alloc);
+		scene_ctx.material_buffer =
+		    create_and_upload_buffer(allocator, sizeof(GPUMaterial) * gpu_materials.size(),
+		                             gpu_materials.data(), SCENE_BUF, scene_ctx.material_alloc);
 
 		std::cout << "[INFO] Uploaded scene buffers (shapes: " << scene_ctx.shape_count
 		          << ", materials: " << scene_ctx.material_count << ")\n";
@@ -924,47 +923,46 @@ App::App() {
 	// ======================================================
 
 	// Shared vertex/index pools for all meshes — offsets tracked per mesh.
-	std::vector<GPUVertex>  all_vertices;
-	std::vector<uint32_t>   all_indices;
-	std::vector<GPUMesh>    gpu_meshes;
+	std::vector<GPUVertex> all_vertices;
+	std::vector<uint32_t>  all_indices;
+	std::vector<GPUMesh>   gpu_meshes;
 
 	for (auto& mesh : m_scene->m_meshes) {
 		int vertex_offset = (int) all_vertices.size();
 		int index_offset  = (int) all_indices.size();
 
 		all_vertices.insert(all_vertices.end(), mesh->gpuVertices.begin(), mesh->gpuVertices.end());
-		all_indices.insert(all_indices.end(),   mesh->gpuIndices.begin(),  mesh->gpuIndices.end());
+		all_indices.insert(all_indices.end(), mesh->gpuIndices.begin(), mesh->gpuIndices.end());
 
 		int mat_index = (int) gpu_materials.size();
 		if (!mesh->m_material) {
 			std::cerr << "[ERROR] mesh->m_material is null for mesh index "
-					<< (&mesh - &m_scene->m_meshes[0]) << "\n";
-			continue; // or throw
+			          << (&mesh - &m_scene->m_meshes[0]) << "\n";
+			continue;        // or throw
 		}
 		std::cout << "[INFO] Packing mesh with material index " << mat_index << "\n";
 		gpu_materials.push_back(mesh->m_material->pack());
 
-		BLAS blas = build_blas(
-			allocator, vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
-			mesh->gpuVertices.data(),   (uint32_t) mesh->gpuVertices.size(), sizeof(GPUVertex),
-			mesh->gpuIndices.data(),    (uint32_t) mesh->gpuIndices.size());
+		BLAS blas = build_blas(allocator, vulkan_ctx.device, command_ctx.command_pool,
+		                       vulkan_ctx.graphics_queue, mesh->gpuVertices.data(),
+		                       (uint32_t) mesh->gpuVertices.size(), sizeof(GPUVertex),
+		                       mesh->gpuIndices.data(), (uint32_t) mesh->gpuIndices.size());
 
 		// Store the BLAS device address in the packed GPUMesh so the shader
 		// can look up the correct BLAS when a ray query hits this instance.
-		GPUMesh gpu_mesh = mesh->pack(mat_index, vertex_offset, index_offset);
+		GPUMesh gpu_mesh    = mesh->pack(mat_index, vertex_offset, index_offset);
 		gpu_mesh.blasHandle = blas.device_address;
 
 		as_ctx.blases.push_back(std::move(blas));
 		gpu_meshes.push_back(gpu_mesh);
 
-		std::cout << "[INFO] Built BLAS for mesh ("
-				<< mesh->gpuIndices.size() / 3 << " triangles, "
-				<< mesh->gpuVertices.size() << " vertices)\n";
+		std::cout << "[INFO] Built BLAS for mesh (" << mesh->gpuIndices.size() / 3 << " triangles, "
+		          << mesh->gpuVertices.size() << " vertices)\n";
 	}
 
 	if (!as_ctx.blases.empty()) {
 		build_tlas(allocator, vulkan_ctx.device, command_ctx.command_pool,
-				vulkan_ctx.graphics_queue, as_ctx.blases);
+		           vulkan_ctx.graphics_queue, as_ctx.blases);
 		std::cout << "[INFO] Built TLAS (" << as_ctx.blases.size() << " instances)\n";
 	}
 
@@ -981,11 +979,8 @@ App::App() {
 		//   4 = materials buffer
 		//   5 = TLAS (only added when we actually have one)
 		std::vector<VkDescriptorSetLayoutBinding> bindings = {
-		    make_image_binding(0),
-		    make_image_binding(1),
-		    make_buffer_binding(2),
-		    make_buffer_binding(3),
-		    make_buffer_binding(4),
+		    make_image_binding(0),  make_image_binding(1),  make_buffer_binding(2),
+		    make_buffer_binding(3), make_buffer_binding(4),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_as_binding(5));
@@ -1003,7 +998,7 @@ App::App() {
 
 	{
 		std::vector<VkDescriptorPoolSize> pool_sizes = {
-		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  2},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
 		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
@@ -1164,8 +1159,8 @@ App::App() {
 		alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 		alloc_info.commandBufferCount = 1;
 
-		if (vkAllocateCommandBuffers(vulkan_ctx.device, &alloc_info,
-		                             &command_ctx.command_buffer) != VK_SUCCESS)
+		if (vkAllocateCommandBuffers(vulkan_ctx.device, &alloc_info, &command_ctx.command_buffer) !=
+		    VK_SUCCESS)
 			throw std::runtime_error("failed to allocate command buffer");
 		std::cout << "[INFO] Allocated main command buffer\n";
 	}
@@ -1174,14 +1169,13 @@ App::App() {
 	{
 		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
 
-		transition_image_layout(cmd, render_target_ctx.accum_image,
-		                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		                        0, VK_ACCESS_SHADER_WRITE_BIT,
+		transition_image_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                        VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 		                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool,
-		                 vulkan_ctx.graphics_queue, cmd);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                 cmd);
 		std::cout << "[INFO] Transitioned accum image to GENERAL\n";
 	}
 
@@ -1199,8 +1193,8 @@ App::App() {
 
 		sync_ctx.render_finished.resize(swapchain_ctx.images.size());
 
-		if (vkCreateSemaphore(vulkan_ctx.device, &sem_info, nullptr,
-		                      &sync_ctx.image_available) != VK_SUCCESS)
+		if (vkCreateSemaphore(vulkan_ctx.device, &sem_info, nullptr, &sync_ctx.image_available) !=
+		    VK_SUCCESS)
 			throw std::runtime_error("failed to create image_available semaphore");
 
 		for (auto& sem : sync_ctx.render_finished)
@@ -1247,16 +1241,15 @@ void App::MainLoop() {
 		VkCommandBuffer cmd = command_ctx.command_buffer;
 
 		// Storage image: UNDEFINED → GENERAL (written by compute)
-		transition_image_layout(cmd, render_target_ctx.storage_image,
-		                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		                        0, VK_ACCESS_SHADER_WRITE_BIT,
+		transition_image_layout(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                        VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 		                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
 		// Bind pipeline and descriptors
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline);
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout,
-		                        0, 1, &render_target_ctx.descriptor_set, 0, nullptr);
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout, 0,
+		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
 
 		struct PushConstants {
 			uint32_t frame;
@@ -1273,17 +1266,15 @@ void App::MainLoop() {
 		frame_number++;
 
 		// Storage image: GENERAL → TRANSFER_SRC
-		transition_image_layout(cmd, render_target_ctx.storage_image,
-		                        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-		                        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-		                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		transition_image_layout(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_GENERAL,
+		                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+		                        VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 		                        VK_PIPELINE_STAGE_TRANSFER_BIT);
 
 		// Swapchain image: UNDEFINED → TRANSFER_DST
-		transition_image_layout(cmd, swapchain_ctx.images[image_index],
-		                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		                        0, VK_ACCESS_TRANSFER_WRITE_BIT,
-		                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		transition_image_layout(cmd, swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_UNDEFINED,
+		                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+		                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 		                        VK_PIPELINE_STAGE_TRANSFER_BIT);
 
 		// Blit storage → swapchain
@@ -1301,11 +1292,10 @@ void App::MainLoop() {
 		               &blit, VK_FILTER_NEAREST);
 
 		// Swapchain image: TRANSFER_DST → PRESENT_SRC
-		transition_image_layout(cmd, swapchain_ctx.images[image_index],
-		                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-		                        VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-		                        VK_PIPELINE_STAGE_TRANSFER_BIT,
-		                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+		transition_image_layout(
+		    cmd, swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+		    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
 
 		vkEndCommandBuffer(cmd);
 

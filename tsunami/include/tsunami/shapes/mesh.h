@@ -5,9 +5,9 @@
 #include <assimp/scene.h>
 
 #include <glm/glm.hpp>
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
 #include "tsunami/materials/material.h"
 #include "tsunami/scene/transform.h"
@@ -43,7 +43,7 @@ class Mesh {
 	std::vector<GPUVertex>  gpuVertices;
 	std::vector<uint32_t>   gpuIndices;
 
-	Transform m_transform;
+	Transform                 m_transform;
 	std::shared_ptr<Material> m_material;
 
   private:
