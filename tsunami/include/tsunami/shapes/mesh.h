@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "tsunami/materials/material.h"
 #include "tsunami/scene/transform.h"
@@ -31,7 +32,7 @@ struct alignas(16) GPUMesh {
 
 class Mesh {
   public:
-	Mesh(const std::string& path, Transform transform, Material* material);
+	Mesh(const std::string& path, Transform transform, std::shared_ptr<Material> material);
 	~Mesh() = default;
 
 	GPUMesh pack(int matIndex, int vertexOffset, int indexOffset) const;
@@ -43,7 +44,7 @@ class Mesh {
 	std::vector<uint32_t>   gpuIndices;
 
 	Transform m_transform;
-	Material* m_material;
+	std::shared_ptr<Material> m_material;
 
   private:
 	bool load(const std::string& path);

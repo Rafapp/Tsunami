@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <memory>
 
 #include "tsunami/materials/material.h"
 #include "tsunami/scene/transform.h"
@@ -15,11 +16,11 @@ struct alignas(16) GPUShape {
 
 class Shape {
   public:
-	Shape(Transform transform, Material* material) : m_transform(transform), m_material(material) {
+	Shape(Transform transform, std::shared_ptr<Material> material) : m_transform(transform), m_material(material) {
 	}
 	virtual ~Shape()                          = default;
 	virtual GPUShape pack(int matIndex) const = 0;
 
 	Transform m_transform;
-	Material* m_material;
+	std::shared_ptr<Material> m_material;
 };

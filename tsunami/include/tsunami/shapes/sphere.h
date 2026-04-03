@@ -4,7 +4,7 @@
 
 class Sphere : public Shape {
   public:
-	Sphere(Transform transform, Material* material);
+	Sphere(Transform transform, std::shared_ptr<Material> material);
 	~Sphere() = default;
 	GPUShape pack(int matIndex) const override;
 };

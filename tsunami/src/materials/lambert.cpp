@@ -1,4 +1,5 @@
 #include "tsunami/materials/lambert.h"
+#include <iostream>
 
 Lambert::Lambert(glm::vec3 albedo, glm::vec3 emission, float emissionIntensity) {
 	m_albedo            = albedo;

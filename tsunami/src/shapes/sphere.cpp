@@ -1,6 +1,6 @@
 #include "tsunami/shapes/sphere.h"
 
-Sphere::Sphere(Transform transform, Material* material) : Shape(transform, material) {
+Sphere::Sphere(Transform transform, std::shared_ptr<Material> material) : Shape(transform, material) {
 }
 
 GPUShape Sphere::pack(int matIndex) const {

@@ -4,7 +4,7 @@
 
 class Box : public Shape {
   public:
-	Box(Transform transform, Material* material);
+	Box(Transform transform, std::shared_ptr<Material> material);
 	~Box() = default;
 	GPUShape pack(int matIndex) const override;
 };

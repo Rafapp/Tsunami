@@ -1,6 +1,6 @@
 #include "tsunami/shapes/box.h"
 
-Box::Box(Transform transform, Material* material) : Shape(transform, material) {
+Box::Box(Transform transform, std::shared_ptr<Material> material) : Shape(transform, material) {
 }
 
 GPUShape Box::pack(int matIndex) const {

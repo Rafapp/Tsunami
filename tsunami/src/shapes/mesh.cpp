@@ -2,7 +2,9 @@
 
 #include "tsunami/shapes/mesh.h"
 
-Mesh::Mesh(const std::string& path, Transform transform, Material* material) {
+Mesh::Mesh(const std::string& path, Transform transform, std::shared_ptr<Material> material) {
+	m_transform = transform;
+	m_material  = material;
 	if (!load(path))
 		std::cerr << "[Mesh] Failed to load: " << path << "\n";
 }

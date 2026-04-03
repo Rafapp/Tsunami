@@ -4,7 +4,7 @@
 
 class Quad : public Shape {
   public:
-	Quad(Transform transform, Material* material);
+	Quad(Transform transform, std::shared_ptr<Material> material);
 	~Quad() = default;
 	GPUShape pack(int matIndex) const override;
 };
