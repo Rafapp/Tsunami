@@ -175,10 +175,10 @@ App::App() {
 	                                                  new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Teapot (mesh)
-	m_scene->m_meshes.push_back(std::make_unique<Mesh>("resources/meshes/teapot.obj", Transform(glm::vec3(0.0f, -0.5f, 0.5f),
-	                                                               glm::vec3(0.0f, 45.0f, 0.0f),
-	                                                               glm::vec3(0.5f)),
-	                                                     new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
+	m_scene->m_meshes.push_back(std::make_unique<Mesh>(
+	    "resources/meshes/teapot.obj",
+	    Transform(glm::vec3(0.0f, -0.5f, 0.5f), glm::vec3(0.0f, 45.0f, 0.0f), glm::vec3(0.5f)),
+	    new Lambert(glm::vec3(0.8f, 0.8f, 0.8f))));
 
 	// Pack scene data for GPU
 	GPUCamera                gpu_camera = m_scene->m_camera.pack();

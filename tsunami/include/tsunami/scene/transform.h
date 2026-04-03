@@ -7,7 +7,9 @@
 
 class Transform {
   public:
-	Transform() : m_position(0.0f), m_rotation(0.0f), m_scale(1.0f) { updateTransform(); }
+	Transform() : m_position(0.0f), m_rotation(0.0f), m_scale(1.0f) {
+		updateTransform();
+	}
 	Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale);
 	~Transform() = default;
 

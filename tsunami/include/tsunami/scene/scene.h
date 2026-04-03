@@ -5,11 +5,11 @@
 #include "tsunami/materials/lambert.h"
 #include "tsunami/materials/material.h"
 
-#include "tsunami/shapes/shape.h"
-#include "tsunami/shapes/quad.h"
 #include "tsunami/shapes/box.h"
-#include "tsunami/shapes/sphere.h"
 #include "tsunami/shapes/mesh.h"
+#include "tsunami/shapes/quad.h"
+#include "tsunami/shapes/shape.h"
+#include "tsunami/shapes/sphere.h"
 
 #include <vector>
 
@@ -18,7 +18,7 @@ struct GPUScene {
 	std::vector<GPULight>    lights;
 	std::vector<GPUMaterial> materials;
 	std::vector<GPUShape>    shapes;
-	std::vector<GPUMesh>  meshes;
+	std::vector<GPUMesh>     meshes;
 };
 
 class Scene {
