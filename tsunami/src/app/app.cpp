@@ -217,7 +217,6 @@ App::App() {
 	// ==================================
 	// === III. Create Vulkan context ===
 	// ==================================
-
 	vkb::InstanceBuilder builder;
 	auto                 inst_ret = builder.set_app_name("tsunami")
 	                                    .request_validation_layers()
@@ -237,17 +236,39 @@ App::App() {
 	}
 	std::cout << "[INFO] Created window surface\n";
 
+	std::vector<const char*> device_extensions = {
+	    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+	    VK_KHR_RAY_QUERY_EXTENSION_NAME,
+	    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+	};
+
 	auto phys_dev_ret = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
 	                        .set_surface(vulkan_ctx.surface)
 	                        .set_minimum_version(1, 3)
+	                        .add_required_extensions(device_extensions)
 	                        .select();
 	if (!phys_dev_ret)
 		throw std::runtime_error("failed to select physical device");
 	vulkan_ctx.phys_device = phys_dev_ret.value();
 	std::cout << "[INFO] Selected physical device\n";
 
+	VkPhysicalDeviceAccelerationStructureFeaturesKHR as_features{};
+	as_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+	as_features.accelerationStructure = VK_TRUE;
+
+	VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features{};
+	ray_query_features.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+	ray_query_features.rayQuery = VK_TRUE;
+
+	VkPhysicalDeviceBufferDeviceAddressFeatures bda_features{};
+	bda_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+	bda_features.bufferDeviceAddress = VK_TRUE;
+
 	vkb::DeviceBuilder device_builder{vulkan_ctx.phys_device};
-	auto               dev_ret = device_builder.build();
+	auto               dev_ret = device_builder.add_pNext(&as_features)
+	                                 .add_pNext(&ray_query_features)
+	                                 .add_pNext(&bda_features)
+	                                 .build();
 	if (!dev_ret)
 		throw std::runtime_error("failed to create logical device");
 	vulkan_ctx.log_device = dev_ret.value();
@@ -266,9 +287,9 @@ App::App() {
 		throw std::runtime_error("failed to get graphics queue family");
 	vulkan_ctx.graphics_queue_family = family_ret.value();
 
-	// ==============================================
+	// ==========================
 	// === IV. Initialize VMA ===
-	// ==============================================
+	// ==========================
 	VmaAllocatorCreateInfo vma_info{};
 	vma_info.instance         = vulkan_ctx.instance.instance;
 	vma_info.physicalDevice   = vulkan_ctx.phys_device.physical_device;
@@ -287,9 +308,9 @@ App::App() {
 	std::cout << "[INFO] Created VMA allocator\n";
 	render_target_ctx.allocator = allocator;
 
-	// ====================================
+	// ===================================
 	// === V. Create swapchain context ===
-	// ====================================
+	// ===================================
 	vkb::SwapchainBuilder swapchain_builder{vulkan_ctx.log_device};
 	auto                  swap_ret =
 	    swapchain_builder
@@ -387,9 +408,9 @@ App::App() {
 	}
 	std::cout << "[INFO] Created storage image view\n";
 
-	// =========================================
+	// =================================
 	// === VI.5 Create Scene Buffers ===
-	// =========================================
+	// =================================
 
 	auto createAndUploadBuffer = [&](VkDeviceSize size, const void* data, VkBuffer& buffer,
 	                                 VmaAllocation& alloc) {
