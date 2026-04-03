@@ -71,9 +71,9 @@ struct CommandContext {
 } command_ctx;
 
 struct SyncContext {
-	VkSemaphore image_available;
+	VkSemaphore              image_available;
 	std::vector<VkSemaphore> render_finished;
-	VkFence     in_flight;
+	VkFence                  in_flight;
 } sync_ctx;
 
 static std::vector<uint32_t> compile_slang_shader(const std::string& path,
@@ -262,9 +262,12 @@ App::App() {
 			VkPhysicalDeviceProperties p{};
 			vkGetPhysicalDeviceProperties(d, &p);
 
-			VkPhysicalDeviceRayQueryFeaturesKHR rq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
-			VkPhysicalDeviceAccelerationStructureFeaturesKHR as{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
-			VkPhysicalDeviceBufferDeviceAddressFeatures bda{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
+			VkPhysicalDeviceRayQueryFeaturesKHR rq{
+			    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+			VkPhysicalDeviceAccelerationStructureFeaturesKHR as{
+			    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+			VkPhysicalDeviceBufferDeviceAddressFeatures bda{
+			    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
 
 			rq.pNext = &as;
 			as.pNext = &bda;
@@ -273,17 +276,16 @@ App::App() {
 			f.pNext = &rq;
 			vkGetPhysicalDeviceFeatures2(d, &f);
 
-			std::cout << "  " << p.deviceName
-					<< " | rayQuery=" << rq.rayQuery
-					<< " accelStruct=" << as.accelerationStructure
-					<< " bda=" << bda.bufferDeviceAddress << "\n";
+			std::cout << "  " << p.deviceName << " | rayQuery=" << rq.rayQuery
+			          << " accelStruct=" << as.accelerationStructure
+			          << " bda=" << bda.bufferDeviceAddress << "\n";
 		}
 
 		throw std::runtime_error("failed to select physical device");
 	}
 
 	vulkan_ctx.phys_device = phys_dev_ret.value();
-	
+
 	VkPhysicalDeviceProperties props{};
 	vkGetPhysicalDeviceProperties(vulkan_ctx.phys_device.physical_device, &props);
 	std::cout << "[INFO] Selected physical device: " << props.deviceName << "\n";
@@ -747,7 +749,8 @@ App::App() {
 
 	sync_ctx.render_finished.resize(swapchain_ctx.images.size());
 
-	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) != VK_SUCCESS) {
+	if (vkCreateSemaphore(vulkan_ctx.device, &semaphore_info, nullptr, &sync_ctx.image_available) !=
+	    VK_SUCCESS) {
 		throw std::runtime_error("failed to create image available semaphore");
 	}
 
@@ -907,14 +910,12 @@ void App::MainLoop() {
 		VkPresentInfoKHR present_info{};
 		present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 		present_info.waitSemaphoreCount = 1;
-		present_info.pWaitSemaphores     = &sync_ctx.render_finished[image_index];
+		present_info.pWaitSemaphores    = &sync_ctx.render_finished[image_index];
 		present_info.swapchainCount     = 1;
 		present_info.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
 		present_info.pImageIndices      = &image_index;
 
 		vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info);
-		// vkQueueWaitIdle(vulkan_ctx.graphics_queue); // TODO: Remove this and handle
-		// synchronization properly
 	}
 
 	vkDeviceWaitIdle(vulkan_ctx.device);
