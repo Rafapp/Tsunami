@@ -15,6 +15,12 @@ add_subdirectory(glfw)
 # === volk ===
 add_subdirectory(volk)
 
+# === assimp ===
+set(ASSIMP_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
+add_subdirectory(assimp)
+
 # === Slang (prebuilt binary, downloaded by setup.sh) ===
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/slang-bin/include/slang.h)
     add_library(slang SHARED IMPORTED GLOBAL)

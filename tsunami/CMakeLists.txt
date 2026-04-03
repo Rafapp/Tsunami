@@ -16,6 +16,7 @@ target_link_libraries(tsunami PRIVATE
     glfw
     volk
     glm
+    assimp
 )
 
 # === slang (optional — requires ./setup.sh to download binary) ===

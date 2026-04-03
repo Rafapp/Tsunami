@@ -39,6 +39,15 @@ add_custom_target(shaders ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/tsunami/shaders
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
-    COMMENT "Copying shaders to build/bin/shaders"
+    COMMENT "Copying shaders to build folder"
 )
 add_dependencies(tsunami shaders)
+
+# === Resources ===
+add_custom_target(resources ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/resources
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/resources
+    COMMENT "Copying resources to build folder"
+)
+add_dependencies(tsunami resources)
