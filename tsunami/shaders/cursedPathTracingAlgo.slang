@@ -181,7 +181,19 @@ MaterialSample sampleCookTorrance(float3 inDir, float3 normal, inout RNG rng, fl
 
 float3 fetchInterpolatedNormal(uint instanceID, uint primitiveIndex, float2 barycentrics)
 {
-    // TODO: Implementation for fetching interpolated normal
+    // For simplicity, we assume all meshes use the same vertex format and are stored in a single buffer
+    uint vertexOffset = meshes_buf[instanceID].vertexOffset;
+    uint indexOffset  = meshes_buf[instanceID].indexOffset;
+
+    uint i0 = indices_buf[indexOffset + primitiveIndex * 3 + 0];
+    uint i1 = indices_buf[indexOffset + primitiveIndex * 3 + 1];
+    uint i2 = indices_buf[indexOffset + primitiveIndex * 3 + 2];
+
+    float3 n0 = vertices_buf[vertexOffset + i0].normal;
+    float3 n1 = vertices_buf[vertexOffset + i1].normal;
+    float3 n2 = vertices_buf[vertexOffset + i2].normal;
+
+    return normalize(n0 * (1.0f - barycentrics.x - barycentrics.y) + n1 * barycentrics.x + n2 * barycentrics.y);
 }
 
 // ─── scene intersection ───────────────────────────────────────────────────────
@@ -212,13 +224,7 @@ bool intersectScene(Ray ray, out Hit best, out GPUMaterial mat)
     uint primID = query.CommittedPrimitiveIndex();
     float2 barycentrics = query.CommittedTriangleBarycentrics();
     bool isFrontFace = query.CommittedTriangleFrontFace();
-    //float3 normal = fetchInterpolatedNormal(instanceID, primID, barycentrics);
-    //For now we just use geometric normal, which can cause shading artifacts but is simpler to implement
-    GPUMesh mesh = meshes_buf[instanceID];
-    GPUVertex v0 = vertices_buf[mesh.vertexOffset + indices_buf[mesh.indexOffset + primID * 3 + 0]];
-    GPUVertex v1 = vertices_buf[mesh.vertexOffset + indices_buf[mesh.indexOffset + primID * 3 + 1]];
-    GPUVertex v2 = vertices_buf[mesh.vertexOffset + indices_buf[mesh.indexOffset + primID * 3 + 2]];
-    float3 normal = normalize(cross(v1.position - v0.position, v2.position - v0.position));
+    float3 normal = fetchInterpolatedNormal(instanceID, primID, barycentrics);
     best.normal = isFrontFace ? normal : -normal;
     best.front_face = isFrontFace;
 
@@ -274,13 +280,13 @@ float3 tracePath(Ray ray, inout RNG rng)
 
 // ─── camera ───────────────────────────────────────────────────────────────────
 static float offset = 0.0f;
-static float offset2 = 0.0f;
+static float offset2 = 10.0f;
 Ray makeRay(uint2 pixel, uint2 dims, float2 jitter)
 {
     GPUCamera cam     = camera_buf[0];
     float3    origin  = cam.position.xyz;
-    offset = sin(push.frame * 0.1f) * 1.0;
-    offset2 = cos(push.frame * 0.1f) * 1.0;
+    offset = sin(push.frame * 0.01f) * 1.0;
+    offset2 = cos(push.frame * 0.01f) * 1.0;
     origin.x += offset;
     origin.y += offset2;
     origin.z += offset2;
@@ -302,6 +308,8 @@ Ray makeRay(uint2 pixel, uint2 dims, float2 jitter)
 
     Ray ray;
     ray.origin = origin;
+    ray.origin.y += 2.0f; 
+    ray.origin.z += 4.0f;
     ray.dir    = normalize(fwd + u * right + v * up);
     return ray;
 }
