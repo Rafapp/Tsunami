@@ -11,8 +11,8 @@
 #include "tsunami/shapes/shape.h"
 #include "tsunami/shapes/sphere.h"
 
-#include <vector>
 #include <memory>
+#include <vector>
 
 struct GPUScene {
 	GPUCamera                camera;

@@ -24,6 +24,13 @@ struct SceneContext {
 	VmaAllocation material_alloc  = VK_NULL_HANDLE;
 	uint32_t      shape_count     = 0;
 	uint32_t      material_count  = 0;
+	VkBuffer      mesh_buffer     = VK_NULL_HANDLE;
+	VmaAllocation mesh_alloc      = VK_NULL_HANDLE;
+	VkBuffer      vertex_buffer   = VK_NULL_HANDLE;
+	VmaAllocation vertex_alloc    = VK_NULL_HANDLE;
+	VkBuffer      index_buffer    = VK_NULL_HANDLE;
+	VmaAllocation index_alloc     = VK_NULL_HANDLE;
+	uint32_t      mesh_count      = 0;
 } scene_ctx;
 
 struct VulkanContext {
@@ -242,7 +249,7 @@ static std::vector<uint32_t> compile_slang_shader(const std::string& path,
 	SlangCompileRequest* request = spCreateCompileRequest(session);
 
 	int target_idx = spAddCodeGenTarget(request, SLANG_SPIRV);
-	spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_3"));
+	spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_4"));
 
 	int unit_idx = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
 	spAddTranslationUnitSourceFile(request, unit_idx, path.c_str());
@@ -966,6 +973,28 @@ App::App() {
 		std::cout << "[INFO] Built TLAS (" << as_ctx.blases.size() << " instances)\n";
 	}
 
+	// Upload mesh, vertex, and index buffers
+	if (!gpu_meshes.empty()) {
+		constexpr VkBufferUsageFlags SCENE_BUF = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+		scene_ctx.mesh_buffer =
+		    create_and_upload_buffer(allocator, sizeof(GPUMesh) * gpu_meshes.size(),
+		                             gpu_meshes.data(), SCENE_BUF, scene_ctx.mesh_alloc);
+
+		scene_ctx.vertex_buffer =
+		    create_and_upload_buffer(allocator, sizeof(GPUVertex) * all_vertices.size(),
+		                             all_vertices.data(), SCENE_BUF, scene_ctx.vertex_alloc);
+
+		scene_ctx.index_buffer =
+		    create_and_upload_buffer(allocator, sizeof(uint32_t) * all_indices.size(),
+		                             all_indices.data(), SCENE_BUF, scene_ctx.index_alloc);
+
+		scene_ctx.mesh_count = (uint32_t) gpu_meshes.size();
+		std::cout << "[INFO] Uploaded mesh/vertex/index buffers (" << gpu_meshes.size()
+		          << " meshes, " << all_vertices.size() << " vertices, " << all_indices.size()
+		          << " indices)\n";
+	}
+
 	// ==============================================
 	// === IX. Descriptor layout, pool, and sets ===
 	// ==============================================
@@ -980,8 +1009,8 @@ App::App() {
 		//   5 = TLAS (only added when we actually have one)
 		std::vector<VkDescriptorSetLayoutBinding> bindings = {
 		    make_image_binding(0),  make_image_binding(1),  make_buffer_binding(2),
-		    make_buffer_binding(3), make_buffer_binding(4),
-		};
+		    make_buffer_binding(3), make_buffer_binding(4), make_buffer_binding(6),
+		    make_buffer_binding(7), make_buffer_binding(8)};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_as_binding(5));
 
@@ -999,7 +1028,7 @@ App::App() {
 	{
 		std::vector<VkDescriptorPoolSize> pool_sizes = {
 		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
-		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			pool_sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1});
@@ -1087,6 +1116,17 @@ App::App() {
 			as_write.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 			writes.push_back(as_write);
 		}
+
+		VkDescriptorBufferInfo mesh_info{scene_ctx.mesh_buffer, 0,
+		                                 sizeof(GPUMesh) * scene_ctx.mesh_count};
+		VkDescriptorBufferInfo vertex_info{scene_ctx.vertex_buffer, 0,
+		                                   sizeof(GPUVertex) * all_vertices.size()};
+		VkDescriptorBufferInfo index_info{scene_ctx.index_buffer, 0,
+		                                  sizeof(uint32_t) * all_indices.size()};
+
+		add_buffer_write(6, &mesh_info);
+		add_buffer_write(7, &vertex_info);
+		add_buffer_write(8, &index_info);
 
 		vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t) writes.size(), writes.data(), 0,
 		                       nullptr);
