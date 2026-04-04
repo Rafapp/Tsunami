@@ -244,9 +244,13 @@ static void end_one_time_cmd(VkDevice device, VkCommandPool pool, VkQueue queue,
 // ============================================================
 
 static std::vector<uint32_t> compile_slang_shader(const std::string& path,
-                                                  const std::string& entry_point) {
+                                                  const std::string& entry_point,
+                                                  const std::vector<std::string>& search_paths = {}) {
 	SlangSession*        session = spCreateSession(nullptr);
 	SlangCompileRequest* request = spCreateCompileRequest(session);
+
+	for (const auto& sp : search_paths)
+		spAddSearchPath(request, sp.c_str());
 
 	int target_idx = spAddCodeGenTarget(request, SLANG_SPIRV);
 	spSetTargetProfile(request, target_idx, spFindProfile(session, "spirv_1_4"));
@@ -254,24 +258,19 @@ static std::vector<uint32_t> compile_slang_shader(const std::string& path,
 	int unit_idx = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
 	spAddTranslationUnitSourceFile(request, unit_idx, path.c_str());
 	spAddEntryPoint(request, unit_idx, entry_point.c_str(), SLANG_STAGE_COMPUTE);
-
 	SlangResult result      = spCompile(request);
 	const char* diagnostics = spGetDiagnosticOutput(request);
 	if (diagnostics && diagnostics[0] != '\0')
 		std::cerr << "[SLANG] " << path << ":\n" << diagnostics << "\n";
-
 	if (result != SLANG_OK) {
 		spDestroyCompileRequest(request);
 		spDestroySession(session);
 		throw std::runtime_error("slang compilation failed: " + path);
 	}
-
 	size_t      spirv_size = 0;
 	const void* spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
-
 	std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
 	memcpy(spirv.data(), spirv_data, spirv_size);
-
 	spDestroyCompileRequest(request);
 	spDestroySession(session);
 	return spirv;
@@ -1138,7 +1137,11 @@ App::App() {
 	// ============================================
 
 	{
-		auto spirv = compile_slang_shader("shaders/cursedPathTracingAlgo.slang", "main");
+		auto spirv = compile_slang_shader(
+			std::string(SHADERS_DIR) + "/cursedPathTracingAlgo.slang",
+			"main",
+			{ VENDORS_DIR }
+		);
 		std::cout << "[INFO] Compiled compute shader (" << (spirv.size() * sizeof(uint32_t))
 		          << " bytes)\n";
 

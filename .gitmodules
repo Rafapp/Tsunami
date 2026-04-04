@@ -16,3 +16,6 @@
 [submodule "vendors/assimp"]
 	path = vendors/assimp
 	url = https://github.com/assimp/assimp.git
+[submodule "vendors/openpbr-bsdf"]
+	path = vendors/openpbr-bsdf
+	url = https://github.com/adobe/openpbr-bsdf.git

@@ -52,6 +52,7 @@ echo       - VulkanMemoryAllocator
 echo       - glfw
 echo       - volk
 echo       - glm
+echo       - OpenPBR
 echo.
 git submodule update --init --recursive
 if errorlevel 1 (
