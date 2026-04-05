@@ -1,5 +1,5 @@
-#define OPENPBR_LANGUAGE_TARGET_SLANG 1
-#include "openpbr-bsdf/openpbr.h"
+// #define OPENPBR_LANGUAGE_TARGET_SLANG 1
+// #include "openpbr-bsdf/openpbr.h"
 
 // ─── push constants & bindings ────────────────────────────────────────────────
 struct PushConstants { uint frame; uint shape_count; uint material_count; };

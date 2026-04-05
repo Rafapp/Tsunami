@@ -26,6 +26,11 @@ add_library(openpbr-bsdf INTERFACE)
 target_include_directories(openpbr-bsdf SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/openpbr-bsdf)
 
+# === stb (header-only) ===
+add_library(stb INTERFACE)
+target_include_directories(stb SYSTEM INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+
 # === Slang (prebuilt binary, downloaded by setup.sh) ===
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/slang-bin/include/slang.h)
     add_library(slang SHARED IMPORTED GLOBAL)

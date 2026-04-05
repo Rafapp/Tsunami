@@ -25,6 +25,7 @@ target_link_libraries(tsunami PRIVATE
     glm
     assimp
     openpbr-bsdf 
+    stb
 )
 
 # === slang (optional — requires ./setup.sh to download binary) ===
