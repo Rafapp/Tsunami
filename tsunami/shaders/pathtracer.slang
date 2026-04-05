@@ -86,9 +86,13 @@ struct GPUMaterial {
 };
 
 struct GPUVertex {
-    float3 position; float _pad0;
-    float3 normal;   float _pad1;
-    float2 uv;       float2 _pad2;
+    float3 position;
+    float  _pad0;
+    float3 normal;
+    float  _pad1;
+    float4 tangent;
+    float2 uv;
+    float2 _pad2;
 };
 
 struct GPUMesh {
@@ -141,7 +145,7 @@ struct RNG {
 };
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
-struct VertexAttribs { float3 normal; float2 uv; };
+struct VertexAttribs { float3 normal; float2 uv; float4 tangent;};
 
 VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     uint voff = (uint)meshes_buf[instanceID].vertexOffset;
@@ -197,7 +201,32 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     float2 bary        = q.CommittedTriangleBarycentrics();
     bool frontFace     = q.CommittedTriangleFrontFace();
     VertexAttribs attr = fetchAttribs(instID, primID, bary);
-    hit.normal         = frontFace ? attr.normal : -attr.normal;
+    float3 N = normalize(attr.normal);
+    float3 T = normalize(attr.tangent.xyz);
+    float  handedness = attr.tangent.w;
+
+    // Gram-Schmidt (important for robustness)
+    T = normalize(T - N * dot(N, T));
+    float3 B = handedness * cross(N, T);
+
+    // --- Sample normal map ---
+    float3 normal_tex = sample_tex(
+        mat.normal_tex_index,
+        attr.uv,
+        float4(0.5, 0.5, 1.0, 1.0) // default flat normal
+    ).xyz;
+
+    // convert [0,1] → [-1,1]
+    normal_tex = normal_tex * 2.0 - 1.0;
+
+    // transform to world space
+    float3 N_world = normalize(
+        T * normal_tex.x +
+        B * normal_tex.y +
+        N * normal_tex.z
+    );
+
+    hit.normal = frontFace ? N_world : -N_world;
     hit.uv             = attr.uv;
     hit.front_face     = frontFace;
     hit.matIndex       = meshes_buf[instID].matIndex;

@@ -58,13 +58,38 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		verts.reserve(ai_mesh->mNumVertices);
 		for (unsigned int v = 0; v < ai_mesh->mNumVertices; ++v) {
 			GPUVertex gv{};
-			gv.position = {ai_mesh->mVertices[v].x, ai_mesh->mVertices[v].y,
-			               ai_mesh->mVertices[v].z};
-			gv.normal   = {ai_mesh->mNormals[v].x, ai_mesh->mNormals[v].y, ai_mesh->mNormals[v].z};
-			gv.uv       = has_uv ? glm::vec2(ai_mesh->mTextureCoords[0][v].x,
-			                                 ai_mesh->mTextureCoords[0][v].y) :
-			                       glm::vec2(0.0f);
-			verts.push_back(gv);
+			gv.position = {
+				ai_mesh->mVertices[v].x,
+				ai_mesh->mVertices[v].y,
+				ai_mesh->mVertices[v].z
+			};
+
+			gv.normal = {
+				ai_mesh->mNormals[v].x,
+				ai_mesh->mNormals[v].y,
+				ai_mesh->mNormals[v].z
+			};
+
+			gv.uv = has_uv
+				? glm::vec2(ai_mesh->mTextureCoords[0][v].x,
+							ai_mesh->mTextureCoords[0][v].y)
+				: glm::vec2(0.0f);
+
+			// --- Tangent ---
+			if (ai_mesh->HasTangentsAndBitangents()) {
+				const auto& t = ai_mesh->mTangents[v];
+				const auto& b = ai_mesh->mBitangents[v];
+
+				glm::vec3 tangent(t.x, t.y, t.z);
+				glm::vec3 bitangent(b.x, b.y, b.z);
+				glm::vec3 normal = gv.normal;
+
+				float handedness = (glm::dot(glm::cross(normal, tangent), bitangent) < 0.0f) ? -1.0f : 1.0f;
+
+				gv.tangent = glm::vec4(tangent, handedness);
+			} else {
+				gv.tangent = glm::vec4(1, 0, 0, 1); // fallback
+			}
 		}
 
 		// --- Indices ---
