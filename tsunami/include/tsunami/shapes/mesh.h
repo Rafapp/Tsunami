@@ -21,7 +21,8 @@ struct alignas(16) GPUVertex {
 struct alignas(16) GPUMesh {
 	glm::mat4 transform;
 	glm::mat4 inverseTransform;
-	uint64_t  blasHandle;
+	uint32_t  blasHandle_lo;
+	uint32_t  blasHandle_hi;
 	int       matIndex;
 	int       vertexOffset;
 	int       indexOffset;
