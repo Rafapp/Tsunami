@@ -332,12 +332,12 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
 
     float3 colorAccum = float3(0,0,0);
 
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 32; ++i) {
         jitter = float2(rng.nextFloat(), rng.nextFloat());
         colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
     }
 
-    float3 color = colorAccum / 8.0f;
+    float3 color = colorAccum / 32.0f;
     float3 prev  = accum_image[pixel].rgb;
     float3 accum = lerp(prev, color, 1.0f / float(push.frame + 1u));
 

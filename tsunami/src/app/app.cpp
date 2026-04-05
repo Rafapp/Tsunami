@@ -575,76 +575,11 @@ App::App() {
 	// ======================
 
 	m_scene = std::make_unique<Scene>();
+	m_scene->m_camera = Camera(
+		glm::vec3(0.0f, 150.0f, 0.0f), glm::vec3(500.0f, 150.0f, 0.0f),
+		glm::vec3(0.0f, 1.0f, 0.0f), 60.0f, 0.1f, 10000.0f);
 
-	m_scene->m_camera = Camera(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-	                           glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, 0.1f, 100.0f);
-
-	// Floor (white)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-	    Transform(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(2.0f, 1.0f, 2.0f)),
-	    std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
-
-	// Ceiling (white)
-	m_scene->m_shapes.push_back(
-	    std::make_unique<Quad>(Transform(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
-	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
-	                           std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
-
-	// Back wall (white)
-	m_scene->m_shapes.push_back(
-	    std::make_unique<Quad>(Transform(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(90.0f, 0.0f, 0.0f),
-	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
-	                           std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
-
-	// Left wall (red)
-	m_scene->m_shapes.push_back(
-	    std::make_unique<Quad>(Transform(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f),
-	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
-	                           std::make_shared<Lambert>(glm::vec3(0.8f, 0.1f, 0.1f))));
-
-	// Right wall (green)
-	m_scene->m_shapes.push_back(
-	    std::make_unique<Quad>(Transform(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -90.0f),
-	                                     glm::vec3(2.0f, 1.0f, 2.0f)),
-	                           std::make_shared<Lambert>(glm::vec3(0.1f, 0.8f, 0.1f))));
-
-	// Area light (emissive quad on ceiling)
-	m_scene->m_shapes.push_back(std::make_unique<Quad>(
-	    Transform(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(180.0f, 0.0f, 0.0f),
-	              glm::vec3(2.5f, 1.0f, 2.5f)),
-	    std::make_shared<Lambert>(glm::vec3(1.0f), glm::vec3(15.0f), 0.25f)));
-
-	// Tall box
-	m_scene->m_shapes.push_back(
-	    std::make_unique<Box>(Transform(glm::vec3(-0.35f, -0.35f, -0.4f),
-	                                    glm::vec3(0.0f, 15.0f, 0.0f), glm::vec3(0.3f, 0.65f, 0.3f)),
-	                          std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
-
-	// Short box
-	m_scene->m_shapes.push_back(std::make_unique<Box>(
-	    Transform(glm::vec3(0.35f, -0.65f, -0.2f), glm::vec3(0.0f, -15.0f, 0.0f),
-	              glm::vec3(0.3f, 0.35f, 0.3f)),
-	    std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
-
-	// Teapot (mesh)
-	m_scene->m_meshes.push_back(std::make_unique<Mesh>(
-	    "resources/meshes/teapot.obj",
-	    Transform(glm::vec3(0.0f, -0.5f, 0.5f), glm::vec3(0.0f, 45.0f, 0.0f), glm::vec3(0.5f)),
-	    std::make_shared<Lambert>(glm::vec3(0.8f, 0.8f, 0.8f))));
-
-	// --- Pack scene data for GPU ---
-	GPUCamera                gpu_camera = m_scene->m_camera.pack();
-	std::vector<GPUShape>    gpu_shapes;
-	std::vector<GPUMaterial> gpu_materials;
-
-	for (auto& shape : m_scene->m_shapes) {
-		int matIndex = (int) gpu_materials.size();
-		gpu_materials.push_back(shape->m_material->pack());
-		gpu_shapes.push_back(shape->pack(matIndex));
-	}
-
-	scene_ctx.shape_count    = (uint32_t) gpu_shapes.size();
-	scene_ctx.material_count = (uint32_t) gpu_materials.size();
+	m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
 	// === I. Load vulkan function pointers ===
@@ -889,22 +824,44 @@ App::App() {
 	// =================================
 	// === VI.5 Create Scene Buffers ===
 	// =================================
-
 	{
-		// Storage buffers don't need device address; keep usage simple here.
 		constexpr VkBufferUsageFlags SCENE_BUF = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
+		// Camera
+		GPUCamera gpu_camera = m_scene->m_camera.pack();
 		scene_ctx.camera_buffer = create_and_upload_buffer(
-		    allocator, sizeof(GPUCamera), &gpu_camera, SCENE_BUF, scene_ctx.camera_alloc);
-		scene_ctx.shapes_buffer =
-		    create_and_upload_buffer(allocator, sizeof(GPUShape) * gpu_shapes.size(),
-		                             gpu_shapes.data(), SCENE_BUF, scene_ctx.shapes_alloc);
-		scene_ctx.material_buffer =
-		    create_and_upload_buffer(allocator, sizeof(GPUMaterial) * gpu_materials.size(),
-		                             gpu_materials.data(), SCENE_BUF, scene_ctx.material_alloc);
+			allocator, sizeof(GPUCamera), &gpu_camera, SCENE_BUF, scene_ctx.camera_alloc);
+
+		// Shapes (may be empty for pure glTF scenes, upload a dummy to keep bindings valid)
+		std::vector<GPUShape> gpu_shapes;
+		for (int i = 0; i < (int)m_scene->m_shapes.size(); ++i)
+			gpu_shapes.push_back(m_scene->m_shapes[i]->pack(i));
+		scene_ctx.shape_count = (uint32_t)gpu_shapes.size();
+
+		VkDeviceSize shapes_size = gpu_shapes.empty()
+			? sizeof(GPUShape)           // dummy single element so buffer isn't zero-size
+			: sizeof(GPUShape) * gpu_shapes.size();
+		GPUShape dummy_shape{};
+		scene_ctx.shapes_buffer = create_and_upload_buffer(
+			allocator, shapes_size,
+			gpu_shapes.empty() ? &dummy_shape : gpu_shapes.data(),
+			SCENE_BUF, scene_ctx.shapes_alloc);
+
+		// Materials — collected from both shapes and meshes in order,
+		// matching the matIndex assigned during the BLAS/mesh packing loop below
+		std::vector<GPUMaterial> gpu_materials;
+		for (auto& shape : m_scene->m_shapes)
+			gpu_materials.push_back(shape->m_material->pack());
+		for (auto& mesh : m_scene->m_meshes)
+			gpu_materials.push_back(mesh->m_material->pack());
+		scene_ctx.material_count = (uint32_t)gpu_materials.size();
+
+		scene_ctx.material_buffer = create_and_upload_buffer(
+			allocator, sizeof(GPUMaterial) * gpu_materials.size(),
+			gpu_materials.data(), SCENE_BUF, scene_ctx.material_alloc);
 
 		std::cout << "[INFO] Uploaded scene buffers (shapes: " << scene_ctx.shape_count
-		          << ", materials: " << scene_ctx.material_count << ")\n";
+				<< ", materials: " << scene_ctx.material_count << ")\n";
 	}
 
 	// =================================================
@@ -928,42 +885,43 @@ App::App() {
 	// === VIII. Build BLAS per mesh, then build TLAS     ===
 	// ======================================================
 
-	// Shared vertex/index pools for all meshes — offsets tracked per mesh.
 	std::vector<GPUVertex> all_vertices;
 	std::vector<uint32_t>  all_indices;
 	std::vector<GPUMesh>   gpu_meshes;
 
-	for (auto& mesh : m_scene->m_meshes) {
-		int vertex_offset = (int) all_vertices.size();
-		int index_offset  = (int) all_indices.size();
+	// Material indices for meshes start after shapes
+	const int mesh_mat_base = (int)m_scene->m_shapes.size();
+
+	for (int mi = 0; mi < (int)m_scene->m_meshes.size(); ++mi) {
+		auto& mesh = m_scene->m_meshes[mi];
+
+		if (!mesh->m_material) {
+			std::cerr << "[ERROR] mesh->m_material is null for mesh index " << mi << "\n";
+			continue;
+		}
+
+		int vertex_offset = (int)all_vertices.size();
+		int index_offset  = (int)all_indices.size();
+		int mat_index     = mesh_mat_base + mi; // matches order from VI.5
 
 		all_vertices.insert(all_vertices.end(), mesh->gpuVertices.begin(), mesh->gpuVertices.end());
-		all_indices.insert(all_indices.end(), mesh->gpuIndices.begin(), mesh->gpuIndices.end());
+		all_indices.insert(all_indices.end(),   mesh->gpuIndices.begin(),  mesh->gpuIndices.end());
 
-		int mat_index = (int) gpu_materials.size();
-		if (!mesh->m_material) {
-			std::cerr << "[ERROR] mesh->m_material is null for mesh index "
-			          << (&mesh - &m_scene->m_meshes[0]) << "\n";
-			continue;        // or throw
-		}
-		std::cout << "[INFO] Packing mesh with material index " << mat_index << "\n";
-		gpu_materials.push_back(mesh->m_material->pack());
+		BLAS blas = build_blas(
+			allocator, vulkan_ctx.device, command_ctx.command_pool,
+			vulkan_ctx.graphics_queue,
+			mesh->gpuVertices.data(), (uint32_t)mesh->gpuVertices.size(), sizeof(GPUVertex),
+			mesh->gpuIndices.data(),  (uint32_t)mesh->gpuIndices.size());
 
-		BLAS blas = build_blas(allocator, vulkan_ctx.device, command_ctx.command_pool,
-		                       vulkan_ctx.graphics_queue, mesh->gpuVertices.data(),
-		                       (uint32_t) mesh->gpuVertices.size(), sizeof(GPUVertex),
-		                       mesh->gpuIndices.data(), (uint32_t) mesh->gpuIndices.size());
-
-		// Store the BLAS device address in the packed GPUMesh so the shader
-		// can look up the correct BLAS when a ray query hits this instance.
 		GPUMesh gpu_mesh    = mesh->pack(mat_index, vertex_offset, index_offset);
 		gpu_mesh.blasHandle = blas.device_address;
 
 		as_ctx.blases.push_back(std::move(blas));
 		gpu_meshes.push_back(gpu_mesh);
 
-		std::cout << "[INFO] Built BLAS for mesh (" << mesh->gpuIndices.size() / 3 << " triangles, "
-		          << mesh->gpuVertices.size() << " vertices)\n";
+		std::cout << "[INFO] Built BLAS for mesh " << mi
+				<< " (" << mesh->gpuIndices.size() / 3 << " triangles, "
+				<< mesh->gpuVertices.size() << " vertices, matIndex=" << mat_index << ")\n";
 	}
 
 	if (!as_ctx.blases.empty()) {
