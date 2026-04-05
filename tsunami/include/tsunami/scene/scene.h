@@ -27,7 +27,7 @@ class Scene {
 	Scene()  = default;
 	~Scene() = default;
 	GPUScene pack() const;
-	void load_gltf(const std::string& path);
+	void     load_gltf(const std::string& path);
 
 	Camera                              m_camera;
 	std::vector<std::unique_ptr<Light>> m_lights;
