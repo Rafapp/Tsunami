@@ -22,6 +22,9 @@ class App {
 	void run();
 
   private:
+	void                                                createSwapchainResources();
+	void                                                destroySwapchainResources();
+	void                                                recreateSwapchainResources();
 	void                                                MainLoop();
 	std::unique_ptr<audio::ReactiveAudioController>     m_audio_controller;
 	std::unique_ptr<audio::MicrophoneInput>             m_microphone;

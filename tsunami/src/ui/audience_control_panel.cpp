@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cfloat>
+#include <cstdint>
 #include <cstdio>
 
 #include "tsunami/ui/audience_control_panel.h"
@@ -40,9 +41,10 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::Checkbox("Show audience overlay", &state.show_overlay);
 	ImGui::SameLine();
 	if (ImGui::Button("Reset defaults")) {
-		state                       = AudienceControlPanelState{};
-		state.reset_water_requested = true;
-		changed                     = true;
+		state                         = AudienceControlPanelState{};
+		state.reset_water_requested   = true;
+		state.reset_objects_requested = true;
+		changed                       = true;
 	}
 
 	ImGui::Separator();
@@ -64,23 +66,27 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Water Surface");
-	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.45f, "%.3f");
-	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.0f, 0.15f, "%.3f");
+	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.28f, "%.3f");
+	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.004f, 0.12f, "%.3f");
 	changed |=
 	    ImGui::SliderFloat("Restoring force", &state.water.restoring_force, 0.0f, 0.35f, "%.3f");
-	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 80.0f, "%.1f");
+	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 32.0f, "%.1f");
 	changed |=
 	    ImGui::SliderFloat("Ripple radius", &state.water.ripple_radius, 0.005f, 0.20f, "%.3f");
-	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.010f, "%.4f");
+	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.006f, "%.4f");
 	changed |=
-	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f, "%.4f");
+	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.040f, "%.4f");
 	changed |= ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f,
 	                              "%.2f");
 	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
-	                              8.0f, "%.2f");
+	                              4.0f, "%.2f");
 	if (ImGui::Button("Reset water state")) {
 		state.reset_water_requested = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Reset object positions")) {
+		state.reset_objects_requested = true;
 	}
 
 	ImGui::Separator();
@@ -121,6 +127,37 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	                      ImGuiColorEditFlags_AlphaBar);
 
 	ImGui::Separator();
+	ImGui::TextUnformatted("Render Stats");
+	if (diagnostics.render.frame_sample_count == 0) {
+		ImGui::TextUnformatted("Collecting frame timing samples...");
+	} else {
+		ImGui::Text("FPS: %.1f current | %.1f avg | %.1f min | %.1f max",
+		            diagnostics.render.current_fps, diagnostics.render.average_fps,
+		            diagnostics.render.min_fps, diagnostics.render.max_fps);
+		ImGui::Text("Frame time: %.2f ms current | %.2f avg | %.2f min | %.2f max",
+		            diagnostics.render.current_frame_time_ms,
+		            diagnostics.render.average_frame_time_ms,
+		            diagnostics.render.min_frame_time_ms,
+		            diagnostics.render.max_frame_time_ms);
+		ImGui::Text("Timing window: %u frames", diagnostics.render.frame_sample_count);
+	}
+	ImGui::Text("Render target: %u x %u", diagnostics.render.render_width,
+	            diagnostics.render.render_height);
+	ImGui::Text("Swapchain images: %u", diagnostics.render.swapchain_image_count);
+	ImGui::Text("Surface grid: %u x %u (%llu samples)", diagnostics.water.grid_width,
+	            diagnostics.water.grid_height,
+	            static_cast<unsigned long long>(diagnostics.water.sample_count));
+	ImGui::Text("Equivalent mesh: %llu quads | %llu triangles",
+	            static_cast<unsigned long long>(diagnostics.water.cell_count),
+	            static_cast<unsigned long long>(diagnostics.water.triangle_count));
+	ImGui::Text("Compute dispatch: %u x %u workgroups", diagnostics.water.dispatch_groups_x,
+	            diagnostics.water.dispatch_groups_y);
+	ImGui::Text("Ping-pong height images: %u", diagnostics.water.history_image_count);
+	ImGui::Text("ImGui geometry: %d vertices | %d indices | %d windows",
+	            diagnostics.render.imgui_vertex_count, diagnostics.render.imgui_index_count,
+	            diagnostics.render.imgui_window_count);
+
+	ImGui::Separator(); 
 	ImGui::TextUnformatted("Diagnostics");
 	ImGui::Text("Microphone: %s", diagnostics.audio.source_name.c_str());
 	if (diagnostics.audio.source_available) {

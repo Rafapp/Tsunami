@@ -20,6 +20,9 @@ target_link_libraries(tsunami PRIVATE
     glm
 )
 
+# === compile definitions ===
+target_compile_definitions(tsunami PRIVATE VK_NO_PROTOTYPES)
+
 # === slang (optional — requires ./setup.sh to download binary) ===
 if(TARGET slang)
     target_link_libraries(tsunami PRIVATE slang)

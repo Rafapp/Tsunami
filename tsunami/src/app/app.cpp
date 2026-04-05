@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -9,6 +10,10 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
+
+#ifndef VK_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES
+#endif
 
 #define VOLK_IMPLEMENTATION
 #include "volk.h"
@@ -68,6 +73,46 @@ struct OverlayContext {
 	ui::AudienceDiagnostics       diagnostics{};
 	bool                          show_control_panel = true;
 } overlay_ctx{};
+
+struct FrameTimingHistory {
+	static constexpr size_t kSampleWindow = 120;
+
+	std::array<float, kSampleWindow> frame_times_ms{};
+	size_t                           next_index        = 0;
+	size_t                           sample_count      = 0;
+	float                            current_fps       = 0.0f;
+	float                            average_fps       = 0.0f;
+	float                            min_fps           = 0.0f;
+	float                            max_fps           = 0.0f;
+	float                            current_frame_ms  = 0.0f;
+	float                            average_frame_ms  = 0.0f;
+	float                            min_frame_ms      = 0.0f;
+	float                            max_frame_ms      = 0.0f;
+
+	void pushFrame(float delta_time_seconds) {
+		const float clamped_delta_time = std::max(delta_time_seconds, 1.0e-6f);
+		current_frame_ms               = clamped_delta_time * 1000.0f;
+		current_fps                    = 1.0f / clamped_delta_time;
+
+		frame_times_ms[next_index] = current_frame_ms;
+		next_index                 = (next_index + 1) % frame_times_ms.size();
+		sample_count               = std::min(sample_count + 1, frame_times_ms.size());
+
+		float total_ms = 0.0f;
+		min_frame_ms   = frame_times_ms[0];
+		max_frame_ms   = frame_times_ms[0];
+		for (size_t index = 0; index < sample_count; ++index) {
+			total_ms      += frame_times_ms[index];
+			min_frame_ms   = std::min(min_frame_ms, frame_times_ms[index]);
+			max_frame_ms   = std::max(max_frame_ms, frame_times_ms[index]);
+		}
+
+		average_frame_ms = total_ms / static_cast<float>(sample_count);
+		min_fps          = 1000.0f / std::max(max_frame_ms, 1.0e-6f);
+		max_fps          = 1000.0f / std::max(min_frame_ms, 1.0e-6f);
+		average_fps      = 1000.0f / std::max(average_frame_ms, 1.0e-6f);
+	}
+} frame_timing_history{};
 
 void check_vk_result(VkResult result) {
 	if (result == VK_SUCCESS) {
@@ -157,7 +202,7 @@ void destroy_overlay_render_resources() {
 	}
 }
 
-void initialize_imgui(GLFWwindow* window) {
+void initialize_imgui_context(GLFWwindow* window) {
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 
@@ -169,7 +214,9 @@ void initialize_imgui(GLFWwindow* window) {
 	if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
 		throw std::runtime_error("failed to initialize ImGui for Vulkan");
 	}
+}
 
+void initialize_imgui_renderer() {
 	ImGui_ImplVulkan_InitInfo init_info{};
 	init_info.ApiVersion                   = VK_API_VERSION_1_3;
 	init_info.Instance                     = vulkan_ctx.instance.instance;
@@ -191,12 +238,20 @@ void initialize_imgui(GLFWwindow* window) {
 	}
 }
 
-void shutdown_imgui() {
+void shutdown_imgui_renderer() {
 	if (ImGui::GetCurrentContext() == nullptr) {
 		return;
 	}
 
 	ImGui_ImplVulkan_Shutdown();
+}
+
+void shutdown_imgui() {
+	if (ImGui::GetCurrentContext() == nullptr) {
+		return;
+	}
+
+	shutdown_imgui_renderer();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 }
@@ -221,7 +276,123 @@ void applyOverlayLevel(float value) {
 	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
 }
 
+bool isSwapchainRecreationResult(VkResult result) {
+	return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
+}
+
+void updateRenderDiagnostics(float delta_time_seconds) {
+	frame_timing_history.pushFrame(delta_time_seconds);
+
+	ui::AudienceRenderDiagnostics& render = overlay_ctx.diagnostics.render;
+	render.current_fps                    = frame_timing_history.current_fps;
+	render.average_fps                    = frame_timing_history.average_fps;
+	render.min_fps                        = frame_timing_history.min_fps;
+	render.max_fps                        = frame_timing_history.max_fps;
+	render.current_frame_time_ms          = frame_timing_history.current_frame_ms;
+	render.average_frame_time_ms          = frame_timing_history.average_frame_ms;
+	render.min_frame_time_ms              = frame_timing_history.min_frame_ms;
+	render.max_frame_time_ms              = frame_timing_history.max_frame_ms;
+	render.frame_sample_count             = static_cast<uint32_t>(frame_timing_history.sample_count);
+	render.render_width                   = swapchain_ctx.extent.width;
+	render.render_height                  = swapchain_ctx.extent.height;
+	render.swapchain_image_count          = static_cast<uint32_t>(swapchain_ctx.images.size());
+
+	if (ImGui::GetCurrentContext() == nullptr) {
+		render.imgui_vertex_count = 0;
+		render.imgui_index_count  = 0;
+		render.imgui_window_count = 0;
+		return;
+	}
+
+	const ImGuiIO& io         = ImGui::GetIO();
+	render.imgui_vertex_count = io.MetricsRenderVertices;
+	render.imgui_index_count  = io.MetricsRenderIndices;
+	render.imgui_window_count = io.MetricsRenderWindows;
+}
+
 }        // namespace
+
+void App::createSwapchainResources() {
+	vkb::SwapchainBuilder swapchain_builder{vulkan_ctx.log_device};
+	auto                  swap_ret =
+	    swapchain_builder
+	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+	        .set_desired_extent(m_window->width(), m_window->height())
+	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+	                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+	        .build();
+	if (!swap_ret) {
+		throw std::runtime_error("failed to create swapchain");
+	}
+	swapchain_ctx.swapchain    = swap_ret.value();
+	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
+	std::cout << "[INFO] Created swapchain (format: " << swapchain_ctx.image_format << ", extent: "
+	          << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height << ")\n";
+
+	auto images_ret = swapchain_ctx.swapchain.get_images();
+	if (!images_ret) {
+		throw std::runtime_error("failed to get swapchain images");
+	}
+	swapchain_ctx.images            = images_ret.value();
+	swapchain_ctx.image_initialized = std::vector<bool>(swapchain_ctx.images.size(), false);
+	std::cout << "[INFO] Acquired " << swapchain_ctx.images.size() << " swapchain images\n";
+
+	auto image_views_ret = swapchain_ctx.swapchain.get_image_views();
+	if (!image_views_ret) {
+		throw std::runtime_error("failed to get swapchain image views");
+	}
+	swapchain_ctx.image_views = image_views_ret.value();
+	std::cout << "[INFO] Created swapchain image views\n";
+
+	create_overlay_render_pass();
+
+	m_water_surface =
+	    std::make_unique<simulation::WaterSurfaceSimulation>(simulation::WaterSurfaceCreateInfo{
+	        .device        = vulkan_ctx.device,
+	        .allocator     = render_resources_ctx.allocator,
+	        .output_extent = swapchain_ctx.extent,
+	    });
+	std::cout << "[INFO] Created water surface simulation resources\n";
+}
+
+void App::destroySwapchainResources() {
+	m_water_surface.reset();
+	destroy_overlay_render_resources();
+
+	if (!swapchain_ctx.image_views.empty()) {
+		swapchain_ctx.swapchain.destroy_image_views(swapchain_ctx.image_views);
+		swapchain_ctx.image_views.clear();
+	}
+
+	swapchain_ctx.images.clear();
+	swapchain_ctx.image_initialized.clear();
+
+	if (swapchain_ctx.swapchain.swapchain != VK_NULL_HANDLE) {
+		vkb::destroy_swapchain(swapchain_ctx.swapchain);
+		swapchain_ctx.swapchain = {};
+	}
+
+	swapchain_ctx.image_format = VK_FORMAT_UNDEFINED;
+	swapchain_ctx.extent       = {};
+}
+
+void App::recreateSwapchainResources() {
+	uint32_t framebuffer_width  = m_window->width();
+	uint32_t framebuffer_height = m_window->height();
+	while (framebuffer_width == 0 || framebuffer_height == 0) {
+		m_window->waitEvents();
+		framebuffer_width  = m_window->width();
+		framebuffer_height = m_window->height();
+	}
+
+	check_vk_result(vkDeviceWaitIdle(vulkan_ctx.device));
+	shutdown_imgui_renderer();
+	destroySwapchainResources();
+	createSwapchainResources();
+	initialize_imgui_renderer();
+}
 
 App::App() {
 	if (volkInitialize() != VK_SUCCESS) {
@@ -230,7 +401,7 @@ App::App() {
 	std::cout << "[INFO] Initialized volk\n";
 
 	m_window = std::make_unique<core::Window>(
-	    core::WindowConfig{.width = 1280, .height = 720, .title = "tsunami 🌊"});
+	    core::WindowConfig{.width = 1280, .height = 720, .title = "Tsunami 🌊"});
 	std::cout << "[INFO] Created window\n";
 
 	vkb::InstanceBuilder builder;
@@ -301,45 +472,7 @@ App::App() {
 	}
 	std::cout << "[INFO] Created VMA allocator\n";
 
-	vkb::SwapchainBuilder swapchain_builder{vulkan_ctx.log_device};
-	auto                  swap_ret =
-	    swapchain_builder
-	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-	        .set_desired_extent(m_window->width(), m_window->height())
-	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-	                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-	        .build();
-	if (!swap_ret) {
-		throw std::runtime_error("failed to create swapchain");
-	}
-	swapchain_ctx.swapchain    = swap_ret.value();
-	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
-	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
-	std::cout << "[INFO] Created swapchain (format: " << swapchain_ctx.image_format << ")\n";
-
-	auto images_ret = swapchain_ctx.swapchain.get_images();
-	if (!images_ret) {
-		throw std::runtime_error("failed to get swapchain images");
-	}
-	swapchain_ctx.images            = images_ret.value();
-	swapchain_ctx.image_initialized = std::vector<bool>(swapchain_ctx.images.size(), false);
-	std::cout << "[INFO] Acquired " << swapchain_ctx.images.size() << " swapchain images\n";
-
-	auto image_views_ret = swapchain_ctx.swapchain.get_image_views();
-	if (!image_views_ret) {
-		throw std::runtime_error("failed to get swapchain image views");
-	}
-	swapchain_ctx.image_views = image_views_ret.value();
-	std::cout << "[INFO] Created swapchain image views\n";
-
-	m_water_surface =
-	    std::make_unique<simulation::WaterSurfaceSimulation>(simulation::WaterSurfaceCreateInfo{
-	        .device        = vulkan_ctx.device,
-	        .allocator     = render_resources_ctx.allocator,
-	        .output_extent = {(uint32_t) m_window->width(), (uint32_t) m_window->height()},
-	    });
-	std::cout << "[INFO] Created water surface simulation resources\n";
+	createSwapchainResources();
 
 	VkCommandPoolCreateInfo cmd_pool_info{};
 	cmd_pool_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -380,8 +513,8 @@ App::App() {
 	}
 	std::cout << "[INFO] Created sync objects (image_available, render_finished, in_flight)\n";
 
-	create_overlay_render_pass();
-	initialize_imgui(m_window->handle());
+	initialize_imgui_context(m_window->handle());
+	initialize_imgui_renderer();
 	std::cout << "[INFO] Initialized ImGui overlay\n";
 
 	m_audio_controller = std::make_unique<audio::ReactiveAudioController>();
@@ -404,12 +537,11 @@ App::~App() {
 
 	vkDeviceWaitIdle(vulkan_ctx.device);
 
-	m_water_surface.reset();
 	m_audio_controller.reset();
 	m_microphone.reset();
 
 	shutdown_imgui();
-	destroy_overlay_render_resources();
+	destroySwapchainResources();
 
 	if (sync_ctx.in_flight != VK_NULL_HANDLE) {
 		vkDestroyFence(vulkan_ctx.device, sync_ctx.in_flight, nullptr);
@@ -429,14 +561,6 @@ App::~App() {
 
 	if (render_resources_ctx.allocator != VK_NULL_HANDLE) {
 		vmaDestroyAllocator(render_resources_ctx.allocator);
-	}
-
-	if (!swapchain_ctx.image_views.empty()) {
-		swapchain_ctx.swapchain.destroy_image_views(swapchain_ctx.image_views);
-	}
-
-	if (swapchain_ctx.swapchain.swapchain != VK_NULL_HANDLE) {
-		vkb::destroy_swapchain(swapchain_ctx.swapchain);
 	}
 
 	if (vulkan_ctx.surface != VK_NULL_HANDLE) {
@@ -462,9 +586,24 @@ void App::MainLoop() {
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
 
+		const uint32_t framebuffer_width  = m_window->width();
+		const uint32_t framebuffer_height = m_window->height();
+		if (framebuffer_width == 0 || framebuffer_height == 0) {
+			m_window->waitEvents();
+			last_frame_time = static_cast<float>(glfwGetTime());
+			continue;
+		}
+
+		if (swapchain_ctx.extent.width != framebuffer_width ||
+		    swapchain_ctx.extent.height != framebuffer_height) {
+			recreateSwapchainResources();
+		}
+
 		const float time_seconds = static_cast<float>(glfwGetTime());
 		const float delta_time   = std::max(time_seconds - last_frame_time, 1.0f / 240.0f);
 		last_frame_time          = time_seconds;
+
+		updateRenderDiagnostics(delta_time);
 
 		ImGui_ImplVulkan_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
@@ -473,6 +612,13 @@ void App::MainLoop() {
 		const audio::ReactiveAudioInputFrame audio_input =
 		    buildAudioInputFrame(m_microphone.get(), time_seconds);
 
+		const auto update_water_and_floaters = [&](float water_audio_level) {
+			if (m_water_surface != nullptr) {
+				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
+				    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
+			}
+		};
+
 		float audio_level = 0.0f;
 		if (m_audio_controller != nullptr) {
 			audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
@@ -480,11 +626,7 @@ void App::MainLoop() {
 		}
 		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 		applyOverlayLevel(audio_level);
-
-		if (m_water_surface != nullptr) {
-			overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
-			    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
-		}
+		update_water_and_floaters(water_audio_level);
 
 		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
 			overlay_ctx.show_control_panel = !overlay_ctx.show_control_panel;
@@ -503,12 +645,7 @@ void App::MainLoop() {
 			}
 			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 			applyOverlayLevel(audio_level);
-
-			if (m_water_surface != nullptr) {
-				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
-				    overlay_ctx.controls.water, updated_water_audio_level, time_seconds,
-				    delta_time);
-			}
+			update_water_and_floaters(updated_water_audio_level);
 		}
 
 		if (overlay_ctx.controls.reset_water_requested) {
@@ -516,6 +653,13 @@ void App::MainLoop() {
 				m_water_surface->requestReset();
 			}
 			overlay_ctx.controls.reset_water_requested = false;
+		}
+
+		if (overlay_ctx.controls.reset_objects_requested) {
+			if (m_water_surface != nullptr) {
+				m_water_surface->requestObjectReset();
+			}
+			overlay_ctx.controls.reset_objects_requested = false;
 		}
 
 		if (overlay_ctx.controls.show_overlay) {
@@ -529,9 +673,14 @@ void App::MainLoop() {
 		check_vk_result(vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight));
 
 		uint32_t image_index = 0;
-		check_vk_result(vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain,
-		                                      UINT64_MAX, sync_ctx.image_available, VK_NULL_HANDLE,
-		                                      &image_index));
+		const VkResult acquire_result =
+		    vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain, UINT64_MAX,
+		                          sync_ctx.image_available, VK_NULL_HANDLE, &image_index);
+		if (isSwapchainRecreationResult(acquire_result)) {
+			recreateSwapchainResources();
+			continue;
+		}
+		check_vk_result(acquire_result);
 
 		check_vk_result(vkResetCommandBuffer(command_ctx.command_buffer, 0));
 
@@ -564,7 +713,9 @@ void App::MainLoop() {
 		VkImageBlit blit{};
 		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.srcOffsets[0]  = {0, 0, 0};
-		blit.srcOffsets[1]  = {(int32_t) m_window->width(), (int32_t) m_window->height(), 1};
+		const VkExtent2D water_extent = m_water_surface->outputExtent();
+		blit.srcOffsets[1]            = {static_cast<int32_t>(water_extent.width),
+		                                 static_cast<int32_t>(water_extent.height), 1};
 		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.dstOffsets[0]  = {0, 0, 0};
 		blit.dstOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.swapchain.extent.width),
@@ -572,7 +723,7 @@ void App::MainLoop() {
 
 		vkCmdBlitImage(command_ctx.command_buffer, m_water_surface->outputImage(),
 		               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchain_ctx.images[image_index],
-		               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+		               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
 		VkImageMemoryBarrier overlay_barrier{};
 		overlay_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -626,7 +777,12 @@ void App::MainLoop() {
 		present_info.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
 		present_info.pImageIndices      = &image_index;
 
-		check_vk_result(vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info));
+		const VkResult present_result = vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info);
+		if (isSwapchainRecreationResult(present_result)) {
+			recreateSwapchainResources();
+			continue;
+		}
+		check_vk_result(present_result);
 		swapchain_ctx.image_initialized[image_index] = true;
 	}
 }
