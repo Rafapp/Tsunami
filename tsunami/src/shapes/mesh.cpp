@@ -39,7 +39,7 @@ static glm::mat4 ai_to_glm(const aiMatrix4x4& m) {
 }
 
 static std::string build_gltf_mesh_name(const aiNode* node, const aiMesh* ai_mesh,
-                                        unsigned int  mesh_idx) {
+                                        unsigned int mesh_idx) {
 	const std::string node_name = (node != nullptr) ? node->mName.C_Str() : "";
 	const std::string mesh_name = (ai_mesh != nullptr) ? ai_mesh->mName.C_Str() : "";
 
@@ -125,8 +125,10 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		float     ior                = 1.5f;
 		float     transmission       = 0.f;
 
+		const aiMaterial* mat = nullptr;
+
 		if (scene->HasMaterials() && ai_mesh->mMaterialIndex < scene->mNumMaterials) {
-			const aiMaterial* mat = scene->mMaterials[ai_mesh->mMaterialIndex];
+			mat = scene->mMaterials[ai_mesh->mMaterialIndex];
 
 			aiColor4D base_color;
 			if (mat->Get(AI_MATKEY_BASE_COLOR, base_color) == AI_SUCCESS)
@@ -154,7 +156,10 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		    .ior(ior)
 		    .transmission(transmission);
 
-		// --- Transform from node tree ---
+		// Transmission stuff
+		material->m_gpu.transmission_depth = 0.f;
+		material->m_gpu.transmission_color =
+		    glm::vec4(albedo, 1.f);        // default to albedo if no transmission color provided
 		glm::mat4 glm_transform = ai_to_glm(world);
 
 		Transform transform{};
