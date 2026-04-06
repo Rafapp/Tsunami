@@ -28,7 +28,7 @@ struct PushConstants {
     int    selected_mesh_index;
     uint   outline_width;
     int    debug_view_mode;
-    uint   _pad0;
+    uint   stage;   // 0 = visibility pass, 1 = path trace selected object
     uint   _pad1;
     uint   _pad2;
     float4 outline_color;
@@ -540,23 +540,52 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     output_image.GetDimensions(dims.x, dims.y);
     if (any(pixel >= dims)) return;
 
-    RNG rng = RNG::make(pixel, push.frame);
-    int visible_object_id = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
-    object_id_image[pixel] = visible_object_id;
+    // ── Stage 0: visibility pass ─────────────────────────────────────────────
+    // Fire a primary ray for every pixel and record which object it hit.
+    // This pass only runs when the camera changes; results are cached in
+    // object_id_image for use by subsequent stage-1 dispatches.
+    if (push.stage == 0) {
+        object_id_image[pixel] = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
+        return;
+    }
 
-    static const int SPP = 1;
+    // ── Stages 1 & 2: path trace ────────────────────────────────────────────
+    int visible_object_id = object_id_image[pixel];
+
+    // Debug view (stage 2 only): show object-ID colors for all pixels.
+    // Stage 1 is a no-op in this mode so the full screen is written once.
+    if (push.debug_view_mode == 1) {
+        if (push.stage == 1) return;
+        float3 display = debugColorForObjectId(visible_object_id);
+        if (isSelectionOutline(pixel, dims, visible_object_id)) {
+            display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
+        }
+        output_image[pixel] = float4(display, 1.f);
+        return;
+    }
+
+    // Determine whether this pixel belongs to the selected object.
+    bool is_selected_pixel = (push.selected_mesh_index >= 0) &&
+                              (visible_object_id == push.selected_mesh_index);
+
+    // Stage 1 handles only the selected object's pixels.
+    // Stage 2 handles everything else (the rest of the scene).
+    if (push.stage == 1 && !is_selected_pixel) return;
+    if (push.stage == 2 &&  is_selected_pixel) return;
+
+    // Path trace this pixel and accumulate into the running average.
+    RNG rng = RNG::make(pixel, push.frame);
     float3 colorAccum = float3(0, 0, 0);
+    static const int SPP = 1;
     for (int i = 0; i < SPP; ++i) {
         float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
         colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
     }
     float3 color = colorAccum / float(SPP);
 
-    // Temporal accumulation — blend current frame into running average
     float3 prev  = accum_image[pixel].rgb;
     float  blend = 1.f / float(push.frame + 1u);
     float3 accum = lerp(prev, color, blend);
-
     accum_image[pixel] = float4(accum, 1.f);
 
     float3 display = (push.debug_view_mode == 1) ? debugColorForObjectId(visible_object_id) : accum;

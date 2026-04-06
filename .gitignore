@@ -8,8 +8,13 @@ vendors/
 vendors/*
 vendors/slang-bin/
 
+<<<<<<< Updated upstream
 # scene files
 resources
+=======
+# Resource
+resources/
+>>>>>>> Stashed changes
 resources/*
 
 # compiled shaders
