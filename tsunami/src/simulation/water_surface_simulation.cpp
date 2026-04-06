@@ -430,8 +430,8 @@ const WaterSurfaceDiagnostics&
 			if (cadence_pulse || attack_pulse) {
 				const float energy = clamp01(speed_drive * 0.80f + attack * 2.00f);
 				impulse_strength   = std::max(settings.base_impulse, 0.0f) +
-				                     energy * std::max(settings.audio_impulse_scale, 0.0f) *
-				                         (0.70f + speed_drive * 0.90f);
+				                   energy * std::max(settings.audio_impulse_scale, 0.0f) *
+				                       (0.70f + speed_drive * 0.90f);
 			}
 		} else {
 			m_emission_accumulator = 0.0f;
@@ -479,12 +479,12 @@ const WaterSurfaceDiagnostics&
 	m_diagnostics.dispatch_groups_y   = (m_output_extent.height + 15) / 16;
 	m_diagnostics.history_image_count = static_cast<uint32_t>(std::size(m_height_images));
 	m_diagnostics.sample_count        = static_cast<uint64_t>(m_output_extent.width) *
-	                                    static_cast<uint64_t>(m_output_extent.height);
-	m_diagnostics.cell_count          = m_output_extent.width > 0 && m_output_extent.height > 0 ?
-	                                        static_cast<uint64_t>(m_output_extent.width - 1) *
-	                                            static_cast<uint64_t>(m_output_extent.height - 1) :
-	                                        0ull;
-	m_diagnostics.triangle_count      = m_diagnostics.cell_count * 2ull;
+	                             static_cast<uint64_t>(m_output_extent.height);
+	m_diagnostics.cell_count     = m_output_extent.width > 0 && m_output_extent.height > 0 ?
+	                                   static_cast<uint64_t>(m_output_extent.width - 1) *
+                                       static_cast<uint64_t>(m_output_extent.height - 1) :
+	                                   0ull;
+	m_diagnostics.triangle_count = m_diagnostics.cell_count * 2ull;
 
 	m_water_push_constants->time_seconds          = time_seconds;
 	m_water_push_constants->delta_time            = clamped_delta_time;
