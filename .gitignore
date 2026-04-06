@@ -8,7 +8,9 @@ vendors/
 vendors/*
 vendors/slang-bin/
 
-
+# scene files
+resources
+resources/*
 
 # compiled shaders
 *.spv

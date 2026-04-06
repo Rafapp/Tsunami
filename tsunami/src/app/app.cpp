@@ -133,7 +133,8 @@ struct RenderTargetContext {
 	VkImage                            dummy_image_3d;
 	VmaAllocation                      dummy_image_3d_alloc;
 	VkImageView                        dummy_image_3d_view;
-	VkSampler                          sampler = VK_NULL_HANDLE;
+	VkSampler                          lut_sampler      = VK_NULL_HANDLE;
+	VkSampler                          material_sampler = VK_NULL_HANDLE;
 	std::array<LutTexture2D, NUM_LUTS> lut_textures_2d;
 	std::array<LutTexture3D, NUM_LUTS> lut_textures_3d;
 	std::vector<VkImage>               mat_images;
@@ -1318,7 +1319,7 @@ App::App() {
 	m_scene           = std::make_unique<Scene>();
 	m_scene->m_camera = Camera(glm::vec3(0.f, 20.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
-	m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF/ABeautifulGame.gltf");
+	m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
@@ -1618,7 +1619,7 @@ App::App() {
 	//   0  = output image            STORAGE_IMAGE
 	//   1  = accum image             STORAGE_IMAGE
 	//   2  = camera buffer           STORAGE_BUFFER
-	//   3  = shared sampler          SAMPLER (LUTs + material textures)
+	//   3  = lut sampler             SAMPLER
 	//   4  = materials buffer        STORAGE_BUFFER
 	//   5  = TLAS                    ACCELERATION_STRUCTURE
 	//   6  = meshes buffer           STORAGE_BUFFER
@@ -1640,6 +1641,7 @@ App::App() {
 		    make_binding(9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, NUM_LUTS),
 		    make_binding(10, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, NUM_LUTS),
 		    make_binding(11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MATERIAL_TEXTURES),
+		    make_binding(12, VK_DESCRIPTOR_TYPE_SAMPLER),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -1656,7 +1658,7 @@ App::App() {
 		std::vector<VkDescriptorPoolSize> ps = {
 		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
 		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
-		    {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+		    {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
 		    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * NUM_LUTS + MAX_MATERIAL_TEXTURES},
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
@@ -1679,7 +1681,7 @@ App::App() {
 			throw std::runtime_error("failed to allocate descriptor set");
 		std::cout << "[INFO] Descriptor pool+set allocated\n";
 	}
-	// Shared linear-clamp sampler
+	// Clamp sampler for LUTs.
 	{
 		VkSamplerCreateInfo si{};
 		si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1688,9 +1690,23 @@ App::App() {
 		si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		si.maxLod                                           = VK_LOD_CLAMP_NONE;
-		if (vkCreateSampler(vulkan_ctx.device, &si, nullptr, &render_target_ctx.sampler) !=
+		if (vkCreateSampler(vulkan_ctx.device, &si, nullptr, &render_target_ctx.lut_sampler) !=
 		    VK_SUCCESS)
-			throw std::runtime_error("failed to create sampler");
+			throw std::runtime_error("failed to create LUT sampler");
+	}
+	// Repeat sampler for material textures. The glTF asset relies on tiled UVs
+	// outside [0, 1], and glTF defaults wrap those textures with REPEAT.
+	{
+		VkSamplerCreateInfo si{};
+		si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		si.magFilter    = VK_FILTER_LINEAR;
+		si.minFilter    = VK_FILTER_LINEAR;
+		si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		si.maxLod                                           = VK_LOD_CLAMP_NONE;
+		if (vkCreateSampler(vulkan_ctx.device, &si, nullptr, &render_target_ctx.material_sampler) !=
+		    VK_SUCCESS)
+			throw std::runtime_error("failed to create material sampler");
 	}
 	// Write descriptors
 	{
@@ -1716,7 +1732,7 @@ App::App() {
 		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &cb});
 		// 3 — sampler
 		VkDescriptorImageInfo si2{};
-		si2.sampler = render_target_ctx.sampler;
+		si2.sampler = render_target_ctx.lut_sampler;
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 3, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLER,
 		                  &si2});
@@ -1814,6 +1830,11 @@ App::App() {
 			w.pImageInfo      = mt.data();
 			writes.push_back(w);
 		}
+		VkDescriptorImageInfo material_sampler_info{};
+		material_sampler_info.sampler = render_target_ctx.material_sampler;
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 12, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLER,
+		                  &material_sampler_info});
 		vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t) writes.size(), writes.data(), 0,
 		                       nullptr);
 		std::cout << "[INFO] Descriptor sets updated\n";
