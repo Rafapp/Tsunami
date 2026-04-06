@@ -23,15 +23,23 @@ float4 openpbr_sample_3d_impl(int lut_id, float3 uvw) {
 
 // ─── Push constants ───────────────────────────────────────────────────────────
 struct PushConstants {
-    uint   frame;
+    uint   accumulation_frame;
+    uint   rng_seed;
     uint   material_count;
-    int    selected_mesh_index;
+    int    selected_object_id;
     uint   outline_width;
     int    debug_view_mode;
-    uint   _pad0;
-    uint   _pad1;
-    uint   _pad2;
+    int    water_object_id;
+    uint   water_enabled;
+    int    water_material_index;
+    float  water_height_to_world_scale;
+    float  _pad0;
+    float  _pad1;
     float4 outline_color;
+    float4 water_center_trace_half_height;
+    float4 water_axis_u_half_extent;
+    float4 water_axis_v_half_extent;
+    float4 water_normal;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
@@ -46,6 +54,7 @@ struct PushConstants {
 [[vk::binding(8,  0)]] StructuredBuffer<uint>          indices_buf;
 [[vk::binding(11, 0)]] Texture2D<float4>               material_textures[MAX_MAT_TEXTURES];
 [[vk::binding(13, 0)]] RWTexture2D<int>               object_id_image;
+[[vk::binding(14, 0)]] RWTexture2D<float>             water_height_image;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -152,6 +161,7 @@ static const float  g_sun_intensity = 0.5f;   // tweak for desired exposure
 struct Ray { float3 origin; float3 dir; };
 struct Hit {
     float  t;
+    float3 position;
     float3 normal;
     float3 tangent;
     float3 bitangent;
@@ -180,6 +190,235 @@ struct RNG {
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 struct VertexAttribs { float3 normal; float2 uv; float4 tangent;};
+
+bool intersectAABB(float3 ray_origin, float3 ray_dir, float3 box_min, float3 box_max,
+                   out float t_min, out float t_max) {
+    float3 inv_dir = 1.0f / ray_dir;
+    float3 t0 = (box_min - ray_origin) * inv_dir;
+    float3 t1 = (box_max - ray_origin) * inv_dir;
+
+    float3 t_small = min(t0, t1);
+    float3 t_large = max(t0, t1);
+
+    t_min = max(max(t_small.x, t_small.y), t_small.z);
+    t_max = min(min(t_large.x, t_large.y), t_large.z);
+    return t_max >= max(t_min, 0.0f);
+}
+
+bool waterEnabled() {
+    return push.water_enabled != 0 &&
+           push.water_axis_u_half_extent.w > 1e-4f &&
+           push.water_axis_v_half_extent.w > 1e-4f &&
+           push.water_height_to_world_scale > 1e-5f;
+}
+
+float3 worldToWater(float3 world_pos) {
+    float3 delta = world_pos - push.water_center_trace_half_height.xyz;
+    return float3(
+        dot(delta, push.water_axis_u_half_extent.xyz) / max(push.water_axis_u_half_extent.w, 1e-4f),
+        dot(delta, push.water_normal.xyz),
+        dot(delta, push.water_axis_v_half_extent.xyz) / max(push.water_axis_v_half_extent.w, 1e-4f));
+}
+
+float3 waterToWorld(float3 water_pos) {
+    return push.water_center_trace_half_height.xyz +
+           push.water_axis_u_half_extent.xyz * (water_pos.x * push.water_axis_u_half_extent.w) +
+           push.water_normal.xyz * water_pos.y +
+           push.water_axis_v_half_extent.xyz * (water_pos.z * push.water_axis_v_half_extent.w);
+}
+
+float readWaterHeightRaw(int2 coord, int2 dims) {
+    return water_height_image[clamp(coord, int2(0, 0), dims - 1)];
+}
+
+float sampleWaterHeightRaw(float2 uv, int2 dims) {
+    uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
+
+    float2 texel = uv * float2(dims - 1);
+    int2 p0 = int2(floor(texel));
+    int2 p1 = min(p0 + int2(1, 1), dims - 1);
+    float2 f = texel - float2(p0);
+
+    float h00 = readWaterHeightRaw(p0, dims);
+    float h10 = readWaterHeightRaw(int2(p1.x, p0.y), dims);
+    float h01 = readWaterHeightRaw(int2(p0.x, p1.y), dims);
+    float h11 = readWaterHeightRaw(p1, dims);
+
+    return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+}
+
+float sampleWaterHeight(float2 water_xz, int2 dims) {
+    float2 uv = water_xz * 0.5f + 0.5f;
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
+        return -1.0e6f;
+    }
+
+    return sampleWaterHeightRaw(uv, dims) * push.water_height_to_world_scale;
+}
+
+float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
+    float dx = 2.0f / max(float(dims.x), 1.0f);
+    float dz = 2.0f / max(float(dims.y), 1.0f);
+
+    float hL = sampleWaterHeight(water_xz - float2(dx, 0.0f), dims);
+    float hR = sampleWaterHeight(water_xz + float2(dx, 0.0f), dims);
+    float hD = sampleWaterHeight(water_xz - float2(0.0f, dz), dims);
+    float hU = sampleWaterHeight(water_xz + float2(0.0f, dz), dims);
+
+    float3 pL = waterToWorld(float3(water_xz.x - dx, hL, water_xz.y));
+    float3 pR = waterToWorld(float3(water_xz.x + dx, hR, water_xz.y));
+    float3 pD = waterToWorld(float3(water_xz.x, hD, water_xz.y - dz));
+    float3 pU = waterToWorld(float3(water_xz.x, hU, water_xz.y + dz));
+
+    float3 normal = normalize(cross(pR - pL, pU - pD));
+    if (dot(normal, push.water_normal.xyz) < 0.0f) {
+        normal = -normal;
+    }
+    return normal;
+}
+
+GPUMaterial makeWaterMaterial() {
+    GPUMaterial water = (GPUMaterial)0;
+    water.base_color = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    water.base_metalness = 0.0f;
+    water.base_diffuse_roughness = 0.0f;
+    water.specular_color = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    water.specular_roughness = 0.0125f;
+    water.specular_ior = 1.333f;
+    water.specular_anisotropy = 0.0f;
+    water.transmission_weight = 1.0f;
+    water.transmission_depth = 2.2f;
+    water.transmission_scatter_anisotropy = 0.0f;
+    water.geometry_opacity = 1.0f;
+    water.transmission_color = float4(0.92f, 0.97f, 1.0f, 1.0f);
+    water.transmission_scatter = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.emission_color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.emission_luminance = 0.0f;
+    water.geometry_thin_walled = 0.0f;
+    water.transmission_dispersion_scale = 0.0f;
+    water.transmission_dispersion_abbe_number = 0.0f;
+    water.coat_weight = 0.0f;
+    water.coat_roughness = 0.0f;
+    water.coat_ior = 1.0f;
+    water.coat_color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.fuzz_weight = 0.0f;
+    water.fuzz_roughness = 0.0f;
+    water.fuzz_color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.thin_film_weight = 0.0f;
+    water.thin_film_ior = 1.0f;
+    water.thin_film_thickness = 0.0f;
+    water.albedo_tex_index = NO_TEXTURE;
+    water.normal_tex_index = NO_TEXTURE;
+    water.roughness_tex_index = NO_TEXTURE;
+    water.emissive_tex_index = NO_TEXTURE;
+    return water;
+}
+
+GPUMaterial loadWaterMaterial() {
+    GPUMaterial water = makeWaterMaterial();
+    if (push.water_material_index >= 0 &&
+        uint(push.water_material_index) < push.material_count) {
+        water = materials_buf[NonUniformResourceIndex(push.water_material_index)];
+    }
+
+    // The UI exposes "Base tint" but not a separate transmission tint, so use
+    // the base color as the visible water tint for both opaque and transmissive looks.
+    water.base_color.a = max(water.base_color.a, 1.0f);
+    water.transmission_color.rgb *= water.base_color.rgb;
+    return water;
+}
+
+bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
+    hit = (Hit)0;
+    mat = (GPUMaterial)0;
+
+    if (!waterEnabled()) return false;
+
+    uint width = 0;
+    uint height = 0;
+    water_height_image.GetDimensions(width, height);
+    int2 dims = int2(int(width), int(height));
+    if (dims.x <= 1 || dims.y <= 1) return false;
+
+    float3 local_origin = worldToWater(ray.origin);
+    float3 local_dir = float3(
+        dot(ray.dir, push.water_axis_u_half_extent.xyz) / max(push.water_axis_u_half_extent.w, 1e-4f),
+        dot(ray.dir, push.water_normal.xyz),
+        dot(ray.dir, push.water_axis_v_half_extent.xyz) / max(push.water_axis_v_half_extent.w, 1e-4f));
+
+    float t_min;
+    float t_max;
+    if (!intersectAABB(local_origin, local_dir,
+                       float3(-1.04f, -push.water_center_trace_half_height.w, -1.04f),
+                       float3(1.04f, push.water_center_trace_half_height.w, 1.04f),
+                       t_min, t_max)) {
+        return false;
+    }
+
+    t_min = max(t_min, T_MIN);
+
+    float prev_t = t_min;
+    float3 prev_pos = ray.origin + ray.dir * prev_t;
+    float3 prev_local = worldToWater(prev_pos);
+    float prev_delta = prev_local.y - sampleWaterHeight(prev_local.xz, dims);
+
+    [loop]
+    for (int step = 1; step <= 80; ++step) {
+        float t = lerp(t_min, t_max, float(step) / 80.0f);
+        float3 pos = ray.origin + ray.dir * t;
+        float3 local = worldToWater(pos);
+        float delta = local.y - sampleWaterHeight(local.xz, dims);
+
+        if (prev_delta == 0.0f || delta == 0.0f || prev_delta * delta <= 0.0f) {
+            float lo = prev_t;
+            float hi = t;
+            float lo_delta = prev_delta;
+
+            [unroll]
+            for (int refine = 0; refine < 6; ++refine) {
+                float mid = 0.5f * (lo + hi);
+                float3 mid_local = worldToWater(ray.origin + ray.dir * mid);
+                float mid_delta = mid_local.y - sampleWaterHeight(mid_local.xz, dims);
+                if (lo_delta == 0.0f || lo_delta * mid_delta <= 0.0f) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                    lo_delta = mid_delta;
+                }
+            }
+
+            hit.t = 0.5f * (lo + hi);
+            float3 hit_local = worldToWater(ray.origin + ray.dir * hit.t);
+            hit_local.y = sampleWaterHeight(hit_local.xz, dims);
+            hit.position = waterToWorld(hit_local);
+
+            float3 geometric_normal = waterSurfaceNormal(hit_local.xz, dims);
+            float3 tangent = normalize(
+                push.water_axis_u_half_extent.xyz -
+                geometric_normal * dot(geometric_normal, push.water_axis_u_half_extent.xyz));
+            float3 bitangent = normalize(cross(geometric_normal, tangent));
+            if (dot(bitangent, push.water_axis_v_half_extent.xyz) < 0.0f) {
+                bitangent = -bitangent;
+            }
+
+            bool front_face = dot(ray.dir, geometric_normal) < 0.0f;
+            hit.normal = front_face ? geometric_normal : -geometric_normal;
+            hit.tangent = tangent;
+            hit.bitangent = bitangent;
+            hit.uv = hit_local.xz * 0.5f + 0.5f;
+            hit.front_face = front_face;
+            hit.matIndex = push.water_material_index;
+            hit.instanceID = push.water_object_id;
+            mat = loadWaterMaterial();
+            return true;
+        }
+
+        prev_t = t;
+        prev_delta = delta;
+    }
+
+    return false;
+}
 
 VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     uint voff = (uint)meshes_buf[NonUniformResourceIndex(instanceID)].vertexOffset;
@@ -216,7 +455,7 @@ bool is_occluded(float3 origin, float3 normal, float3 dir, float tmax) {
     return q.CommittedStatus() != COMMITTED_NOTHING;
 }
 
-int traceVisibleInstance(Ray ray) {
+bool traceVisibleMeshHit(Ray ray, out float hit_t, out int object_id) {
     RayDesc rd;
     rd.Origin    = ray.origin;
     rd.Direction = ray.dir;
@@ -231,12 +470,35 @@ int traceVisibleInstance(Ray ray) {
             q.CommitNonOpaqueTriangleHit();
     }
 
-    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return -1;
-    return int(q.CommittedInstanceID());
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+        hit_t = 0.0f;
+        object_id = -1;
+        return false;
+    }
+
+    hit_t = q.CommittedRayT();
+    object_id = int(q.CommittedInstanceID());
+    return true;
+}
+
+int traceVisibleObjectId(Ray ray) {
+    float mesh_hit_t = 0.0f;
+    int mesh_object_id = -1;
+    bool hit_mesh = traceVisibleMeshHit(ray, mesh_hit_t, mesh_object_id);
+
+    Hit water_hit;
+    GPUMaterial water_mat;
+    bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
+
+    if (hit_water && (!hit_mesh || water_hit.t < mesh_hit_t)) {
+        return water_hit.instanceID;
+    }
+
+    return hit_mesh ? mesh_object_id : -1;
 }
 
 // ─── Scene intersection ───────────────────────────────────────────────────────
-bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
+bool intersectMeshScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     hit = (Hit)0;
     mat = (GPUMaterial)0;
 
@@ -264,6 +526,7 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 
     VertexAttribs attr = fetchAttribs(instID, primID, bary);
 
+    hit.position   = ray.origin + hit.t * ray.dir;
     hit.uv         = attr.uv;
     hit.front_face = frontFace;
     hit.instanceID = int(instID);
@@ -295,6 +558,32 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     hit.tangent   = T;
     hit.bitangent = B;
     return true;
+}
+
+bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
+    Hit mesh_hit;
+    Hit water_hit;
+    GPUMaterial mesh_mat;
+    GPUMaterial water_mat;
+
+    bool hit_mesh = intersectMeshScene(ray, mesh_hit, mesh_mat);
+    bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
+
+    if (hit_water && (!hit_mesh || water_hit.t < mesh_hit.t)) {
+        hit = water_hit;
+        mat = water_mat;
+        return true;
+    }
+
+    if (hit_mesh) {
+        hit = mesh_hit;
+        mat = mesh_mat;
+        return true;
+    }
+
+    hit = (Hit)0;
+    mat = (GPUMaterial)0;
+    return false;
 }
 
 // ─── Texture sampling ─────────────────────────────────────────────────────────
@@ -364,9 +653,10 @@ float3 skyColor(float3 dir) {
 }
 
 // ─── Path tracing ─────────────────────────────────────────────────────────────
-float3 tracePath(Ray ray, inout RNG rng) {
+float3 tracePath(Ray ray, inout RNG rng, out bool primary_visible_water) {
     float3 throughput = float3(1, 1, 1);
     float3 radiance   = float3(0, 0, 0);
+    primary_visible_water = false;
 
     for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce) {
         Hit         hit;
@@ -378,12 +668,16 @@ float3 tracePath(Ray ray, inout RNG rng) {
             break;
         }
 
+        if (bounce == 0 && hit.instanceID == push.water_object_id) {
+            primary_visible_water = true;
+        }
+
         // ── Emission ──
         float3 emissive_sample =
             sample_tex(mat.emissive_tex_index, hit.uv, float4(1.f, 1.f, 1.f, 1.f)).rgb;
         radiance += throughput * emissive_sample * mat.emission_color.rgb * mat.emission_luminance;
 
-        float3 hitPos   = ray.origin + hit.t * ray.dir;
+        float3 hitPos   = hit.position;
         float3 view_dir = -ray.dir;
 
         // Pass the unflipped geometric normal to OpenPBR so it can detect back-face
@@ -478,8 +772,8 @@ Ray makeRay(uint2 pixel, uint2 dims, float2 jitter) {
 }
 
 bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
-    if (push.selected_mesh_index < 0) return false;
-    if (center_instance != push.selected_mesh_index) return false;
+    if (push.selected_object_id < 0) return false;
+    if (center_instance != push.selected_object_id) return false;
 
     const int outline_width = max(int(push.outline_width), 1);
     const int2 dims_i = int2(dims.x, dims.y);
@@ -499,8 +793,8 @@ bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
         }
 
         int neighbor_instance =
-            traceVisibleInstance(makeRay(uint2(neighbor.x, neighbor.y), dims, float2(0.5f, 0.5f)));
-        if (neighbor_instance != push.selected_mesh_index) {
+            traceVisibleObjectId(makeRay(uint2(neighbor.x, neighbor.y), dims, float2(0.5f, 0.5f)));
+        if (neighbor_instance != push.selected_object_id) {
             return true;
         }
     }
@@ -540,21 +834,24 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     output_image.GetDimensions(dims.x, dims.y);
     if (any(pixel >= dims)) return;
 
-    RNG rng = RNG::make(pixel, push.frame);
-    int visible_object_id = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
+    RNG rng = RNG::make(pixel, push.rng_seed);
+    int visible_object_id = traceVisibleObjectId(makeRay(pixel, dims, float2(0.5f, 0.5f)));
     object_id_image[pixel] = visible_object_id;
 
     static const int SPP = 1;
     float3 colorAccum = float3(0, 0, 0);
+    bool primary_visible_water = false;
     for (int i = 0; i < SPP; ++i) {
         float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
-        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
+        bool sample_hits_water = false;
+        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng, sample_hits_water);
+        primary_visible_water = primary_visible_water || sample_hits_water;
     }
     float3 color = colorAccum / float(SPP);
 
     // Temporal accumulation — blend current frame into running average
     float3 prev  = accum_image[pixel].rgb;
-    float  blend = 1.f / float(push.frame + 1u);
+    float  blend = primary_visible_water ? 1.f : 1.f / float(push.accumulation_frame + 1u);
     float3 accum = lerp(prev, color, blend);
 
     accum_image[pixel] = float4(accum, 1.f);

@@ -319,8 +319,10 @@ WaterSurfaceSimulation::WaterSurfaceSimulation(const WaterSurfaceCreateInfo& cre
 		    "water surface simulation requires a valid Vulkan device and extent");
 	}
 
-	m_floating_object_count = static_cast<uint32_t>(kDefaultFloatingObjectSettings.size());
-	m_floating_object_interaction_count = m_floating_object_count;
+	// Floating water props were removed from the app, so keep the buffers
+	// allocated but disable their simulation entirely to avoid phantom wakes.
+	m_floating_object_count             = 0;
+	m_floating_object_interaction_count = 0;
 	createImages();
 	createDescriptors();
 	createPipeline();
@@ -527,19 +529,18 @@ void WaterSurfaceSimulation::requestObjectReset() {
 }
 
 void WaterSurfaceSimulation::initializeFloatingObjects() {
+	std::array<FloatingObjectSettingsGpu, kMaxFloatingObjects> initial_settings{};
 	void* mapped_memory = nullptr;
 	if (vmaMapMemory(m_allocator, m_floating_object_settings_allocation, &mapped_memory) !=
 	    VK_SUCCESS) {
 		throw std::runtime_error("failed to map floating object settings buffer");
 	}
-	std::memcpy(mapped_memory, kDefaultFloatingObjectSettings.data(),
-	            sizeof(kDefaultFloatingObjectSettings));
+	std::memcpy(mapped_memory, initial_settings.data(), sizeof(initial_settings));
 	vmaUnmapMemory(m_allocator, m_floating_object_settings_allocation);
 
 	std::array<FloatingObjectStateGpu, kMaxFloatingObjects> initial_states{};
-	for (uint32_t index = 0; index < m_floating_object_count; ++index) {
-		initial_states[index] =
-		    makeInitialFloatingObjectState(kDefaultFloatingObjectSettings[index]);
+	for (uint32_t index = 0; index < static_cast<uint32_t>(initial_states.size()); ++index) {
+		initial_states[index] = makeInitialFloatingObjectState(initial_settings[index]);
 	}
 
 	if (vmaMapMemory(m_allocator, m_floating_object_states_allocation, &mapped_memory) !=
@@ -628,21 +629,23 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 		                     0, nullptr);
 	}
 
-	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_object_pipeline);
-	vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-	                        m_object_pipeline_layout, 0, 1,
-	                        &m_object_descriptor_sets[m_active_descriptor_set_index], 0, nullptr);
-	vkCmdPushConstants(command_buffer, m_object_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-	                   sizeof(FloatingObjectPushConstants), m_object_push_constants);
-	vkCmdDispatch(command_buffer, 1, 1, 1);
+	if (m_floating_object_count > 0u) {
+		vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_object_pipeline);
+		vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+		                        m_object_pipeline_layout, 0, 1,
+		                        &m_object_descriptor_sets[m_active_descriptor_set_index], 0, nullptr);
+		vkCmdPushConstants(command_buffer, m_object_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+		                   sizeof(FloatingObjectPushConstants), m_object_push_constants);
+		vkCmdDispatch(command_buffer, 1, 1, 1);
 
-	VkMemoryBarrier object_barrier{};
-	object_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-	object_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-	object_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-	vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &object_barrier, 0, nullptr, 0,
-	                     nullptr);
+		VkMemoryBarrier object_barrier{};
+		object_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+		object_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		object_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+		vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &object_barrier, 0,
+		                     nullptr, 0, nullptr);
+	}
 
 	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_water_pipeline);
 	vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_water_pipeline_layout,
@@ -656,6 +659,23 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 	const uint32_t group_x = (m_output_extent.width + 15) / 16;
 	const uint32_t group_y = (m_output_extent.height + 15) / 16;
 	vkCmdDispatch(command_buffer, group_x, group_y, 1);
+
+	const uint32_t next_descriptor_set_index = 1u - m_active_descriptor_set_index;
+
+	VkImageMemoryBarrier height_read_barrier{};
+	height_read_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	height_read_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+	height_read_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+	height_read_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	height_read_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	height_read_barrier.image               = m_height_images[next_descriptor_set_index];
+	height_read_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+	height_read_barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+	height_read_barrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+
+	vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+	                     &height_read_barrier);
 
 	VkImageMemoryBarrier transfer_barrier{};
 	transfer_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -674,7 +694,7 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 
 	m_height_layout_initialized              = true;
 	m_output_in_transfer_src                 = true;
-	m_active_descriptor_set_index            = 1 - m_active_descriptor_set_index;
+	m_active_descriptor_set_index            = next_descriptor_set_index;
 	m_reset_objects_requested                = false;
 	m_object_push_constants->reset_requested = 0;
 }

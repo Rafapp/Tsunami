@@ -43,6 +43,12 @@ class WaterSurfaceSimulation {
 	VkExtent2D outputExtent() const {
 		return m_output_extent;
 	}
+	VkImageView currentHeightImageView() const {
+		return m_height_image_views[m_active_descriptor_set_index];
+	}
+	float heightToWorldScale() const {
+		return m_height_to_world_scale;
+	}
 
   private:
 	void createImages();

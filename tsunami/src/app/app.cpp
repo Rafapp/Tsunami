@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -197,18 +198,26 @@ enum class RenderDebugViewMode : int {
 };
 
 struct PathTracerPushConstants {
-	uint32_t  frame               = 0;
-	uint32_t  material_count      = 0;
-	int32_t   selected_mesh_index = -1;
-	uint32_t  outline_width       = 1;
-	int32_t   debug_view_mode     = static_cast<int32_t>(RenderDebugViewMode::Beauty);
-	uint32_t  _pad0               = 0;
-	uint32_t  _pad1               = 0;
-	uint32_t  _pad2               = 0;
-	glm::vec4 outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	uint32_t  accumulation_frame          = 0;
+	uint32_t  rng_seed                    = 0;
+	uint32_t  material_count              = 0;
+	int32_t   selected_object_id          = -1;
+	uint32_t  outline_width               = 1;
+	int32_t   debug_view_mode             = static_cast<int32_t>(RenderDebugViewMode::Beauty);
+	int32_t   water_object_id             = -1;
+	uint32_t  water_enabled               = 0;
+	int32_t   water_material_index        = -1;
+	float     water_height_to_world_scale = 1.0f;
+	float     _pad0                       = 0.0f;
+	float     _pad1                       = 0.0f;
+	glm::vec4 outline_color               = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	glm::vec4 water_center_trace_half_height = glm::vec4(0.0f);
+	glm::vec4 water_axis_u_half_extent       = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+	glm::vec4 water_axis_v_half_extent       = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+	glm::vec4 water_normal                   = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 48);
+static_assert(sizeof(PathTracerPushConstants) == 128);
 
 struct ObjectIdEntry {
 	int         object_id = -1;
@@ -218,7 +227,7 @@ struct ObjectIdEntry {
 };
 
 struct SelectionContext {
-	int                        selected_mesh_index = -1;
+	int                        selected_object_id = -1;
 	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
 	VoiceDrivenParameter       voice_parameter     = VoiceDrivenParameter::BaseTint;
 	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::Beauty;
@@ -236,6 +245,78 @@ struct SelectionPanelResult {
 	bool selection_changed = false;
 	bool material_changed  = false;
 };
+
+struct WaterSurfaceRenderPlacement {
+	bool      enabled           = false;
+	int32_t   mesh_index        = -1;
+	glm::vec3 center            = glm::vec3(0.0f);
+	float     trace_half_height = 0.45f;
+	glm::vec3 axis_u            = glm::vec3(1.0f, 0.0f, 0.0f);
+	float     half_extent_u     = 1.0f;
+	glm::vec3 axis_v            = glm::vec3(0.0f, 0.0f, 1.0f);
+	float     half_extent_v     = 1.0f;
+	glm::vec3 normal            = glm::vec3(0.0f, 1.0f, 0.0f);
+};
+
+WaterSurfaceRenderPlacement water_surface_render_ctx{};
+
+constexpr int              kRequestedPoolWaterMeshIndex      = 98;
+constexpr std::string_view kRequestedPoolWaterMeshName       = "Pool F.017 / Pool F";
+constexpr std::string_view kPoolWaterObjectDisplayName       = "Pool Water";
+constexpr float            kPoolWaterPlanarInsetWorld        = 0.08f;
+constexpr float            kPoolWaterSurfaceDepthInsetWorld  = 0.02f;
+constexpr float            kPoolWaterTraceHalfHeightWorld    = 0.45f;
+
+GPUMaterial makeDefaultWaterSurfaceMaterial() {
+	GPUMaterial water                = Material{}.pack();
+	water.base_color                 = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	water.base_metalness             = 0.0f;
+	water.base_diffuse_roughness     = 0.0f;
+	water.specular_color             = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	water.specular_roughness         = 0.0125f;
+	water.specular_ior               = 1.333f;
+	water.specular_anisotropy        = 0.0f;
+	water.transmission_weight        = 1.0f;
+	water.transmission_depth         = 2.2f;
+	water.transmission_scatter       = glm::vec4(0.0f);
+	water.transmission_color         = glm::vec4(0.92f, 0.97f, 1.0f, 1.0f);
+	water.emission_color             = glm::vec4(0.0f);
+	water.emission_luminance         = 0.0f;
+	water.geometry_thin_walled       = 0.0f;
+	water.transmission_dispersion_scale = 0.0f;
+	water.transmission_dispersion_abbe_number = 0.0f;
+	water.coat_weight                         = 0.0f;
+	water.coat_roughness                      = 0.0f;
+	water.coat_ior                            = 1.0f;
+	water.coat_color                          = glm::vec4(0.0f);
+	water.fuzz_weight                         = 0.0f;
+	water.fuzz_roughness                      = 0.0f;
+	water.fuzz_color                          = glm::vec4(0.0f);
+	water.thin_film_weight                    = 0.0f;
+	water.thin_film_ior                       = 1.0f;
+	water.thin_film_thickness                 = 0.0f;
+	water.albedo_tex_index                    = 0xFFFFFFFFu;
+	water.normal_tex_index                    = 0xFFFFFFFFu;
+	water.roughness_tex_index                 = 0xFFFFFFFFu;
+	water.emissive_tex_index                  = 0xFFFFFFFFu;
+	return water;
+}
+
+GPUMaterial water_surface_material = makeDefaultWaterSurfaceMaterial();
+
+int waterSurfaceObjectId(const Scene* scene) {
+	return (scene != nullptr && water_surface_render_ctx.enabled) ?
+	           static_cast<int>(scene->m_meshes.size()) :
+	           -1;
+}
+
+int waterSurfaceMaterialIndex(const Scene* scene) {
+	return waterSurfaceObjectId(scene);
+}
+
+bool isWaterSurfaceObjectId(const Scene* scene, int object_id) {
+	return object_id >= 0 && object_id == waterSurfaceObjectId(scene);
+}
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -439,6 +520,145 @@ void applyOverlayLevel(float value) {
 	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
 }
 
+int resolveWaterSurfaceMeshIndex(const Scene* scene) {
+	if (scene == nullptr) {
+		return -1;
+	}
+
+	const auto name_matches = [&](int mesh_index) {
+		return mesh_index >= 0 && mesh_index < static_cast<int>(scene->m_meshes.size()) &&
+		       scene->m_meshes[mesh_index] != nullptr &&
+		       scene->m_meshes[mesh_index]->m_name == kRequestedPoolWaterMeshName;
+	};
+
+	if (name_matches(kRequestedPoolWaterMeshIndex)) {
+		return kRequestedPoolWaterMeshIndex;
+	}
+
+	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
+		if (name_matches(mesh_index)) {
+			if (mesh_index != kRequestedPoolWaterMeshIndex) {
+				std::cout << "[WARN] Pool water mesh name matched object " << mesh_index
+				          << " instead of requested object " << kRequestedPoolWaterMeshIndex
+				          << "\n";
+			}
+			return mesh_index;
+		}
+	}
+
+	if (kRequestedPoolWaterMeshIndex >= 0 &&
+	    kRequestedPoolWaterMeshIndex < static_cast<int>(scene->m_meshes.size()) &&
+	    scene->m_meshes[kRequestedPoolWaterMeshIndex] != nullptr) {
+		std::cout << "[WARN] Falling back to requested pool water mesh index "
+		          << kRequestedPoolWaterMeshIndex << " with unexpected name \""
+		          << scene->m_meshes[kRequestedPoolWaterMeshIndex]->m_name << "\"\n";
+		return kRequestedPoolWaterMeshIndex;
+	}
+
+	return -1;
+}
+
+WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
+	WaterSurfaceRenderPlacement placement{};
+
+	const int mesh_index = resolveWaterSurfaceMeshIndex(scene);
+	if (mesh_index < 0 || scene == nullptr || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	    scene->m_meshes[mesh_index] == nullptr) {
+		std::cout << "[WARN] Unable to resolve pool water mesh placement\n";
+		return placement;
+	}
+
+	const Mesh&     mesh       = *scene->m_meshes[mesh_index];
+	const glm::mat4 transform  = mesh.m_transform.m_transform;
+	const glm::vec3 local_min  = mesh.m_local_bounds_min;
+	const glm::vec3 local_max  = mesh.m_local_bounds_max;
+	const glm::vec3 local_size = glm::max(local_max - local_min, glm::vec3(0.0f));
+
+	int normal_axis = 0;
+	if (local_size.y < local_size.x) {
+		normal_axis = 1;
+	}
+	if (local_size.z < local_size[normal_axis]) {
+		normal_axis = 2;
+	}
+
+	std::array<int, 2> surface_axes{};
+	for (int axis = 0, surface_axis_count = 0; axis < 3; ++axis) {
+		if (axis == normal_axis) {
+			continue;
+		}
+		surface_axes[surface_axis_count++] = axis;
+	}
+
+	std::array<glm::vec3, 3> world_axes = {
+	    glm::vec3(transform[0]),
+	    glm::vec3(transform[1]),
+	    glm::vec3(transform[2]),
+	};
+	std::array<float, 3> world_axis_scales = {
+	    glm::length(world_axes[0]),
+	    glm::length(world_axes[1]),
+	    glm::length(world_axes[2]),
+	};
+
+	for (int axis = 0; axis < 3; ++axis) {
+		if (world_axis_scales[axis] <= 1.0e-5f) {
+			std::cout << "[WARN] Pool water mesh has a degenerate transform axis at object "
+			          << mesh_index << "\n";
+			return placement;
+		}
+		world_axes[axis] /= world_axis_scales[axis];
+	}
+
+	glm::vec3 normal = world_axes[normal_axis];
+	const bool normal_axis_points_up = glm::dot(normal, glm::vec3(0.0f, 1.0f, 0.0f)) >= 0.0f;
+	if (!normal_axis_points_up) {
+		normal = -normal;
+	}
+
+	glm::vec3 axis_u = world_axes[surface_axes[0]];
+	glm::vec3 axis_v = world_axes[surface_axes[1]];
+	if (glm::dot(glm::cross(axis_u, axis_v), normal) < 0.0f) {
+		axis_v = -axis_v;
+	}
+
+	const float half_extent_u =
+	    0.5f * local_size[surface_axes[0]] * world_axis_scales[surface_axes[0]] -
+	    kPoolWaterPlanarInsetWorld;
+	const float half_extent_v =
+	    0.5f * local_size[surface_axes[1]] * world_axis_scales[surface_axes[1]] -
+	    kPoolWaterPlanarInsetWorld;
+	if (half_extent_u <= 1.0e-4f || half_extent_v <= 1.0e-4f) {
+		std::cout << "[WARN] Pool water mesh produced invalid half-extents for object " << mesh_index
+		          << "\n";
+		return placement;
+	}
+
+	glm::vec3 surface_local = 0.5f * (local_min + local_max);
+	surface_local[normal_axis] = normal_axis_points_up ? local_max[normal_axis] :
+	                                                    local_min[normal_axis];
+
+	glm::vec3 center_world = glm::vec3(transform * glm::vec4(surface_local, 1.0f));
+	center_world -= normal * kPoolWaterSurfaceDepthInsetWorld;
+
+	placement.enabled           = true;
+	placement.mesh_index        = mesh_index;
+	placement.center            = center_world;
+	placement.trace_half_height = kPoolWaterTraceHalfHeightWorld;
+	placement.axis_u            = axis_u;
+	placement.half_extent_u     = half_extent_u;
+	placement.axis_v            = axis_v;
+	placement.half_extent_v     = half_extent_v;
+	placement.normal            = normal;
+
+	std::cout << "[INFO] Water surface placement mesh " << mesh_index << " (\"" << mesh.m_name
+	          << "\") center=(" << center_world.x << ", " << center_world.y << ", "
+	          << center_world.z << ") halfExtents=(" << half_extent_u << ", " << half_extent_v
+	          << ") normal=(" << normal.x << ", " << normal.y << ", " << normal.z << ")\n";
+
+	return placement;
+}
+
 std::string meshDisplayName(const Scene* scene, int mesh_index) {
 	if (scene == nullptr || mesh_index < 0 ||
 	    mesh_index >= static_cast<int>(scene->m_meshes.size())) {
@@ -459,7 +679,8 @@ void rebuildObjectIdMap(const Scene* scene) {
 		return;
 	}
 
-	selection_ctx.object_id_map.reserve(scene->m_meshes.size());
+	const int water_object_id = waterSurfaceObjectId(scene);
+	selection_ctx.object_id_map.reserve(scene->m_meshes.size() + (water_object_id >= 0 ? 1 : 0));
 	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
 		const auto&   mesh = scene->m_meshes[mesh_index];
 		ObjectIdEntry entry{};
@@ -472,6 +693,15 @@ void rebuildObjectIdMap(const Scene* scene) {
 		}
 		selection_ctx.object_id_map.push_back(std::move(entry));
 	}
+
+	if (water_object_id >= 0) {
+		ObjectIdEntry entry{};
+		entry.object_id      = water_object_id;
+		entry.display_name   = std::string(kPoolWaterObjectDisplayName);
+		entry.mesh_index     = -1;
+		entry.material_index = waterSurfaceMaterialIndex(scene);
+		selection_ctx.object_id_map.push_back(std::move(entry));
+	}
 }
 
 const ObjectIdEntry* objectIdEntryForId(int object_id) {
@@ -481,28 +711,47 @@ const ObjectIdEntry* objectIdEntryForId(int object_id) {
 	return &selection_ctx.object_id_map[object_id];
 }
 
+std::string objectDisplayName(int object_id) {
+	const ObjectIdEntry* entry = objectIdEntryForId(object_id);
+	return entry != nullptr ? entry->display_name : "None";
+}
+
 void refreshSelectedMaterialEditor(const Scene* scene) {
-	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
-	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+	if (scene == nullptr || selection_ctx.selected_object_id < 0) {
 		selection_ctx.editor_material = Material{}.pack();
 		return;
 	}
 
-	const auto& mesh              = scene->m_meshes[selection_ctx.selected_mesh_index];
-	selection_ctx.editor_material = (mesh != nullptr && mesh->m_material != nullptr) ?
-	                                    mesh->m_material->pack() :
-	                                    Material{}.pack();
+	const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_object_id);
+	if (selected_entry == nullptr || selected_entry->material_index < 0) {
+		selection_ctx.editor_material = Material{}.pack();
+		return;
+	}
+
+	if (isWaterSurfaceObjectId(scene, selected_entry->object_id)) {
+		selection_ctx.editor_material = water_surface_material;
+		return;
+	}
+
+	if (selected_entry->mesh_index < 0 ||
+	    selected_entry->mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+		selection_ctx.editor_material = Material{}.pack();
+		return;
+	}
+
+	const auto& mesh = scene->m_meshes[selected_entry->mesh_index];
+	selection_ctx.editor_material =
+	    (mesh != nullptr && mesh->m_material != nullptr) ? mesh->m_material->pack() :
+	                                                       Material{}.pack();
 }
 
-bool selectMesh(const Scene* scene, int mesh_index) {
-	const int max_mesh_index =
-	    (scene != nullptr) ? static_cast<int>(scene->m_meshes.size()) - 1 : -1;
-	const int clamped_index = (mesh_index >= 0 && mesh_index <= max_mesh_index) ? mesh_index : -1;
-	if (selection_ctx.selected_mesh_index == clamped_index) {
+bool selectObject(const Scene* scene, int object_id) {
+	const int resolved_object_id = objectIdEntryForId(object_id) != nullptr ? object_id : -1;
+	if (selection_ctx.selected_object_id == resolved_object_id) {
 		return false;
 	}
 
-	selection_ctx.selected_mesh_index = clamped_index;
+	selection_ctx.selected_object_id = resolved_object_id;
 	refreshSelectedMaterialEditor(scene);
 	return true;
 }
@@ -522,18 +771,32 @@ void updateMaterialBufferSlot(VmaAllocator allocator, int material_index,
 }
 
 void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator) {
-	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
-	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+	if (scene == nullptr || selection_ctx.selected_object_id < 0) {
 		return;
 	}
 
-	auto& mesh = scene->m_meshes[selection_ctx.selected_mesh_index];
-	if (mesh == nullptr || mesh->m_material == nullptr) {
+	const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_object_id);
+	if (selected_entry == nullptr || selected_entry->material_index < 0) {
 		return;
 	}
 
-	mesh->m_material->m_gpu = selection_ctx.editor_material;
-	updateMaterialBufferSlot(allocator, selection_ctx.selected_mesh_index,
+	if (isWaterSurfaceObjectId(scene, selected_entry->object_id)) {
+		water_surface_material = selection_ctx.editor_material;
+	} else {
+		if (selected_entry->mesh_index < 0 ||
+		    selected_entry->mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+			return;
+		}
+
+		auto& mesh = scene->m_meshes[selected_entry->mesh_index];
+		if (mesh == nullptr || mesh->m_material == nullptr) {
+			return;
+		}
+
+		mesh->m_material->m_gpu = selection_ctx.editor_material;
+	}
+
+	updateMaterialBufferSlot(allocator, selected_entry->material_index,
 	                         selection_ctx.editor_material);
 }
 
@@ -597,7 +860,7 @@ bool voiceParameterUsesRainbowColor(VoiceDrivenParameter parameter) {
 
 bool syncVoiceDrivenSelectionParameter(float loudness) {
 	if (selection_ctx.material_edit_mode != MaterialEditMode::Voice ||
-	    selection_ctx.selected_mesh_index < 0) {
+	    selection_ctx.selected_object_id < 0) {
 		return false;
 	}
 
@@ -799,8 +1062,38 @@ bool intersectRayTriangle(const CpuRay& ray, const glm::vec3& v0, const glm::vec
 	return true;
 }
 
-int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& camera,
-                     uint32_t framebuffer_width, uint32_t framebuffer_height) {
+bool intersectRayWaterSelectionSurface(const CpuRay& ray, float& out_t) {
+	if (!water_surface_render_ctx.enabled) {
+		return false;
+	}
+
+	const float denom = glm::dot(ray.direction, water_surface_render_ctx.normal);
+	if (std::abs(denom) < 1.0e-6f) {
+		return false;
+	}
+
+	const float t =
+	    glm::dot(water_surface_render_ctx.center - ray.origin, water_surface_render_ctx.normal) /
+	    denom;
+	if (t <= 1.0e-4f) {
+		return false;
+	}
+
+	const glm::vec3 hit_point = ray.origin + ray.direction * t;
+	const glm::vec3 delta     = hit_point - water_surface_render_ctx.center;
+	const float u             = glm::dot(delta, water_surface_render_ctx.axis_u);
+	const float v             = glm::dot(delta, water_surface_render_ctx.axis_v);
+	if (std::abs(u) > water_surface_render_ctx.half_extent_u ||
+	    std::abs(v) > water_surface_render_ctx.half_extent_v) {
+		return false;
+	}
+
+	out_t = t;
+	return true;
+}
+
+int pickObjectAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& camera,
+                       uint32_t framebuffer_width, uint32_t framebuffer_height) {
 	if (scene == nullptr || window == nullptr || framebuffer_width == 0 ||
 	    framebuffer_height == 0) {
 		return -1;
@@ -815,7 +1108,14 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 
 	const CpuRay world_ray    = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
 	float        best_t       = std::numeric_limits<float>::infinity();
-	int          best_mesh_id = -1;
+	int          best_object_id = -1;
+
+	const int water_object_id = waterSurfaceObjectId(scene);
+	float     water_hit_t     = 0.0f;
+	if (water_object_id >= 0 && intersectRayWaterSelectionSurface(world_ray, water_hit_t)) {
+		best_t         = water_hit_t;
+		best_object_id = water_object_id;
+	}
 
 	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
 		const auto& mesh = scene->m_meshes[mesh_index];
@@ -836,8 +1136,7 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 		float aabb_t_min = 0.0f;
 		float aabb_t_max = 0.0f;
 		if (!intersectRayAabb(local_ray.origin, local_ray.direction, mesh->m_local_bounds_min,
-		                      mesh->m_local_bounds_max, aabb_t_min, aabb_t_max) ||
-		    aabb_t_min > best_t) {
+		                      mesh->m_local_bounds_max, aabb_t_min, aabb_t_max)) {
 			continue;
 		}
 
@@ -847,14 +1146,22 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 			const glm::vec3& v2 = mesh->gpuVertices[mesh->gpuIndices[index + 2]].position;
 
 			float hit_t = 0.0f;
-			if (intersectRayTriangle(local_ray, v0, v1, v2, hit_t) && hit_t < best_t) {
-				best_t       = hit_t;
-				best_mesh_id = mesh_index;
+			if (!intersectRayTriangle(local_ray, v0, v1, v2, hit_t)) {
+				continue;
+			}
+
+			const glm::vec3 local_hit  = local_ray.origin + local_ray.direction * hit_t;
+			const glm::vec3 world_hit =
+			    glm::vec3(mesh->m_transform.m_transform * glm::vec4(local_hit, 1.0f));
+			const float world_t = glm::dot(world_hit - world_ray.origin, world_ray.direction);
+			if (world_t > 1.0e-4f && world_t < best_t) {
+				best_t         = world_t;
+				best_object_id = mesh_index;
 			}
 		}
 	}
 
-	return best_mesh_id;
+	return best_object_id;
 }
 
 SelectionPanelResult drawSelectionPanel(const Scene* scene) {
@@ -870,7 +1177,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		return result;
 	}
 
-	ImGui::TextUnformatted("Click the render view to select a mesh.");
+	ImGui::TextUnformatted("Click the render view to select an object.");
 
 	int         edit_mode  = static_cast<int>(selection_ctx.material_edit_mode);
 	const char* edit_items = "GUI\0Voice\0";
@@ -894,25 +1201,29 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
 	}
 
-	ImGui::Text("Scene objects: %d",
+	ImGui::Text("Scene meshes: %d",
 	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
-	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
-	ImGui::Text("Selected mesh: %s",
-	            meshDisplayName(scene, selection_ctx.selected_mesh_index).c_str());
+	ImGui::Text("Selectable objects: %d", static_cast<int>(selection_ctx.object_id_map.size()));
 
-	const bool has_selection =
-	    scene != nullptr && selection_ctx.selected_mesh_index >= 0 &&
-	    selection_ctx.selected_mesh_index < static_cast<int>(scene->m_meshes.size());
+	const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_object_id);
+	ImGui::Text("Selected object: %s",
+	            objectDisplayName(selection_ctx.selected_object_id).c_str());
+
+	const bool has_selection = selected_entry != nullptr;
 
 	if (has_selection) {
-		const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_mesh_index);
 		ImGui::Text("Object ID: %d", selected_entry != nullptr ? selected_entry->object_id : -1);
-		ImGui::Text("Mesh index: %d", selection_ctx.selected_mesh_index);
+		if (selected_entry->mesh_index >= 0) {
+			ImGui::Text("Mesh index: %d", selected_entry->mesh_index);
+		} else {
+			ImGui::TextUnformatted("Mesh index: procedural");
+		}
+		ImGui::Text("Material slot: %d", selected_entry->material_index);
 		if (ImGui::Button("Clear selection")) {
-			result.selection_changed = selectMesh(scene, -1);
+			result.selection_changed = selectObject(scene, -1);
 		}
 	} else {
-		ImGui::TextUnformatted("No mesh selected.");
+		ImGui::TextUnformatted("No object selected.");
 	}
 
 	ImGui::Separator();
@@ -954,7 +1265,8 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	ImGui::Separator();
 	ImGui::TextUnformatted("Material");
 	ImGui::TextWrapped(
-	    "Texture-backed meshes use these controls as live multipliers and overrides.");
+	    "Texture-backed meshes use these controls as live multipliers and overrides, and the "
+	    "procedural pool water reads them directly from its dedicated material slot.");
 
 	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
 	if (!gui_mode_enabled) {
@@ -975,10 +1287,6 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	ImGui::BeginDisabled(!gui_mode_enabled);
 	result.material_changed |=
 	    ImGui::ColorEdit3("Base tint", glm::value_ptr(selection_ctx.editor_material.base_color));
-	result.material_changed |= ImGui::ColorEdit3(
-	    "Emission color", glm::value_ptr(selection_ctx.editor_material.emission_color));
-	result.material_changed |= ImGui::SliderFloat(
-	    "Opacity", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f, "%.2f");
 	result.material_changed |= ImGui::SliderFloat(
 	    "Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f, "%.2f");
 	result.material_changed |= ImGui::SliderFloat(
@@ -989,9 +1297,6 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	    ImGui::SliderFloat("IOR", &selection_ctx.editor_material.specular_ior, 1.0f, 2.5f, "%.2f");
 	result.material_changed |= ImGui::ColorEdit3(
 	    "Emission color", glm::value_ptr(selection_ctx.editor_material.emission_color));
-	result.material_changed |=
-	    ImGui::SliderFloat("Emission intensity", &selection_ctx.editor_material.emission_luminance,
-	                       0.0f, 20.0f, "%.2f");
 	result.material_changed |=
 	    ImGui::SliderFloat("Emission intensity", &selection_ctx.editor_material.emission_luminance,
 	                       0.0f, 20.0f, "%.2f");
@@ -1174,7 +1479,7 @@ void App::recreateSwapchainResources() {
 		                 cmd);
 	}
 
-	// Update descriptor set bindings 0 (output) and 1 (accum)
+	// Update descriptor set bindings 0 (output), 1 (accum), and 14 (water height)
 	{
 		VkDescriptorImageInfo out_img{};
 		out_img.imageView   = render_target_ctx.storage_image_view;
@@ -1182,7 +1487,11 @@ void App::recreateSwapchainResources() {
 		VkDescriptorImageInfo accum_img{};
 		accum_img.imageView   = render_target_ctx.accum_image_view;
 		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		VkWriteDescriptorSet writes[2]{};
+		VkDescriptorImageInfo water_height_img{};
+		water_height_img.imageView =
+		    m_water_surface != nullptr ? m_water_surface->currentHeightImageView() : VK_NULL_HANDLE;
+		water_height_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkWriteDescriptorSet writes[3]{};
 		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
@@ -1199,7 +1508,15 @@ void App::recreateSwapchainResources() {
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &accum_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             14,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &water_height_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
 	}
 
 	render_target_ctx.storage_image_initialized = false;
@@ -2083,6 +2400,7 @@ App::App() {
 	m_scene->m_camera = Camera(glm::vec3(0.f, 20.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
+	water_surface_render_ctx = buildWaterSurfacePlacement(m_scene.get());
 	rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
@@ -2322,6 +2640,9 @@ App::App() {
 
 		for (auto& mesh : m_scene->m_meshes)
 			gms.push_back(mesh->m_material->pack());
+		if (water_surface_render_ctx.enabled) {
+			gms.push_back(water_surface_material);
+		}
 		scene_ctx.material_count  = (uint32_t) gms.size();
 		scene_ctx.material_buffer = create_and_upload_buffer(
 		    allocator, sizeof(GPUMaterial) * gms.size(), gms.data(), SB, scene_ctx.material_alloc);
@@ -2423,6 +2744,7 @@ App::App() {
 		    make_binding(11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MATERIAL_TEXTURES),
 		    make_binding(12, VK_DESCRIPTOR_TYPE_SAMPLER),
 		    make_binding(13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+		    make_binding(14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -2437,7 +2759,7 @@ App::App() {
 	}
 	{
 		std::vector<VkDescriptorPoolSize> ps = {
-		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
 		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
 		    {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
 		    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * NUM_LUTS + MAX_MATERIAL_TEXTURES},
@@ -2513,6 +2835,13 @@ App::App() {
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 13, 0, 1,
 		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &object_id_info});
+		VkDescriptorImageInfo water_height_info{};
+		water_height_info.imageView =
+		    m_water_surface != nullptr ? m_water_surface->currentHeightImageView() : VK_NULL_HANDLE;
+		water_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 14, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &water_height_info});
 		VkDescriptorBufferInfo cb{scene_ctx.camera_buffer, 0, VK_WHOLE_SIZE};
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 2, 0, 1,
@@ -2798,6 +3127,7 @@ void App::MainLoop() {
 
 	double   last_time    = glfwGetTime();
 	uint32_t frame_number = 0;
+	uint32_t sample_seed  = 0;
 
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
@@ -2941,9 +3271,9 @@ void App::MainLoop() {
 		const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
 		if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE && !fly_cam.isMouseCaptured() &&
 		    !ImGui::GetIO().WantCaptureMouse) {
-			if (selectMesh(m_scene.get(),
-			               pickMeshAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
-			                                framebuffer_width, framebuffer_height))) {
+			if (selectObject(m_scene.get(),
+			                 pickObjectAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
+			                                    framebuffer_width, framebuffer_height))) {
 				frame_number = 0;
 			}
 		}
@@ -2973,6 +3303,23 @@ void App::MainLoop() {
 		vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
 		VkCommandBuffer cmd = command_ctx.command_buffer;
 
+		if (m_water_surface != nullptr) {
+			m_water_surface->record(cmd);
+
+			VkDescriptorImageInfo water_height_info{};
+			water_height_info.imageView   = m_water_surface->currentHeightImageView();
+			water_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+			VkWriteDescriptorSet water_height_write{};
+			water_height_write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			water_height_write.dstSet          = render_target_ctx.descriptor_set;
+			water_height_write.dstBinding      = 14;
+			water_height_write.descriptorCount = 1;
+			water_height_write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			water_height_write.pImageInfo      = &water_height_info;
+			vkUpdateDescriptorSets(vulkan_ctx.device, 1, &water_height_write, 0, nullptr);
+		}
+
 		VkImageLayout storage_old = render_target_ctx.storage_image_initialized ?
 		                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
 		                                VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2992,12 +3339,26 @@ void App::MainLoop() {
 		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
 
 		PathTracerPushConstants pc{};
-		pc.frame               = frame_number;
-		pc.material_count      = scene_ctx.material_count;
-		pc.selected_mesh_index = selection_ctx.selected_mesh_index;
-		pc.outline_width       = selection_ctx.outline_width;
-		pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
-		pc.outline_color       = selection_ctx.outline_color;
+		pc.accumulation_frame          = frame_number;
+		pc.rng_seed                    = sample_seed;
+		pc.material_count              = scene_ctx.material_count;
+		pc.selected_object_id          = selection_ctx.selected_object_id;
+		pc.outline_width               = selection_ctx.outline_width;
+		pc.debug_view_mode             = static_cast<int32_t>(selection_ctx.debug_view_mode);
+		pc.water_object_id             = waterSurfaceObjectId(m_scene.get());
+		pc.water_enabled               =
+		    (m_water_surface != nullptr && water_surface_render_ctx.enabled) ? 1u : 0u;
+		pc.water_material_index        = waterSurfaceMaterialIndex(m_scene.get());
+		pc.water_height_to_world_scale =
+		    m_water_surface != nullptr ? m_water_surface->heightToWorldScale() : 1.0f;
+		pc.outline_color = selection_ctx.outline_color;
+		pc.water_center_trace_half_height =
+		    glm::vec4(water_surface_render_ctx.center, water_surface_render_ctx.trace_half_height);
+		pc.water_axis_u_half_extent =
+		    glm::vec4(water_surface_render_ctx.axis_u, water_surface_render_ctx.half_extent_u);
+		pc.water_axis_v_half_extent =
+		    glm::vec4(water_surface_render_ctx.axis_v, water_surface_render_ctx.half_extent_v);
+		pc.water_normal = glm::vec4(water_surface_render_ctx.normal, 0.0f);
 		vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 		                   sizeof(pc), &pc);
 
@@ -3007,6 +3368,7 @@ void App::MainLoop() {
 		render_target_ctx.storage_image_initialized  = true;
 		swapchain_ctx.image_initialized[image_index] = true;
 		frame_number++;
+		sample_seed++;
 
 		transition_layout(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_GENERAL,
 		                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
