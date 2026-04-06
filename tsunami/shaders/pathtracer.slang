@@ -161,8 +161,8 @@ struct RNG {
 struct VertexAttribs { float3 normal; float2 uv; float4 tangent;};
 
 VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
-    uint voff = (uint)meshes_buf[instanceID].vertexOffset;
-    uint ioff = (uint)meshes_buf[instanceID].indexOffset;
+    uint voff = (uint)meshes_buf[NonUniformResourceIndex(instanceID)].vertexOffset;
+    uint ioff = (uint)meshes_buf[NonUniformResourceIndex(instanceID)].indexOffset;
     uint i0 = indices_buf[ioff + primID * 3 + 0];
     uint i1 = indices_buf[ioff + primID * 3 + 1];
     uint i2 = indices_buf[ioff + primID * 3 + 2];
@@ -226,8 +226,8 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 
     hit.uv         = attr.uv;
     hit.front_face = frontFace;
-    hit.matIndex   = meshes_buf[instID].matIndex;
-    mat            = materials_buf[hit.matIndex];
+    hit.matIndex = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
+    mat = materials_buf[NonUniformResourceIndex(hit.matIndex)];
 
     float3 N = normalize(attr.normal);
     float3 T = normalize(attr.tangent.xyz);
@@ -257,7 +257,7 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 // ─── Texture sampling ─────────────────────────────────────────────────────────
 float4 sample_tex(uint index, float2 uv, float4 fallback) {
     if (index == NO_TEXTURE) return fallback;
-    return material_textures[index].SampleLevel(g_sampler, uv, 0.f);
+    return material_textures[NonUniformResourceIndex(index)].SampleLevel(g_sampler, uv, 0.f);
 }
 
 // ─── Fill OpenPBR inputs ──────────────────────────────────────────────────────
@@ -391,7 +391,7 @@ float3 tracePath(Ray ray, inout RNG rng) {
 
 // ─── Camera ───────────────────────────────────────────────────────────────────
 Ray makeRay(uint2 pixel, uint2 dims, float2 jitter) {
-    GPUCamera cam    = camera_buf[0];
+    GPUCamera cam = camera_buf[NonUniformResourceIndex(0)];
     float3    origin = cam.position.xyz;
     float3    target = cam.target.xyz;
     float3    up     = cam.up.xyz;

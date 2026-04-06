@@ -968,6 +968,7 @@ App::App() {
 	m_scene->m_camera = Camera(glm::vec3(0.f, 20.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF/ABeautifulGame.gltf");
+	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
 	// === I. Vulkan function pointers
