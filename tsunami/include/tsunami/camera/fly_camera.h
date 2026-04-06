@@ -30,6 +30,10 @@ class FlyCamera {
 	// Pack current state into the GPU-side camera buffer struct
 	GPUCamera pack() const;
 
+	bool isMouseCaptured() const {
+		return m_mouse_captured;
+	}
+
 	// ---- tweakable parameters ----
 	float speed       = 0.1f;           // units / second
 	float sensitivity = 0.0005f;        // radians / pixel

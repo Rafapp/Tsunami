@@ -22,7 +22,17 @@ float4 openpbr_sample_3d_impl(int lut_id, float3 uvw) {
 #include "openpbr-bsdf/openpbr.h"
 
 // ─── Push constants ───────────────────────────────────────────────────────────
-struct PushConstants { uint frame; uint material_count; };
+struct PushConstants {
+    uint   frame;
+    uint   material_count;
+    int    selected_mesh_index;
+    uint   outline_width;
+    int    debug_view_mode;
+    uint   _pad0;
+    uint   _pad1;
+    uint   _pad2;
+    float4 outline_color;
+};
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
 // ─── Bindings ─────────────────────────────────────────────────────────────────
@@ -35,6 +45,7 @@ struct PushConstants { uint frame; uint material_count; };
 [[vk::binding(7,  0)]] StructuredBuffer<GPUVertex>     vertices_buf;
 [[vk::binding(8,  0)]] StructuredBuffer<uint>          indices_buf;
 [[vk::binding(11, 0)]] Texture2D<float4>               material_textures[MAX_MAT_TEXTURES];
+[[vk::binding(13, 0)]] RWTexture2D<int>               object_id_image;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -139,7 +150,16 @@ static const float  g_sun_intensity = 0.5f;   // tweak for desired exposure
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 struct Ray { float3 origin; float3 dir; };
-struct Hit { float t; float3 normal; float3 tangent; float3 bitangent; float2 uv; bool front_face; int matIndex; };
+struct Hit {
+    float  t;
+    float3 normal;
+    float3 tangent;
+    float3 bitangent;
+    float2 uv;
+    bool   front_face;
+    int    matIndex;
+    int    instanceID;
+};
 
 // ─── RNG ──────────────────────────────────────────────────────────────────────
 struct RNG {
@@ -196,6 +216,25 @@ bool is_occluded(float3 origin, float3 normal, float3 dir, float tmax) {
     return q.CommittedStatus() != COMMITTED_NOTHING;
 }
 
+int traceVisibleInstance(Ray ray) {
+    RayDesc rd;
+    rd.Origin    = ray.origin;
+    rd.Direction = ray.dir;
+    rd.TMin      = T_MIN;
+    rd.TMax      = T_MAX;
+
+    RayQuery<RAY_FLAG_NONE> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, rd);
+
+    while (q.Proceed()) {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+            q.CommitNonOpaqueTriangleHit();
+    }
+
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return -1;
+    return int(q.CommittedInstanceID());
+}
+
 // ─── Scene intersection ───────────────────────────────────────────────────────
 bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     hit = (Hit)0;
@@ -227,6 +266,7 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 
     hit.uv         = attr.uv;
     hit.front_face = frontFace;
+    hit.instanceID = int(instID);
     hit.matIndex = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
     mat = materials_buf[NonUniformResourceIndex(hit.matIndex)];
 
@@ -270,22 +310,20 @@ OpenPBR_ResolvedInputs material_to_openpbr(
 {
     OpenPBR_ResolvedInputs inp = openpbr_make_default_resolved_inputs();
 
-    float4 alb = sample_tex(m.albedo_tex_index, uv, m.base_color);
+    float4 alb = sample_tex(m.albedo_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
     // glTF ORM texture: R=occlusion, G=roughness, B=metalness.
-    // Fallback packs the CPU constants into the same channels so both paths
-    // (textured and constant) use the same .g/.b reads below.
-    float4 orm = sample_tex(
-        m.roughness_tex_index, uv,
-        float4(1.f, m.specular_roughness, m.base_metalness, 1.f));
+    // The CPU values act as live multipliers so GUI edits still affect
+    // textured materials.
+    float4 orm = sample_tex(m.roughness_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
 
-    inp.base_color              = alb.rgb;
-    inp.base_weight             = m.base_color.a;
-    inp.base_metalness          = orm.b;   // B channel = metalness
+    inp.base_color              = alb.rgb * m.base_color.rgb;
+    inp.base_weight             = alb.a * m.base_color.a;
+    inp.base_metalness          = saturate(orm.b * m.base_metalness);   // B channel = metalness
     inp.base_diffuse_roughness  = m.base_diffuse_roughness;
 
     inp.specular_color                 = m.specular_color.rgb;
     inp.specular_weight                = m.specular_color.a;
-    inp.specular_roughness             = orm.g;         // G channel = roughness
+    inp.specular_roughness             = clamp(orm.g * m.specular_roughness, 1e-3f, 1.f);
     inp.specular_ior                   = m.specular_ior;
     inp.specular_roughness_anisotropy  = m.specular_anisotropy;
 
@@ -340,9 +378,9 @@ float3 tracePath(Ray ray, inout RNG rng) {
         }
 
         // ── Emission ──
-        float4 ems = sample_tex(mat.emissive_tex_index, hit.uv,
-                                float4(mat.emission_color.rgb, mat.emission_color.a));
-        radiance += throughput * ems.rgb * ems.a * mat.emission_luminance;
+        float3 emissive_sample =
+            sample_tex(mat.emissive_tex_index, hit.uv, float4(1.f, 1.f, 1.f, 1.f)).rgb;
+        radiance += throughput * emissive_sample * mat.emission_color.rgb * mat.emission_luminance;
 
         float3 hitPos   = ray.origin + hit.t * ray.dir;
         float3 view_dir = -ray.dir;
@@ -432,6 +470,59 @@ Ray makeRay(uint2 pixel, uint2 dims, float2 jitter) {
     return ray;
 }
 
+bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
+    if (push.selected_mesh_index < 0) return false;
+    if (center_instance != push.selected_mesh_index) return false;
+
+    const int outline_width = max(int(push.outline_width), 1);
+    const int2 dims_i = int2(dims.x, dims.y);
+    const int2 pixel_i = int2(pixel.x, pixel.y);
+    const int2 neighbor_offsets[4] = {
+        int2(-1, 0),
+        int2(1, 0),
+        int2(0, -1),
+        int2(0, 1)
+    };
+
+    [unroll]
+    for (int i = 0; i < 4; ++i) {
+        int2 neighbor = pixel_i + neighbor_offsets[i] * outline_width;
+        if (neighbor.x < 0 || neighbor.y < 0 || neighbor.x >= dims_i.x || neighbor.y >= dims_i.y) {
+            return true;
+        }
+
+        int neighbor_instance =
+            traceVisibleInstance(makeRay(uint2(neighbor.x, neighbor.y), dims, float2(0.5f, 0.5f)));
+        if (neighbor_instance != push.selected_mesh_index) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint hash_u32(uint value) {
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+float3 debugColorForObjectId(int object_id) {
+    if (object_id < 0) {
+        return float3(0.02f, 0.02f, 0.02f);
+    }
+
+    uint hashed = hash_u32(uint(object_id + 1));
+    float3 rgb = float3(
+        float(hashed & 0xFFu),
+        float((hashed >> 8) & 0xFFu),
+        float((hashed >> 16) & 0xFFu)) / 255.0f;
+    return 0.15f + 0.85f * rgb;
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 [shader("compute")]
@@ -443,6 +534,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     if (any(pixel >= dims)) return;
 
     RNG rng = RNG::make(pixel, push.frame);
+    int visible_object_id = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
+    object_id_image[pixel] = visible_object_id;
 
     static const int SPP = 1;
     float3 colorAccum = float3(0, 0, 0);
@@ -458,6 +551,10 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     float3 accum = lerp(prev, color, blend);
 
     accum_image[pixel] = float4(accum, 1.f);
-    // output_image[pixel] = float4(color, 1.f);
-    output_image[pixel] = float4(accum, 1.f);
+
+    float3 display = (push.debug_view_mode == 1) ? debugColorForObjectId(visible_object_id) : accum;
+    if (isSelectionOutline(pixel, dims, visible_object_id)) {
+        display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
+    }
+    output_image[pixel] = float4(display, 1.f);
 }
