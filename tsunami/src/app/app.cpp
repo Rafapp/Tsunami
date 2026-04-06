@@ -921,6 +921,13 @@ void App::destroySwapchainResources() {
 	swapchain_ctx.extent       = {};
 }
 
+static VkImageView create_image_view(VkDevice, VkImage, VkFormat, VkImageViewType, VkImageAspectFlags);
+static void        transition_layout(VkCommandBuffer, VkImage, VkImageLayout, VkImageLayout,
+                                     VkAccessFlags, VkAccessFlags, VkPipelineStageFlags,
+                                     VkPipelineStageFlags);
+static VkCommandBuffer begin_one_time_cmd(VkDevice, VkCommandPool);
+static void            end_one_time_cmd(VkDevice, VkCommandPool, VkQueue, VkCommandBuffer);
+
 void App::recreateSwapchainResources() {
 	uint32_t framebuffer_width  = m_window->width();
 	uint32_t framebuffer_height = m_window->height();
@@ -935,6 +942,69 @@ void App::recreateSwapchainResources() {
 	destroySwapchainResources();
 	createSwapchainResources();
 	initialize_imgui_renderer();
+
+	// Recreate pathtracer storage/accum images at the new swapchain extent
+	VmaAllocator allocator = render_target_ctx.allocator;
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.storage_image, render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkImageUsageFlags extra) {
+		VkImageCreateInfo ii{};
+		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ii.imageType     = VK_IMAGE_TYPE_2D;
+		ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
+		ii.extent        = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+		ii.mipLevels     = 1;
+		ii.arrayLayers   = 1;
+		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+	};
+	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
+
+	render_target_ctx.storage_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.accum_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+
+	// Transition accum → GENERAL so the shader can read/write it
+	{
+		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue, cmd);
+	}
+
+	// Update descriptor set bindings 0 (output) and 1 (accum)
+	{
+		VkDescriptorImageInfo out_img{};
+		out_img.imageView   = render_target_ctx.storage_image_view;
+		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo accum_img{};
+		accum_img.imageView   = render_target_ctx.accum_image_view;
+		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkWriteDescriptorSet writes[2]{};
+		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		             render_target_ctx.descriptor_set, 0, 0, 1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &out_img};
+		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		             render_target_ctx.descriptor_set, 1, 0, 1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &accum_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
+	}
+
+	render_target_ctx.storage_image_initialized = false;
 }
 
 struct BLAS {
@@ -1187,6 +1257,7 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	}
 	swapchain_ctx.swapchain    = swap_ret.value();
 	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
 	auto images_ret            = swapchain_ctx.swapchain.get_images();
 	if (!images_ret)
 		return;
@@ -1198,7 +1269,8 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
 
 	// -- Recreate render-target images at new size --
-	const VkExtent3D ext = {new_w, new_h, 1};
+	// Use the actual swapchain extent (Vulkan may adjust from the requested size)
+	const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
 
 	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
 	                        VkImageUsageFlags extra) {
@@ -1307,10 +1379,28 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		}
 	}
 
+	// Recreate overlay framebuffers for the new swapchain image views / extent
+	for (VkFramebuffer fb : overlay_ctx.framebuffers)
+		vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
+	overlay_ctx.framebuffers.clear();
+	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
+	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
+		VkImageView             attachments[]  = {swapchain_ctx.image_views[i]};
+		VkFramebufferCreateInfo framebuffer_info{};
+		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.renderPass      = overlay_ctx.render_pass;
+		framebuffer_info.attachmentCount = 1;
+		framebuffer_info.pAttachments    = attachments;
+		framebuffer_info.width           = swapchain_ctx.extent.width;
+		framebuffer_info.height          = swapchain_ctx.extent.height;
+		framebuffer_info.layers          = 1;
+		vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr, &overlay_ctx.framebuffers[i]);
+	}
+
 	render_target_ctx.storage_image_initialized = false;
 	frame_number                                = 0;        // reset temporal accumulation
 
-	std::cout << "[RESIZE] " << new_w << "x" << new_h << "\n";
+	std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height << "\n";
 }
 
 // ============================================================
@@ -2528,6 +2618,7 @@ void App::MainLoop() {
 		if (swapchain_ctx.extent.width != framebuffer_width ||
 		    swapchain_ctx.extent.height != framebuffer_height) {
 			recreateSwapchainResources();
+			frame_number = 0;
 		}
 
 		const float time_seconds = static_cast<float>(glfwGetTime());
@@ -2710,7 +2801,7 @@ void App::MainLoop() {
 		vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 		                   sizeof(pc), &pc);
 
-		vkCmdDispatch(cmd, (m_window->width() + 15) / 16, (m_window->height() + 15) / 16, 1);
+		vkCmdDispatch(cmd, (swapchain_ctx.extent.width + 15) / 16, (swapchain_ctx.extent.height + 15) / 16, 1);
 
 		render_target_ctx.storage_image_initialized  = true;
 		swapchain_ctx.image_initialized[image_index] = true;
@@ -2724,8 +2815,8 @@ void App::MainLoop() {
 		// Blit pathtracer output to swapchain image
 		VkImageBlit blit{};
 		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		blit.srcOffsets[1]  = {static_cast<int32_t>(m_window->width()),
-		                       static_cast<int32_t>(m_window->height()), 1};
+		blit.srcOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.extent.width),
+		                       static_cast<int32_t>(swapchain_ctx.extent.height), 1};
 		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.dstOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.extent.width),
 		                       static_cast<int32_t>(swapchain_ctx.extent.height), 1};
