@@ -3,58 +3,58 @@
 #include <glm/glm.hpp>
 
 struct alignas(16) GPUMaterial {
-    // Base layer
-    glm::vec4 base_color;
-    float     base_metalness;
-    float     base_diffuse_roughness;
-    float     _pad0[2];
+	// Base layer
+	glm::vec4 base_color;
+	float     base_metalness;
+	float     base_diffuse_roughness;
+	float     _pad0[2];
 
-    // Specular layer
-    glm::vec4 specular_color;
-    float     specular_roughness;
-    float     specular_ior;
-    float     specular_anisotropy;
-    float     _pad1;
+	// Specular layer
+	glm::vec4 specular_color;
+	float     specular_roughness;
+	float     specular_ior;
+	float     specular_anisotropy;
+	float     _pad1;
 
-    // Transmission
-    float     transmission_weight;
-    float     transmission_depth;
-    float     transmission_scatter_anisotropy;
-    float     geometry_opacity;
-    glm::vec4 transmission_color;
-    glm::vec4 transmission_scatter;
+	// Transmission
+	float     transmission_weight;
+	float     transmission_depth;
+	float     transmission_scatter_anisotropy;
+	float     geometry_opacity;
+	glm::vec4 transmission_color;
+	glm::vec4 transmission_scatter;
 
-    // Emission
-    glm::vec4 emission_color;
-    float     emission_luminance;
-    float     geometry_thin_walled; // store as float/int for alignment simplicity
-    float     transmission_dispersion_scale;
-    float     transmission_dispersion_abbe_number;
+	// Emission
+	glm::vec4 emission_color;
+	float     emission_luminance;
+	float     geometry_thin_walled;        // store as float/int for alignment simplicity
+	float     transmission_dispersion_scale;
+	float     transmission_dispersion_abbe_number;
 
-    // Coat
-    float     coat_weight;
-    float     coat_roughness;
-    float     coat_ior;
-    float     _pad4;
-    glm::vec4 coat_color;
+	// Coat
+	float     coat_weight;
+	float     coat_roughness;
+	float     coat_ior;
+	float     _pad4;
+	glm::vec4 coat_color;
 
-    // Fuzz/sheen
-    float     fuzz_weight;
-    float     fuzz_roughness;
-    float     _pad5[2];
-    glm::vec4 fuzz_color;
+	// Fuzz/sheen
+	float     fuzz_weight;
+	float     fuzz_roughness;
+	float     _pad5[2];
+	glm::vec4 fuzz_color;
 
-    // Thin film
-    float     thin_film_weight;
-    float     thin_film_ior;
-    float     thin_film_thickness;
-    float     _pad6;
+	// Thin film
+	float thin_film_weight;
+	float thin_film_ior;
+	float thin_film_thickness;
+	float _pad6;
 
-    // Texture indices
-    uint32_t albedo_tex_index;
-    uint32_t normal_tex_index;
-    uint32_t roughness_tex_index;
-    uint32_t emissive_tex_index;
+	// Texture indices
+	uint32_t albedo_tex_index;
+	uint32_t normal_tex_index;
+	uint32_t roughness_tex_index;
+	uint32_t emissive_tex_index;
 };
 
 // Single material class — set only the fields you need; the rest default to
@@ -128,14 +128,14 @@ class Material {
   private:
 	void set_defaults() {
 		// OpenPBR 1.0 spec defaults
-		m_gpu.base_color             = glm::vec4(0.8f, 0.8f, 0.8f, 1.f);
-		m_gpu.base_metalness         = 0.f;
-		m_gpu.base_diffuse_roughness = 0.f;
-		m_gpu.specular_color         = glm::vec4(1.f, 1.f, 1.f, 1.f);
-		m_gpu.specular_roughness     = 0.3f;
-		m_gpu.specular_ior           = 1.5f;
-		m_gpu.specular_anisotropy    = 0.f;
-		m_gpu.transmission_weight    = 0.f;
+		m_gpu.base_color                          = glm::vec4(0.8f, 0.8f, 0.8f, 1.f);
+		m_gpu.base_metalness                      = 0.f;
+		m_gpu.base_diffuse_roughness              = 0.f;
+		m_gpu.specular_color                      = glm::vec4(1.f, 1.f, 1.f, 1.f);
+		m_gpu.specular_roughness                  = 0.3f;
+		m_gpu.specular_ior                        = 1.5f;
+		m_gpu.specular_anisotropy                 = 0.f;
+		m_gpu.transmission_weight                 = 0.f;
 		m_gpu.transmission_weight                 = 0.f;
 		m_gpu.transmission_depth                  = 1.f;
 		m_gpu.transmission_scatter_anisotropy     = 0.f;
@@ -144,20 +144,20 @@ class Material {
 		m_gpu.geometry_thin_walled                = 0.f;
 		m_gpu.transmission_dispersion_scale       = 0.f;
 		m_gpu.transmission_dispersion_abbe_number = 0.f;
-		m_gpu.transmission_color     = glm::vec4(1.f);
-		m_gpu.emission_color         = glm::vec4(0.f, 0.f, 0.f, 0.f);
-		m_gpu.emission_luminance     = 0.f;
-		m_gpu.coat_weight            = 0.f;
-		m_gpu.coat_roughness         = 0.f;
-		m_gpu.coat_ior               = 1.6f;
-		m_gpu.coat_color             = glm::vec4(1.f);
-		m_gpu.fuzz_weight            = 0.f;
-		m_gpu.fuzz_roughness         = 0.5f;
-		m_gpu.fuzz_color             = glm::vec4(1.f);
-		m_gpu.thin_film_weight       = 0.f;
-		m_gpu.thin_film_ior          = 1.5f;
-		m_gpu.thin_film_thickness    = 0.f;
-		m_gpu._pad6                  = 0.f;
+		m_gpu.transmission_color                  = glm::vec4(1.f);
+		m_gpu.emission_color                      = glm::vec4(0.f, 0.f, 0.f, 0.f);
+		m_gpu.emission_luminance                  = 0.f;
+		m_gpu.coat_weight                         = 0.f;
+		m_gpu.coat_roughness                      = 0.f;
+		m_gpu.coat_ior                            = 1.6f;
+		m_gpu.coat_color                          = glm::vec4(1.f);
+		m_gpu.fuzz_weight                         = 0.f;
+		m_gpu.fuzz_roughness                      = 0.5f;
+		m_gpu.fuzz_color                          = glm::vec4(1.f);
+		m_gpu.thin_film_weight                    = 0.f;
+		m_gpu.thin_film_ior                       = 1.5f;
+		m_gpu.thin_film_thickness                 = 0.f;
+		m_gpu._pad6                               = 0.f;
 		// No textures by default
 		m_gpu.albedo_tex_index    = 0xFFFFFFFFu;
 		m_gpu.normal_tex_index    = 0xFFFFFFFFu;
