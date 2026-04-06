@@ -198,19 +198,19 @@ enum class RenderDebugViewMode : int {
 };
 
 struct PathTracerPushConstants {
-	uint32_t  accumulation_frame          = 0;
-	uint32_t  rng_seed                    = 0;
-	uint32_t  material_count              = 0;
-	int32_t   selected_object_id          = -1;
-	uint32_t  outline_width               = 1;
-	int32_t   debug_view_mode             = static_cast<int32_t>(RenderDebugViewMode::Beauty);
-	int32_t   water_object_id             = -1;
-	uint32_t  water_enabled               = 0;
-	int32_t   water_material_index        = -1;
-	float     water_height_to_world_scale = 1.0f;
-	float     _pad0                       = 0.0f;
-	float     _pad1                       = 0.0f;
-	glm::vec4 outline_color               = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	uint32_t  accumulation_frame             = 0;
+	uint32_t  rng_seed                       = 0;
+	uint32_t  material_count                 = 0;
+	int32_t   selected_object_id             = -1;
+	uint32_t  outline_width                  = 1;
+	int32_t   debug_view_mode                = static_cast<int32_t>(RenderDebugViewMode::Beauty);
+	int32_t   water_object_id                = -1;
+	uint32_t  water_enabled                  = 0;
+	int32_t   water_material_index           = -1;
+	float     water_height_to_world_scale    = 1.0f;
+	float     _pad0                          = 0.0f;
+	float     _pad1                          = 0.0f;
+	glm::vec4 outline_color                  = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	glm::vec4 water_center_trace_half_height = glm::vec4(0.0f);
 	glm::vec4 water_axis_u_half_extent       = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
 	glm::vec4 water_axis_v_half_extent       = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
@@ -228,9 +228,9 @@ struct ObjectIdEntry {
 
 struct SelectionContext {
 	int                        selected_object_id = -1;
-	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
-	VoiceDrivenParameter       voice_parameter     = VoiceDrivenParameter::BaseTint;
-	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::Beauty;
+	MaterialEditMode           material_edit_mode = MaterialEditMode::Gui;
+	VoiceDrivenParameter       voice_parameter    = VoiceDrivenParameter::BaseTint;
+	RenderDebugViewMode        debug_view_mode    = RenderDebugViewMode::Beauty;
 	GPUMaterial                editor_material{};
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;
@@ -260,30 +260,30 @@ struct WaterSurfaceRenderPlacement {
 
 WaterSurfaceRenderPlacement water_surface_render_ctx{};
 
-constexpr int              kRequestedPoolWaterMeshIndex      = 98;
-constexpr std::string_view kRequestedPoolWaterMeshName       = "Pool F.017 / Pool F";
-constexpr std::string_view kPoolWaterObjectDisplayName       = "Pool Water";
-constexpr float            kPoolWaterPlanarInsetWorld        = 0.08f;
-constexpr float            kPoolWaterSurfaceDepthInsetWorld  = 0.02f;
-constexpr float            kPoolWaterTraceHalfHeightWorld    = 0.45f;
+constexpr int              kRequestedPoolWaterMeshIndex     = 98;
+constexpr std::string_view kRequestedPoolWaterMeshName      = "Pool F.017 / Pool F";
+constexpr std::string_view kPoolWaterObjectDisplayName      = "Pool Water";
+constexpr float            kPoolWaterPlanarInsetWorld       = 0.08f;
+constexpr float            kPoolWaterSurfaceDepthInsetWorld = 0.02f;
+constexpr float            kPoolWaterTraceHalfHeightWorld   = 0.45f;
 
 GPUMaterial makeDefaultWaterSurfaceMaterial() {
-	GPUMaterial water                = Material{}.pack();
-	water.base_color                 = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
-	water.base_metalness             = 0.0f;
-	water.base_diffuse_roughness     = 0.0f;
-	water.specular_color             = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
-	water.specular_roughness         = 0.0125f;
-	water.specular_ior               = 1.333f;
-	water.specular_anisotropy        = 0.0f;
-	water.transmission_weight        = 1.0f;
-	water.transmission_depth         = 2.2f;
-	water.transmission_scatter       = glm::vec4(0.0f);
-	water.transmission_color         = glm::vec4(0.92f, 0.97f, 1.0f, 1.0f);
-	water.emission_color             = glm::vec4(0.0f);
-	water.emission_luminance         = 0.0f;
-	water.geometry_thin_walled       = 0.0f;
-	water.transmission_dispersion_scale = 0.0f;
+	GPUMaterial water                         = Material{}.pack();
+	water.base_color                          = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	water.base_metalness                      = 0.0f;
+	water.base_diffuse_roughness              = 0.0f;
+	water.specular_color                      = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	water.specular_roughness                  = 0.0125f;
+	water.specular_ior                        = 1.333f;
+	water.specular_anisotropy                 = 0.0f;
+	water.transmission_weight                 = 1.0f;
+	water.transmission_depth                  = 2.2f;
+	water.transmission_scatter                = glm::vec4(0.0f);
+	water.transmission_color                  = glm::vec4(0.92f, 0.97f, 1.0f, 1.0f);
+	water.emission_color                      = glm::vec4(0.0f);
+	water.emission_luminance                  = 0.0f;
+	water.geometry_thin_walled                = 0.0f;
+	water.transmission_dispersion_scale       = 0.0f;
 	water.transmission_dispersion_abbe_number = 0.0f;
 	water.coat_weight                         = 0.0f;
 	water.coat_roughness                      = 0.0f;
@@ -562,7 +562,8 @@ WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
 	WaterSurfaceRenderPlacement placement{};
 
 	const int mesh_index = resolveWaterSurfaceMeshIndex(scene);
-	if (mesh_index < 0 || scene == nullptr || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	if (mesh_index < 0 || scene == nullptr ||
+	    mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
 	    scene->m_meshes[mesh_index] == nullptr) {
 		std::cout << "[WARN] Unable to resolve pool water mesh placement\n";
 		return placement;
@@ -610,7 +611,7 @@ WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
 		world_axes[axis] /= world_axis_scales[axis];
 	}
 
-	glm::vec3 normal = world_axes[normal_axis];
+	glm::vec3  normal                = world_axes[normal_axis];
 	const bool normal_axis_points_up = glm::dot(normal, glm::vec3(0.0f, 1.0f, 0.0f)) >= 0.0f;
 	if (!normal_axis_points_up) {
 		normal = -normal;
@@ -629,14 +630,14 @@ WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
 	    0.5f * local_size[surface_axes[1]] * world_axis_scales[surface_axes[1]] -
 	    kPoolWaterPlanarInsetWorld;
 	if (half_extent_u <= 1.0e-4f || half_extent_v <= 1.0e-4f) {
-		std::cout << "[WARN] Pool water mesh produced invalid half-extents for object " << mesh_index
-		          << "\n";
+		std::cout << "[WARN] Pool water mesh produced invalid half-extents for object "
+		          << mesh_index << "\n";
 		return placement;
 	}
 
 	glm::vec3 surface_local = 0.5f * (local_min + local_max);
-	surface_local[normal_axis] = normal_axis_points_up ? local_max[normal_axis] :
-	                                                    local_min[normal_axis];
+	surface_local[normal_axis] =
+	    normal_axis_points_up ? local_max[normal_axis] : local_min[normal_axis];
 
 	glm::vec3 center_world = glm::vec3(transform * glm::vec4(surface_local, 1.0f));
 	center_world -= normal * kPoolWaterSurfaceDepthInsetWorld;
@@ -739,10 +740,10 @@ void refreshSelectedMaterialEditor(const Scene* scene) {
 		return;
 	}
 
-	const auto& mesh = scene->m_meshes[selected_entry->mesh_index];
-	selection_ctx.editor_material =
-	    (mesh != nullptr && mesh->m_material != nullptr) ? mesh->m_material->pack() :
-	                                                       Material{}.pack();
+	const auto& mesh              = scene->m_meshes[selected_entry->mesh_index];
+	selection_ctx.editor_material = (mesh != nullptr && mesh->m_material != nullptr) ?
+	                                    mesh->m_material->pack() :
+	                                    Material{}.pack();
 }
 
 bool selectObject(const Scene* scene, int object_id) {
@@ -971,7 +972,7 @@ CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
 	const glm::vec3 up     = glm::normalize(glm::vec3(camera.up));
 	const float     fov    = camera.fov_near_far.x;
 	const float     aspect = static_cast<float>(framebuffer_width) /
-	                     static_cast<float>(std::max(framebuffer_height, 1u));
+	                         static_cast<float>(std::max(framebuffer_height, 1u));
 
 	const float half_height = std::tan(glm::radians(fov) * 0.5f);
 	const float half_width  = aspect * half_height;
@@ -1081,8 +1082,8 @@ bool intersectRayWaterSelectionSurface(const CpuRay& ray, float& out_t) {
 
 	const glm::vec3 hit_point = ray.origin + ray.direction * t;
 	const glm::vec3 delta     = hit_point - water_surface_render_ctx.center;
-	const float u             = glm::dot(delta, water_surface_render_ctx.axis_u);
-	const float v             = glm::dot(delta, water_surface_render_ctx.axis_v);
+	const float     u         = glm::dot(delta, water_surface_render_ctx.axis_u);
+	const float     v         = glm::dot(delta, water_surface_render_ctx.axis_v);
 	if (std::abs(u) > water_surface_render_ctx.half_extent_u ||
 	    std::abs(v) > water_surface_render_ctx.half_extent_v) {
 		return false;
@@ -1106,8 +1107,8 @@ int pickObjectAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& 
 		return -1;
 	}
 
-	const CpuRay world_ray    = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
-	float        best_t       = std::numeric_limits<float>::infinity();
+	const CpuRay world_ray = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
+	float        best_t    = std::numeric_limits<float>::infinity();
 	int          best_object_id = -1;
 
 	const int water_object_id = waterSurfaceObjectId(scene);
@@ -1125,9 +1126,9 @@ int pickObjectAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& 
 
 		const glm::mat4& inverse_transform = mesh->m_transform.m_inverseTransform;
 		const CpuRay     local_ray{
-            glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
-            glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
-        };
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
+		};
 
 		if (glm::dot(local_ray.direction, local_ray.direction) < 1.0e-12f) {
 			continue;
@@ -1150,7 +1151,7 @@ int pickObjectAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& 
 				continue;
 			}
 
-			const glm::vec3 local_hit  = local_ray.origin + local_ray.direction * hit_t;
+			const glm::vec3 local_hit = local_ray.origin + local_ray.direction * hit_t;
 			const glm::vec3 world_hit =
 			    glm::vec3(mesh->m_transform.m_transform * glm::vec4(local_hit, 1.0f));
 			const float world_t = glm::dot(world_hit - world_ray.origin, world_ray.direction);
@@ -1206,8 +1207,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	ImGui::Text("Selectable objects: %d", static_cast<int>(selection_ctx.object_id_map.size()));
 
 	const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_object_id);
-	ImGui::Text("Selected object: %s",
-	            objectDisplayName(selection_ctx.selected_object_id).c_str());
+	ImGui::Text("Selected object: %s", objectDisplayName(selection_ctx.selected_object_id).c_str());
 
 	const bool has_selection = selected_entry != nullptr;
 
@@ -1730,194 +1730,194 @@ static void upload_rgba32f_3d(VmaAllocator alloc, VkDevice dev, VkCommandPool po
 // =======================
 static uint32_t g_frame_number_ref = 0;
 static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb_h) {
-    vkDeviceWaitIdle(vulkan_ctx.device);
+	vkDeviceWaitIdle(vulkan_ctx.device);
 
-    uint32_t new_w = fb_w;
-    uint32_t new_h = fb_h;
-    if (new_w == 0 || new_h == 0)
-        return;        // minimised – skip
+	uint32_t new_w = fb_w;
+	uint32_t new_h = fb_h;
+	if (new_w == 0 || new_h == 0)
+		return;        // minimised – skip
 
-    VmaAllocator allocator = render_target_ctx.allocator;
+	VmaAllocator allocator = render_target_ctx.allocator;
 
-    // -- Destroy old swapchain image views --
-    for (auto v : swapchain_ctx.image_views)
-        vkDestroyImageView(vulkan_ctx.device, v, nullptr);
-    swapchain_ctx.image_views.clear();
+	// -- Destroy old swapchain image views --
+	for (auto v : swapchain_ctx.image_views)
+		vkDestroyImageView(vulkan_ctx.device, v, nullptr);
+	swapchain_ctx.image_views.clear();
 
-    // -- Destroy old render-target images --
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.storage_image,
-	                    render_target_ctx.storage_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.object_id_image,
-	                    render_target_ctx.object_id_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	// -- Destroy old render-target images --
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.storage_image,
+	                render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+	                render_target_ctx.object_id_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
-    // -- Rebuild swapchain --
-    vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
-    auto           swap_ret =
-        vkb::SwapchainBuilder{vulkan_ctx.log_device}
-            .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-            .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-            .set_desired_extent(new_w, new_h)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-            .set_old_swapchain(old_swapchain.swapchain)
-            .build();
-    vkb::destroy_swapchain(old_swapchain);
+	// -- Rebuild swapchain --
+	vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
+	auto           swap_ret =
+	    vkb::SwapchainBuilder{vulkan_ctx.log_device}
+	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+	        .set_desired_extent(new_w, new_h)
+	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+	        .set_old_swapchain(old_swapchain.swapchain)
+	        .build();
+	vkb::destroy_swapchain(old_swapchain);
 
-    if (!swap_ret) {
-        std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
-        return;
-    }
-    swapchain_ctx.swapchain    = swap_ret.value();
-    swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
-    swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
-    auto images_ret            = swapchain_ctx.swapchain.get_images();
-    if (!images_ret)
-        return;
-    swapchain_ctx.images = images_ret.value();
-    auto views_ret       = swapchain_ctx.swapchain.get_image_views();
-    if (!views_ret)
-        return;
-    swapchain_ctx.image_views = views_ret.value();
-    swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
+	if (!swap_ret) {
+		std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
+		return;
+	}
+	swapchain_ctx.swapchain    = swap_ret.value();
+	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
+	auto images_ret            = swapchain_ctx.swapchain.get_images();
+	if (!images_ret)
+		return;
+	swapchain_ctx.images = images_ret.value();
+	auto views_ret       = swapchain_ctx.swapchain.get_image_views();
+	if (!views_ret)
+		return;
+	swapchain_ctx.image_views = views_ret.value();
+	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
 
-    // -- Recreate render-target images at new size --
-    // Use the actual swapchain extent (Vulkan may adjust from the requested size)
-    const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+	// -- Recreate render-target images at new size --
+	// Use the actual swapchain extent (Vulkan may adjust from the requested size)
+	const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
 
-    auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
-                            VkImageUsageFlags extra) {
-        VkImageCreateInfo ii{};
-        ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ii.imageType     = VK_IMAGE_TYPE_2D;
-        ii.format        = format;
-        ii.extent        = ext;
-        ii.mipLevels     = 1;
-        ii.arrayLayers   = 1;
-        ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-        vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
-    };
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
+		VkImageCreateInfo ii{};
+		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ii.imageType     = VK_IMAGE_TYPE_2D;
+		ii.format        = format;
+		ii.extent        = ext;
+		ii.mipLevels     = 1;
+		ii.arrayLayers   = 1;
+		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+	};
 
-    make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
-	                 VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, 0);
+	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, 0);
 
-    render_target_ctx.storage_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.object_id_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
-	                          VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.accum_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.storage_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.object_id_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	                      VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.accum_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 
-    // Transition accum → GENERAL
-    {
-        VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
-        transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
-		                     cmd);
-    }
+	// Transition accum → GENERAL
+	{
+		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                 cmd);
+	}
 
-    // Update the two storage-image descriptors (bindings 0 and 1)
-    {
-        VkDescriptorImageInfo out_img{};
-        out_img.imageView   = render_target_ctx.storage_image_view;
-        out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo object_id_img{};
-        object_id_img.imageView   = render_target_ctx.object_id_image_view;
-        object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo accum_img{};
-        accum_img.imageView   = render_target_ctx.accum_image_view;
-        accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	// Update the two storage-image descriptors (bindings 0 and 1)
+	{
+		VkDescriptorImageInfo out_img{};
+		out_img.imageView   = render_target_ctx.storage_image_view;
+		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo accum_img{};
+		accum_img.imageView   = render_target_ctx.accum_image_view;
+		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkWriteDescriptorSet writes[3]{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 0,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &out_img};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 13,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &object_id_img};
-        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 1,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &accum_img};
-        vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
-    }
+		VkWriteDescriptorSet writes[3]{};
+		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             0,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &out_img};
+		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             1,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &accum_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+	}
 
-    // Reset sync semaphores if the swapchain image count changed
-    {
-        const uint32_t n = (uint32_t) swapchain_ctx.images.size();
-        if (n != (uint32_t) sync_ctx.image_available.size()) {
-            for (auto s : sync_ctx.image_available)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            for (auto s : sync_ctx.render_finished)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            sync_ctx.image_available.resize(n);
-            sync_ctx.render_finished.resize(n);
-            VkSemaphoreCreateInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            for (uint32_t i = 0; i < n; ++i) {
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
-            }
-        }
-    }
+	// Reset sync semaphores if the swapchain image count changed
+	{
+		const uint32_t n = (uint32_t) swapchain_ctx.images.size();
+		if (n != (uint32_t) sync_ctx.image_available.size()) {
+			for (auto s : sync_ctx.image_available)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			for (auto s : sync_ctx.render_finished)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			sync_ctx.image_available.resize(n);
+			sync_ctx.render_finished.resize(n);
+			VkSemaphoreCreateInfo si{};
+			si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+			for (uint32_t i = 0; i < n; ++i) {
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
+			}
+		}
+	}
 
-    // Recreate overlay framebuffers for the new swapchain image views / extent
-    for (VkFramebuffer fb : overlay_ctx.framebuffers)
-        vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
-    overlay_ctx.framebuffers.clear();
-    overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-    for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-        VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
-        VkFramebufferCreateInfo framebuffer_info{};
-        framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass      = overlay_ctx.render_pass;
-        framebuffer_info.attachmentCount = 1;
-        framebuffer_info.pAttachments    = attachments;
-        framebuffer_info.width           = swapchain_ctx.extent.width;
-        framebuffer_info.height          = swapchain_ctx.extent.height;
-        framebuffer_info.layers          = 1;
-        vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                        &overlay_ctx.framebuffers[i]);
-    }
+	// Recreate overlay framebuffers for the new swapchain image views / extent
+	for (VkFramebuffer fb : overlay_ctx.framebuffers)
+		vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
+	overlay_ctx.framebuffers.clear();
+	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
+	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
+		VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
+		VkFramebufferCreateInfo framebuffer_info{};
+		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.renderPass      = overlay_ctx.render_pass;
+		framebuffer_info.attachmentCount = 1;
+		framebuffer_info.pAttachments    = attachments;
+		framebuffer_info.width           = swapchain_ctx.extent.width;
+		framebuffer_info.height          = swapchain_ctx.extent.height;
+		framebuffer_info.layers          = 1;
+		vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
+		                    &overlay_ctx.framebuffers[i]);
+	}
 
-    render_target_ctx.storage_image_initialized = false;
-    frame_number                                = 0;        // reset temporal accumulation
+	render_target_ctx.storage_image_initialized = false;
+	frame_number                                = 0;        // reset temporal accumulation
 
-    std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
-              << "\n";
+	std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
+	          << "\n";
 }
 
 // ============================================================
@@ -2424,10 +2424,10 @@ App::App() {
 	{
 		vkb::InstanceBuilder b;
 		auto                 r = b.set_app_name("tsunami")
-		             .request_validation_layers()
-		             .use_default_debug_messenger()
-		             .require_api_version(1, 3, 0)
-		             .build();
+		                             .request_validation_layers()
+		                             .use_default_debug_messenger()
+		                             .require_api_version(1, 3, 0)
+		                             .build();
 		if (!r)
 			throw std::runtime_error("failed to create Vulkan instance");
 		vulkan_ctx.instance = r.value();
@@ -2442,10 +2442,10 @@ App::App() {
 		                                 VK_KHR_RAY_QUERY_EXTENSION_NAME,
 		                                 VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 		auto                     r    = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
-		             .set_surface(vulkan_ctx.surface)
-		             .set_minimum_version(1, 3)
-		             .add_required_extensions(exts)
-		             .select();
+		                                    .set_surface(vulkan_ctx.surface)
+		                                    .set_minimum_version(1, 3)
+		                                    .add_required_extensions(exts)
+		                                    .select();
 		if (!r)
 			throw std::runtime_error("failed to select physical device");
 		vulkan_ctx.phys_device = r.value();
@@ -2464,10 +2464,10 @@ App::App() {
 		bf.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 		bf.bufferDeviceAddress = VK_TRUE;
 		auto r                 = vkb::DeviceBuilder{vulkan_ctx.phys_device}
-		             .add_pNext(&af)
-		             .add_pNext(&rf)
-		             .add_pNext(&bf)
-		             .build();
+		                             .add_pNext(&af)
+		                             .add_pNext(&rf)
+		                             .add_pNext(&bf)
+		                             .build();
 		if (!r)
 			throw std::runtime_error("failed to create logical device");
 		vulkan_ctx.log_device = r.value();
@@ -2526,22 +2526,22 @@ App::App() {
 	{
 		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
 		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
-                                      VkImageUsageFlags extra) {
-            VkImageCreateInfo ii{};
-            ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ii.imageType     = VK_IMAGE_TYPE_2D;
-            ii.format        = format;
-            ii.extent        = ext;
-            ii.mipLevels     = 1;
-            ii.arrayLayers   = 1;
-            ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-            ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VmaAllocationCreateInfo ai{};
-            ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-            if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
-                throw std::runtime_error("failed to create storage image");
+		                                    VkImageUsageFlags extra) {
+			VkImageCreateInfo ii{};
+			ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+			ii.imageType     = VK_IMAGE_TYPE_2D;
+			ii.format        = format;
+			ii.extent        = ext;
+			ii.mipLevels     = 1;
+			ii.arrayLayers   = 1;
+			ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+			ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+			ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+			ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VmaAllocationCreateInfo ai{};
+			ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+			if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
+				throw std::runtime_error("failed to create storage image");
 		};
 		auto make_dummy = [&](VkImageType itype, VkExtent3D e, VkImage& img, VmaAllocation& a) {
 			VkImageCreateInfo ii{};
@@ -3339,16 +3339,16 @@ void App::MainLoop() {
 		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
 
 		PathTracerPushConstants pc{};
-		pc.accumulation_frame          = frame_number;
-		pc.rng_seed                    = sample_seed;
-		pc.material_count              = scene_ctx.material_count;
-		pc.selected_object_id          = selection_ctx.selected_object_id;
-		pc.outline_width               = selection_ctx.outline_width;
-		pc.debug_view_mode             = static_cast<int32_t>(selection_ctx.debug_view_mode);
-		pc.water_object_id             = waterSurfaceObjectId(m_scene.get());
-		pc.water_enabled               =
+		pc.accumulation_frame = frame_number;
+		pc.rng_seed           = sample_seed;
+		pc.material_count     = scene_ctx.material_count;
+		pc.selected_object_id = selection_ctx.selected_object_id;
+		pc.outline_width      = selection_ctx.outline_width;
+		pc.debug_view_mode    = static_cast<int32_t>(selection_ctx.debug_view_mode);
+		pc.water_object_id    = waterSurfaceObjectId(m_scene.get());
+		pc.water_enabled =
 		    (m_water_surface != nullptr && water_surface_render_ctx.enabled) ? 1u : 0u;
-		pc.water_material_index        = waterSurfaceMaterialIndex(m_scene.get());
+		pc.water_material_index = waterSurfaceMaterialIndex(m_scene.get());
 		pc.water_height_to_world_scale =
 		    m_water_surface != nullptr ? m_water_surface->heightToWorldScale() : 1.0f;
 		pc.outline_color = selection_ctx.outline_color;

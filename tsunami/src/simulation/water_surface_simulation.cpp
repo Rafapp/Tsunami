@@ -530,7 +530,7 @@ void WaterSurfaceSimulation::requestObjectReset() {
 
 void WaterSurfaceSimulation::initializeFloatingObjects() {
 	std::array<FloatingObjectSettingsGpu, kMaxFloatingObjects> initial_settings{};
-	void* mapped_memory = nullptr;
+	void*                                                      mapped_memory = nullptr;
 	if (vmaMapMemory(m_allocator, m_floating_object_settings_allocation, &mapped_memory) !=
 	    VK_SUCCESS) {
 		throw std::runtime_error("failed to map floating object settings buffer");
@@ -631,9 +631,9 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 
 	if (m_floating_object_count > 0u) {
 		vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_object_pipeline);
-		vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-		                        m_object_pipeline_layout, 0, 1,
-		                        &m_object_descriptor_sets[m_active_descriptor_set_index], 0, nullptr);
+		vkCmdBindDescriptorSets(
+		    command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_object_pipeline_layout, 0, 1,
+		    &m_object_descriptor_sets[m_active_descriptor_set_index], 0, nullptr);
 		vkCmdPushConstants(command_buffer, m_object_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 		                   sizeof(FloatingObjectPushConstants), m_object_push_constants);
 		vkCmdDispatch(command_buffer, 1, 1, 1);
