@@ -39,7 +39,7 @@ static glm::mat4 ai_to_glm(const aiMatrix4x4& m) {
 }
 
 static std::string build_gltf_mesh_name(const aiNode* node, const aiMesh* ai_mesh,
-                                        unsigned int  mesh_idx) {
+                                        unsigned int mesh_idx) {
 	const std::string node_name = (node != nullptr) ? node->mName.C_Str() : "";
 	const std::string mesh_name = (ai_mesh != nullptr) ? ai_mesh->mName.C_Str() : "";
 

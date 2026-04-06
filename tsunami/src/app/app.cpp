@@ -128,9 +128,9 @@ struct RenderTargetContext {
 	VmaAllocation                      storage_image_alloc;
 	VkImageView                        storage_image_view;
 	bool                               storage_image_initialized = false;
-	VkImage                            object_id_image          = VK_NULL_HANDLE;
-	VmaAllocation                      object_id_image_alloc    = VK_NULL_HANDLE;
-	VkImageView                        object_id_image_view     = VK_NULL_HANDLE;
+	VkImage                            object_id_image           = VK_NULL_HANDLE;
+	VmaAllocation                      object_id_image_alloc     = VK_NULL_HANDLE;
+	VkImageView                        object_id_image_view      = VK_NULL_HANDLE;
 	VkImage                            accum_image;
 	VmaAllocation                      accum_image_alloc;
 	VkImageView                        accum_image_view;
@@ -201,19 +201,19 @@ struct PathTracerPushConstants {
 static_assert(sizeof(PathTracerPushConstants) == 48);
 
 struct ObjectIdEntry {
-	int         object_id      = -1;
+	int         object_id = -1;
 	std::string display_name;
 	int         mesh_index     = -1;
 	int         material_index = -1;
 };
 
 struct SelectionContext {
-	int              selected_mesh_index = -1;
-	MaterialEditMode material_edit_mode  = MaterialEditMode::Gui;
-	RenderDebugViewMode debug_view_mode  = RenderDebugViewMode::Beauty;
-	GPUMaterial      editor_material{};
-	glm::vec4        outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
-	uint32_t         outline_width       = 1;
+	int                        selected_mesh_index = -1;
+	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
+	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::Beauty;
+	GPUMaterial                editor_material{};
+	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	uint32_t                   outline_width = 1;
 	std::vector<ObjectIdEntry> object_id_map;
 
 	SelectionContext() {
@@ -429,7 +429,8 @@ void applyOverlayLevel(float value) {
 }
 
 std::string meshDisplayName(const Scene* scene, int mesh_index) {
-	if (scene == nullptr || mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+	if (scene == nullptr || mesh_index < 0 ||
+	    mesh_index >= static_cast<int>(scene->m_meshes.size())) {
 		return "None";
 	}
 
@@ -449,7 +450,7 @@ void rebuildObjectIdMap(const Scene* scene) {
 
 	selection_ctx.object_id_map.reserve(scene->m_meshes.size());
 	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
-		const auto& mesh = scene->m_meshes[mesh_index];
+		const auto&   mesh = scene->m_meshes[mesh_index];
 		ObjectIdEntry entry{};
 		entry.object_id      = mesh_index;
 		entry.mesh_index     = mesh_index;
@@ -476,14 +477,16 @@ void refreshSelectedMaterialEditor(const Scene* scene) {
 		return;
 	}
 
-	const auto& mesh = scene->m_meshes[selection_ctx.selected_mesh_index];
-	selection_ctx.editor_material =
-	    (mesh != nullptr && mesh->m_material != nullptr) ? mesh->m_material->pack() : Material{}.pack();
+	const auto& mesh              = scene->m_meshes[selection_ctx.selected_mesh_index];
+	selection_ctx.editor_material = (mesh != nullptr && mesh->m_material != nullptr) ?
+	                                    mesh->m_material->pack() :
+	                                    Material{}.pack();
 }
 
 bool selectMesh(const Scene* scene, int mesh_index) {
-	const int max_mesh_index = (scene != nullptr) ? static_cast<int>(scene->m_meshes.size()) - 1 : -1;
-	const int clamped_index  = (mesh_index >= 0 && mesh_index <= max_mesh_index) ? mesh_index : -1;
+	const int max_mesh_index =
+	    (scene != nullptr) ? static_cast<int>(scene->m_meshes.size()) - 1 : -1;
+	const int clamped_index = (mesh_index >= 0 && mesh_index <= max_mesh_index) ? mesh_index : -1;
 	if (selection_ctx.selected_mesh_index == clamped_index) {
 		return false;
 	}
@@ -500,7 +503,7 @@ void updateMaterialBufferSlot(VmaAllocator allocator, int material_index,
 		return;
 	}
 
-	auto* gpu_materials = reinterpret_cast<GPUMaterial*>(scene_ctx.material_mapped);
+	auto* gpu_materials           = reinterpret_cast<GPUMaterial*>(scene_ctx.material_mapped);
 	gpu_materials[material_index] = material;
 	vmaFlushAllocation(allocator, scene_ctx.material_alloc,
 	                   static_cast<VkDeviceSize>(material_index) * sizeof(GPUMaterial),
@@ -538,13 +541,12 @@ glm::vec2 cursorPositionInFramebuffer(GLFWwindow* window, uint32_t framebuffer_w
 	int window_height = 1;
 	glfwGetWindowSize(window, &window_width, &window_height);
 
-	const float scale_x =
-	    window_width > 0 ? static_cast<float>(framebuffer_width) / static_cast<float>(window_width) :
-	                       1.0f;
-	const float scale_y = window_height > 0 ?
-	                          static_cast<float>(framebuffer_height) /
-	                              static_cast<float>(window_height) :
-	                          1.0f;
+	const float scale_x = window_width > 0 ? static_cast<float>(framebuffer_width) /
+	                                             static_cast<float>(window_width) :
+	                                         1.0f;
+	const float scale_y = window_height > 0 ? static_cast<float>(framebuffer_height) /
+	                                              static_cast<float>(window_height) :
+	                                          1.0f;
 
 	return glm::vec2(static_cast<float>(cursor_x) * scale_x,
 	                 static_cast<float>(cursor_y) * scale_y);
@@ -556,8 +558,8 @@ CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
 	const glm::vec3 target = glm::vec3(camera.target);
 	const glm::vec3 up     = glm::normalize(glm::vec3(camera.up));
 	const float     fov    = camera.fov_near_far.x;
-	const float aspect =
-	    static_cast<float>(framebuffer_width) / static_cast<float>(std::max(framebuffer_height, 1u));
+	const float     aspect = static_cast<float>(framebuffer_width) /
+	                         static_cast<float>(std::max(framebuffer_height, 1u));
 
 	const float half_height = std::tan(glm::radians(fov) * 0.5f);
 	const float half_width  = aspect * half_height;
@@ -566,10 +568,9 @@ CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
 	const glm::vec3 right   = glm::normalize(glm::cross(forward, up));
 	const glm::vec3 up_axis = glm::cross(right, forward);
 
-	const glm::vec2 clamped_cursor =
-	    glm::clamp(cursor_position, glm::vec2(0.0f),
-	               glm::vec2(static_cast<float>(framebuffer_width),
-	                         static_cast<float>(framebuffer_height)));
+	const glm::vec2 clamped_cursor = glm::clamp(
+	    cursor_position, glm::vec2(0.0f),
+	    glm::vec2(static_cast<float>(framebuffer_width), static_cast<float>(framebuffer_height)));
 	const glm::vec2 uv =
 	    glm::vec2(clamped_cursor.x / static_cast<float>(std::max(framebuffer_width, 1u)),
 	              clamped_cursor.y / static_cast<float>(std::max(framebuffer_height, 1u)));
@@ -651,20 +652,21 @@ bool intersectRayTriangle(const CpuRay& ray, const glm::vec3& v0, const glm::vec
 
 int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& camera,
                      uint32_t framebuffer_width, uint32_t framebuffer_height) {
-	if (scene == nullptr || window == nullptr || framebuffer_width == 0 || framebuffer_height == 0) {
+	if (scene == nullptr || window == nullptr || framebuffer_width == 0 ||
+	    framebuffer_height == 0) {
 		return -1;
 	}
 
-	const glm::vec2 cursor = cursorPositionInFramebuffer(window, framebuffer_width, framebuffer_height);
+	const glm::vec2 cursor =
+	    cursorPositionInFramebuffer(window, framebuffer_width, framebuffer_height);
 	if (cursor.x < 0.0f || cursor.y < 0.0f || cursor.x >= static_cast<float>(framebuffer_width) ||
 	    cursor.y >= static_cast<float>(framebuffer_height)) {
 		return -1;
 	}
 
-	const CpuRay world_ray =
-	    buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
-	float best_t       = std::numeric_limits<float>::infinity();
-	int   best_mesh_id = -1;
+	const CpuRay world_ray    = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
+	float        best_t       = std::numeric_limits<float>::infinity();
+	int          best_mesh_id = -1;
 
 	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
 		const auto& mesh = scene->m_meshes[mesh_index];
@@ -674,9 +676,9 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 
 		const glm::mat4& inverse_transform = mesh->m_transform.m_inverseTransform;
 		const CpuRay     local_ray{
-		        glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
-		        glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
-        };
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
+		};
 
 		if (glm::dot(local_ray.direction, local_ray.direction) < 1.0e-12f) {
 			continue;
@@ -730,7 +732,8 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
 	}
 
-	ImGui::Text("Scene objects: %d", scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
+	ImGui::Text("Scene objects: %d",
+	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
 	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
 	ImGui::Text("Selected mesh: %s",
 	            meshDisplayName(scene, selection_ctx.selected_mesh_index).c_str());
@@ -778,18 +781,17 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Material");
-	ImGui::TextWrapped("Texture-backed meshes use these controls as live multipliers and overrides.");
+	ImGui::TextWrapped(
+	    "Texture-backed meshes use these controls as live multipliers and overrides.");
 
 	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
 	ImGui::BeginDisabled(!gui_mode_enabled);
 	result.material_changed |=
 	    ImGui::ColorEdit3("Base tint", glm::value_ptr(selection_ctx.editor_material.base_color));
-	result.material_changed |=
-	    ImGui::SliderFloat("Opacity", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f,
-	                       "%.2f");
-	result.material_changed |=
-	    ImGui::SliderFloat("Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f,
-	                       "%.2f");
+	result.material_changed |= ImGui::SliderFloat(
+	    "Opacity", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f, "%.2f");
+	result.material_changed |= ImGui::SliderFloat(
+	    "Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f, "%.2f");
 	result.material_changed |= ImGui::SliderFloat(
 	    "Roughness", &selection_ctx.editor_material.specular_roughness, 0.02f, 1.0f, "%.2f");
 	result.material_changed |= ImGui::SliderFloat(
@@ -798,9 +800,9 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	    ImGui::SliderFloat("IOR", &selection_ctx.editor_material.specular_ior, 1.0f, 2.5f, "%.2f");
 	result.material_changed |= ImGui::ColorEdit3(
 	    "Emission color", glm::value_ptr(selection_ctx.editor_material.emission_color));
-	result.material_changed |= ImGui::SliderFloat(
-	    "Emission intensity", &selection_ctx.editor_material.emission_luminance, 0.0f, 20.0f,
-	    "%.2f");
+	result.material_changed |=
+	    ImGui::SliderFloat("Emission intensity", &selection_ctx.editor_material.emission_luminance,
+	                       0.0f, 20.0f, "%.2f");
 	bool thin_walled = selection_ctx.editor_material.geometry_thin_walled > 0.5f;
 	if (ImGui::Checkbox("Thin walled", &thin_walled)) {
 		selection_ctx.editor_material.geometry_thin_walled = thin_walled ? 1.0f : 0.0f;
@@ -1915,8 +1917,8 @@ App::App() {
 	// ========================================
 	{
 		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
-		auto make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
-		                              VkImageUsageFlags extra) {
+		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
+		                                    VkImageUsageFlags extra) {
 			VkImageCreateInfo ii{};
 			ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 			ii.imageType     = VK_IMAGE_TYPE_2D;
@@ -1952,8 +1954,9 @@ App::App() {
 		};
 		make_storage_image(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
 		                   VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-		make_storage_image(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
-		                   VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+		make_storage_image(render_target_ctx.object_id_image,
+		                   render_target_ctx.object_id_image_alloc, VK_FORMAT_R32_SINT,
+		                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 		make_storage_image(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
 		                   VK_FORMAT_R8G8B8A8_UNORM, 0);
 		render_target_ctx.storage_image_view =
@@ -2647,9 +2650,9 @@ void App::MainLoop() {
 		const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
 		if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE && !fly_cam.isMouseCaptured() &&
 		    !ImGui::GetIO().WantCaptureMouse) {
-			if (selectMesh(m_scene.get(), pickMeshAtCursor(m_scene.get(), m_window->handle(),
-			                                               gpu_camera, framebuffer_width,
-			                                               framebuffer_height))) {
+			if (selectMesh(m_scene.get(),
+			               pickMeshAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
+			                                framebuffer_width, framebuffer_height))) {
 				frame_number = 0;
 			}
 		}
