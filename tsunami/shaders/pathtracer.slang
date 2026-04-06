@@ -5,15 +5,16 @@
 static const uint NUM_LUTS         = 8;
 static const uint MAX_MAT_TEXTURES = 256;
 
-[[vk::binding(3, 0)]] SamplerState g_sampler;
+[[vk::binding(3, 0)]] SamplerState g_lut_sampler;
 [[vk::binding(9,  0)]] Texture2D<float4> openpbr_luts_2d[NUM_LUTS];
 [[vk::binding(10, 0)]] Texture3D<float4> openpbr_luts_3d[NUM_LUTS];
+[[vk::binding(12, 0)]] SamplerState g_material_sampler;
 
 float4 openpbr_sample_2d_impl(int lut_id, float2 uv) {
-    return openpbr_luts_2d[lut_id].SampleLevel(g_sampler, uv, 0.f);
+    return openpbr_luts_2d[lut_id].SampleLevel(g_lut_sampler, uv, 0.f);
 }
 float4 openpbr_sample_3d_impl(int lut_id, float3 uvw) {
-    return openpbr_luts_3d[lut_id].SampleLevel(g_sampler, uvw, 0.f);
+    return openpbr_luts_3d[lut_id].SampleLevel(g_lut_sampler, uvw, 0.f);
 }
 #define OPENPBR_SAMPLE_2D_TEXTURE(lut_id, uv)  openpbr_sample_2d_impl((lut_id), (uv))
 #define OPENPBR_SAMPLE_3D_TEXTURE(lut_id, uvw) openpbr_sample_3d_impl((lut_id), (uvw))
@@ -259,7 +260,8 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 // ─── Texture sampling ─────────────────────────────────────────────────────────
 float4 sample_tex(uint index, float2 uv, float4 fallback) {
     if (index == NO_TEXTURE) return fallback;
-    return material_textures[NonUniformResourceIndex(index)].SampleLevel(g_sampler, uv, 0.f);
+    return material_textures[NonUniformResourceIndex(index)].SampleLevel(
+        g_material_sampler, uv, 0.f);
 }
 
 // ─── Fill OpenPBR inputs ──────────────────────────────────────────────────────
