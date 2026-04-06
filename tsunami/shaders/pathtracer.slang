@@ -289,6 +289,7 @@ OpenPBR_ResolvedInputs material_to_openpbr(
 
     inp.transmission_weight                 = m.transmission_weight;
     inp.transmission_color                  = m.transmission_color.rgb;
+    //inp.transmission_color                  = float3(1,0,0); // debug red transmission to visualize where it's used
     inp.transmission_depth                  = m.transmission_depth;
     inp.transmission_scatter                = m.transmission_scatter.rgb;
     inp.transmission_scatter_anisotropy     = m.transmission_scatter_anisotropy;
