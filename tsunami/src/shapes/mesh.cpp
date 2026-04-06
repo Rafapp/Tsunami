@@ -122,16 +122,19 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 				emission_intensity = glm::length(emission) > 0.0f ? 1.0f : 0.0f;
 			}
 
-			mat->Get(AI_MATKEY_METALLIC_FACTOR,     metalness);
-			mat->Get(AI_MATKEY_ROUGHNESS_FACTOR,    roughness);
-			mat->Get(AI_MATKEY_REFRACTI,            ior);
+			mat->Get(AI_MATKEY_METALLIC_FACTOR, metalness);
+			mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
+			mat->Get(AI_MATKEY_REFRACTI, ior);
 			mat->Get(AI_MATKEY_TRANSMISSION_FACTOR, transmission);
 		}
 
 		auto material = std::make_shared<Material>();
-		material->albedo(albedo).emission(emission, emission_intensity)
-		         .metalness(metalness).roughness(roughness).ior(ior)
-		         .transmission(transmission);
+		material->albedo(albedo)
+		    .emission(emission, emission_intensity)
+		    .metalness(metalness)
+		    .roughness(roughness)
+		    .ior(ior)
+		    .transmission(transmission);
 
 		// --- Transform from node tree ---
 		glm::mat4 glm_transform = ai_to_glm(world);
