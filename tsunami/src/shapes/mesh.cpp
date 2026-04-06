@@ -83,6 +83,7 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 			} else {
 				gv.tangent = glm::vec4(1, 0, 0, 1);        // fallback
 			}
+			verts.push_back(gv);
 		}
 
 		// --- Indices ---

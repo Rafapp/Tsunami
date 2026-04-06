@@ -44,45 +44,58 @@ struct GPUCamera {
 };
 
 struct GPUMaterial {
+    // Base layer
     float4 base_color;
-    float  base_metalness;
-    float  base_diffuse_roughness;
-    float  _pad0[2];
+    float     base_metalness;
+    float     base_diffuse_roughness;
+    float     _pad0[2];
 
+    // Specular layer
     float4 specular_color;
-    float  specular_roughness;
-    float  specular_ior;
-    float  specular_anisotropy;
-    float  _pad1;
+    float     specular_roughness;
+    float     specular_ior;
+    float     specular_anisotropy;
+    float     _pad1;
 
-    float  transmission_weight;
-    float  _pad2[3];
+    // Transmission
+    float     transmission_weight;
+    float     transmission_depth;
+    float     transmission_scatter_anisotropy;
+    float     geometry_opacity;
     float4 transmission_color;
+    float4 transmission_scatter;
 
+    // Emission
     float4 emission_color;
-    float  emission_luminance;
-    float  _pad3[3];
+    float     emission_luminance;
+    float     geometry_thin_walled; // store as float/int for alignment simplicity
+    float     transmission_dispersion_scale;
+    float     transmission_dispersion_abbe_number;
 
-    float  coat_weight;
-    float  coat_roughness;
-    float  coat_ior;
-    float  _pad4;
+    // Coat
+    float     coat_weight;
+    float     coat_roughness;
+    float     coat_ior;
+    float     _pad4;
     float4 coat_color;
 
-    float  fuzz_weight;
-    float  fuzz_roughness;
-    float  _pad5[2];
+    // Fuzz/sheen
+    float     fuzz_weight;
+    float     fuzz_roughness;
+    float     _pad5[2];
     float4 fuzz_color;
 
-    float  thin_film_weight;
-    float  thin_film_ior;
-    float  thin_film_thickness;
-    float  _pad6;
+    // Thin film
+    float     thin_film_weight;
+    float     thin_film_ior;
+    float     thin_film_thickness;
+    float     _pad6;
 
-    uint   albedo_tex_index;
-    uint   normal_tex_index;
-    uint   roughness_tex_index;
-    uint   emissive_tex_index;
+    // Texture indices
+    uint32_t albedo_tex_index;
+    uint32_t normal_tex_index;
+    uint32_t roughness_tex_index;
+    uint32_t emissive_tex_index;
 };
 
 struct GPUVertex {
@@ -119,7 +132,7 @@ static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 // so it passes cleanly through Sponza's open atrium top regardless of the
 // camera position.  Angle it slightly so surfaces at grazing incidence still
 // catch some light.
-static const float3 g_sun_dir       = normalize(float3(0.3f, 1.0f, 0.2f));
+static float3 g_sun_dir       = normalize(float3(0.f, -1.0f, 0.f));
 static const float3 g_sun_color     = float3(1.0f, 0.95f, 0.85f);
 static const float  g_sun_intensity = 0.5f;   // tweak for desired exposure
 
@@ -158,6 +171,9 @@ VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     a.normal = normalize(vertices_buf[voff+i0].normal*w0 +
                          vertices_buf[voff+i1].normal*bary.x +
                          vertices_buf[voff+i2].normal*bary.y);
+    a.tangent = vertices_buf[voff+i0].tangent*w0 +
+                vertices_buf[voff+i1].tangent*bary.x +
+                vertices_buf[voff+i2].tangent*bary.y;
     a.uv = vertices_buf[voff+i0].uv*w0 +
            vertices_buf[voff+i1].uv*bary.x +
            vertices_buf[voff+i2].uv*bary.y;
@@ -183,43 +199,51 @@ bool is_occluded(float3 origin, float3 normal, float3 dir, float tmax) {
 bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     hit = (Hit)0;
     mat = (GPUMaterial)0;
+
     RayDesc rd;
     rd.Origin    = ray.origin;
     rd.Direction = ray.dir;
     rd.TMin      = T_MIN;
     rd.TMax      = T_MAX;
+
     RayQuery<RAY_FLAG_NONE> q;
     q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, rd);
+
     while (q.Proceed()) {
         if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
             q.CommitNonOpaqueTriangleHit();
     }
+
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
-    hit.t              = q.CommittedRayT();
-    uint instID        = q.CommittedInstanceID();
-    uint primID        = q.CommittedPrimitiveIndex();
-    float2 bary        = q.CommittedTriangleBarycentrics();
-    bool frontFace     = q.CommittedTriangleFrontFace();
+
+    hit.t          = q.CommittedRayT();
+    uint instID    = q.CommittedInstanceID();
+    uint primID    = q.CommittedPrimitiveIndex();
+    float2 bary    = q.CommittedTriangleBarycentrics();
+    bool frontFace = q.CommittedTriangleFrontFace();
+
     VertexAttribs attr = fetchAttribs(instID, primID, bary);
+
+    hit.uv         = attr.uv;
+    hit.front_face = frontFace;
+    hit.matIndex   = meshes_buf[instID].matIndex;
+    mat            = materials_buf[hit.matIndex];
+
     float3 N = normalize(attr.normal);
     float3 T = normalize(attr.tangent.xyz);
     float  handedness = attr.tangent.w;
 
-    // Gram-Schmidt (important for robustness)
     T = normalize(T - N * dot(N, T));
     float3 B = handedness * cross(N, T);
 
-    // --- Sample normal map ---
     float3 normal_tex = sample_tex(
         mat.normal_tex_index,
         attr.uv,
-        float4(0.5, 0.5, 1.0, 1.0) // default flat normal
+        float4(0.5, 0.5, 1.0, 1.0)
     ).xyz;
 
-    // convert [0,1] → [-1,1]
     normal_tex = normal_tex * 2.0 - 1.0;
 
-    // transform to world space
     float3 N_world = normalize(
         T * normal_tex.x +
         B * normal_tex.y +
@@ -227,10 +251,6 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     );
 
     hit.normal = frontFace ? N_world : -N_world;
-    hit.uv             = attr.uv;
-    hit.front_face     = frontFace;
-    hit.matIndex       = meshes_buf[instID].matIndex;
-    mat                = materials_buf[hit.matIndex];
     return true;
 }
 
@@ -245,23 +265,32 @@ OpenPBR_ResolvedInputs material_to_openpbr(
     GPUMaterial m, float2 uv, float3 n, float3 t, float3 b)
 {
     OpenPBR_ResolvedInputs inp = openpbr_make_default_resolved_inputs();
-    float4 alb             = sample_tex(m.albedo_tex_index, uv, m.base_color);
+
+    float4 alb = sample_tex(m.albedo_tex_index, uv, m.base_color);
     float roughness_tex = sample_tex(
-    m.roughness_tex_index, uv, float4(m.specular_roughness, 0.f, 0.f, 1.f)).r;
-    inp.specular_roughness = roughness_tex;
-    inp.base_color         = alb.rgb;
-    inp.base_weight        = m.base_color.a;
-    inp.base_metalness     = m.base_metalness;
-    inp.base_diffuse_roughness = m.base_diffuse_roughness;
+        m.roughness_tex_index, uv, float4(m.specular_roughness, 0.f, 0.f, 1.f)).r;
 
-    inp.specular_color     = m.specular_color.rgb;
-    inp.specular_weight    = m.specular_color.a;
-    inp.specular_roughness = m.specular_roughness;
-    inp.specular_ior       = m.specular_ior;
-    inp.specular_roughness_anisotropy = m.specular_anisotropy;
+    inp.base_color              = alb.rgb;
+    inp.base_weight             = m.base_color.a;
+    inp.base_metalness          = m.base_metalness;
+    inp.base_diffuse_roughness  = m.base_diffuse_roughness;
 
-    inp.transmission_weight = m.transmission_weight;
-    inp.transmission_color  = m.transmission_color.rgb;
+    inp.specular_color                 = m.specular_color.rgb;
+    inp.specular_weight                = m.specular_color.a;
+    inp.specular_roughness             = roughness_tex;
+    inp.specular_ior                   = m.specular_ior;
+    inp.specular_roughness_anisotropy  = m.specular_anisotropy;
+
+    inp.transmission_weight                 = m.transmission_weight;
+    inp.transmission_color                  = m.transmission_color.rgb;
+    inp.transmission_depth                  = m.transmission_depth;
+    inp.transmission_scatter                = m.transmission_scatter.rgb;
+    inp.transmission_scatter_anisotropy     = m.transmission_scatter_anisotropy;
+    inp.transmission_dispersion_scale       = m.transmission_dispersion_scale;
+    inp.transmission_dispersion_abbe_number = m.transmission_dispersion_abbe_number;
+
+    inp.geometry_opacity     = m.geometry_opacity;
+    inp.geometry_thin_walled = (m.geometry_thin_walled > 0.5);
 
     inp.coat_weight    = m.coat_weight;
     inp.coat_color     = m.coat_color.rgb;
@@ -387,6 +416,7 @@ Ray makeRay(uint2 pixel, uint2 dims, float2 jitter) {
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 dispatch_id : SV_DispatchThreadID) {
