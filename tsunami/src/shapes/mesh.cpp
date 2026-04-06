@@ -102,6 +102,10 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		glm::vec3 albedo(0.8f);
 		glm::vec3 emission(0.0f);
 		float     emission_intensity = 0.0f;
+		float     metalness          = 0.f;
+		float     roughness          = 0.3f;
+		float     ior                = 1.5f;
+		float     transmission       = 0.f;
 
 		if (scene->HasMaterials() && ai_mesh->mMaterialIndex < scene->mNumMaterials) {
 			const aiMaterial* mat = scene->mMaterials[ai_mesh->mMaterialIndex];
@@ -117,10 +121,17 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 				emission           = {emissive.r, emissive.g, emissive.b};
 				emission_intensity = glm::length(emission) > 0.0f ? 1.0f : 0.0f;
 			}
+
+			mat->Get(AI_MATKEY_METALLIC_FACTOR,     metalness);
+			mat->Get(AI_MATKEY_ROUGHNESS_FACTOR,    roughness);
+			mat->Get(AI_MATKEY_REFRACTI,            ior);
+			mat->Get(AI_MATKEY_TRANSMISSION_FACTOR, transmission);
 		}
 
 		auto material = std::make_shared<Material>();
-		material->albedo(albedo).emission(emission, emission_intensity);
+		material->albedo(albedo).emission(emission, emission_intensity)
+		         .metalness(metalness).roughness(roughness).ior(ior)
+		         .transmission(transmission);
 
 		// --- Transform from node tree ---
 		glm::mat4 glm_transform = ai_to_glm(world);

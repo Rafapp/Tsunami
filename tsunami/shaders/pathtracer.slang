@@ -122,7 +122,7 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 4;
+static const int   MAX_BOUNCES = 8;
 static const float T_MIN       = 1e-4f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
@@ -138,7 +138,7 @@ static const float  g_sun_intensity = 0.5f;   // tweak for desired exposure
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 struct Ray { float3 origin; float3 dir; };
-struct Hit { float t; float3 normal; float2 uv; bool front_face; int matIndex; };
+struct Hit { float t; float3 normal; float3 tangent; float3 bitangent; float2 uv; bool front_face; int matIndex; };
 
 // ─── RNG ──────────────────────────────────────────────────────────────────────
 struct RNG {
@@ -250,7 +250,9 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
         N * normal_tex.z
     );
 
-    hit.normal = frontFace ? N_world : -N_world;
+    hit.normal    = frontFace ? N_world : -N_world;
+    hit.tangent   = T;
+    hit.bitangent = B;
     return true;
 }
 
@@ -267,17 +269,21 @@ OpenPBR_ResolvedInputs material_to_openpbr(
     OpenPBR_ResolvedInputs inp = openpbr_make_default_resolved_inputs();
 
     float4 alb = sample_tex(m.albedo_tex_index, uv, m.base_color);
-    float roughness_tex = sample_tex(
-        m.roughness_tex_index, uv, float4(m.specular_roughness, 0.f, 0.f, 1.f)).r;
+    // glTF ORM texture: R=occlusion, G=roughness, B=metalness.
+    // Fallback packs the CPU constants into the same channels so both paths
+    // (textured and constant) use the same .g/.b reads below.
+    float4 orm = sample_tex(
+        m.roughness_tex_index, uv,
+        float4(1.f, m.specular_roughness, m.base_metalness, 1.f));
 
     inp.base_color              = alb.rgb;
     inp.base_weight             = m.base_color.a;
-    inp.base_metalness          = m.base_metalness;
+    inp.base_metalness          = orm.b;   // B channel = metalness
     inp.base_diffuse_roughness  = m.base_diffuse_roughness;
 
     inp.specular_color                 = m.specular_color.rgb;
     inp.specular_weight                = m.specular_color.a;
-    inp.specular_roughness             = roughness_tex;
+    inp.specular_roughness             = orm.g;         // G channel = roughness
     inp.specular_ior                   = m.specular_ior;
     inp.specular_roughness_anisotropy  = m.specular_anisotropy;
 
@@ -339,12 +345,12 @@ float3 tracePath(Ray ray, inout RNG rng) {
         float3 hitPos   = ray.origin + hit.t * ray.dir;
         float3 view_dir = -ray.dir;
 
-        float3 up        = abs(hit.normal.y) < 0.999f ? float3(0,1,0) : float3(1,0,0);
-        float3 tangent   = normalize(cross(up, hit.normal));
-        float3 bitangent = cross(hit.normal, tangent);
-
+        // Pass the unflipped geometric normal to OpenPBR so it can detect back-face
+        // hits via dot(view_dir, shading_normal) < 0 and swap IORs for refraction.
+        // hit.normal is face-forwarded (always toward the ray origin), so we undo that.
+        float3 openpbr_normal = hit.front_face ? hit.normal : -hit.normal;
         OpenPBR_ResolvedInputs inputs = material_to_openpbr(
-            mat, hit.uv, hit.normal, tangent, bitangent);
+            mat, hit.uv, openpbr_normal, hit.tangent, hit.bitangent);
 
         OpenPBR_PreparedBsdf prepared = openpbr_prepare_bsdf_and_volume(
             inputs, throughput,
@@ -352,13 +358,22 @@ float3 tracePath(Ray ray, inout RNG rng) {
             view_dir);
 
         // ── Direct: sun NEE ──────────────────────────────────────────────────
-        // openpbr_eval() returns BSDF × |cos θ_i| — do NOT multiply by n_dot_l
-        // again; it is already folded into the eval result.
-        if (dot(hit.normal, g_sun_dir) > 0.f) {
-            if (!is_occluded(hitPos, hit.normal, g_sun_dir, T_MAX)) {
-                float3 wi_l = openpbr_world_to_local(inputs.shading_basis, g_sun_dir);
-                float3 f    = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, wi_l));
-                radiance   += throughput * f * g_sun_color * g_sun_intensity;
+        // openpbr_eval() takes world-space directions and returns BSDF × |cos θ_i|.
+        // Do NOT convert to local space; do NOT multiply by n_dot_l again.
+        // For transmissive materials, also sample the back hemisphere (backlit glass).
+        {
+            bool sun_front = dot(hit.normal,  g_sun_dir) > 0.f;
+            bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f && inputs.transmission_weight > 0.f;
+
+            if (sun_front && !is_occluded(hitPos, hit.normal, g_sun_dir, T_MAX)) {
+                float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, g_sun_dir));
+                radiance += throughput * f * g_sun_color * g_sun_intensity;
+            }
+            // For back-hemisphere shadow rays, offset the origin toward the sun side
+            // so the ray doesn't self-intersect with the surface it just hit.
+            if (sun_back && !is_occluded(hitPos, -hit.normal, -g_sun_dir, T_MAX)) {
+                float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, -g_sun_dir));
+                radiance += throughput * f * g_sun_color * g_sun_intensity;
             }
         }
 
@@ -381,7 +396,7 @@ float3 tracePath(Ray ray, inout RNG rng) {
             throughput /= p;
         }
 
-        float3 offset_n = hit.normal * (hit.front_face ? 1.f : -1.f);
+        float3 offset_n = dot(light_dir, hit.normal) >= 0.f ? hit.normal : -hit.normal;
         ray.origin = hitPos + offset_n * T_MIN;
         ray.dir    = light_dir;
     }
@@ -441,5 +456,6 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     float3 accum = lerp(prev, color, blend);
 
     accum_image[pixel] = float4(accum, 1.f);
-    output_image[pixel] = float4(color, 1.f);
+    // output_image[pixel] = float4(color, 1.f);
+    output_image[pixel] = float4(accum, 1.f);
 }

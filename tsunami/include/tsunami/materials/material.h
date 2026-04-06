@@ -136,7 +136,6 @@ class Material {
 		m_gpu.specular_ior                        = 1.5f;
 		m_gpu.specular_anisotropy                 = 0.f;
 		m_gpu.transmission_weight                 = 0.f;
-		m_gpu.transmission_weight                 = 0.f;
 		m_gpu.transmission_depth                  = 1.f;
 		m_gpu.transmission_scatter_anisotropy     = 0.f;
 		m_gpu.geometry_opacity                    = 1.f;
