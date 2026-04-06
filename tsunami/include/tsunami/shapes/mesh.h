@@ -38,7 +38,7 @@ class Mesh {
 
 	// Construct from already-built buffers (used by load_gltf)
 	Mesh(std::vector<GPUVertex> vertices, std::vector<uint32_t> indices, Transform transform,
-	     std::shared_ptr<Material> material);
+	     std::shared_ptr<Material> material, std::string name = {});
 
 	~Mesh() = default;
 
@@ -53,7 +53,11 @@ class Mesh {
 	std::vector<uint32_t>     gpuIndices;
 	Transform                 m_transform;
 	std::shared_ptr<Material> m_material;
+	std::string               m_name;
+	glm::vec3                 m_local_bounds_min = glm::vec3(0.0f);
+	glm::vec3                 m_local_bounds_max = glm::vec3(0.0f);
 
   private:
 	bool load_obj(const std::string& path);
+	void compute_local_bounds();
 };

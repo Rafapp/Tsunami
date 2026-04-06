@@ -3,8 +3,10 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "imgui.h"
@@ -38,6 +40,7 @@
 #define OPENPBR_ENERGY_TABLES_USE_UINT16 0        // uint32 for broadest platform compat
 #include "openpbr.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 // Raw data headers — these define the C arrays we will upload.
 // HOW TO USE:
 //   1. Open openpbr_data_constants.h     → table resolution constants
@@ -77,6 +80,7 @@ struct SceneContext {
 	void*         camera_mapped   = nullptr;
 	VkBuffer      camera_buffer   = VK_NULL_HANDLE;
 	VmaAllocation camera_alloc    = VK_NULL_HANDLE;
+	void*         material_mapped = nullptr;
 	VkBuffer      material_buffer = VK_NULL_HANDLE;
 	VmaAllocation material_alloc  = VK_NULL_HANDLE;
 	uint32_t      material_count  = 0;
@@ -124,6 +128,9 @@ struct RenderTargetContext {
 	VmaAllocation                      storage_image_alloc;
 	VkImageView                        storage_image_view;
 	bool                               storage_image_initialized = false;
+	VkImage                            object_id_image          = VK_NULL_HANDLE;
+	VmaAllocation                      object_id_image_alloc    = VK_NULL_HANDLE;
+	VkImageView                        object_id_image_view     = VK_NULL_HANDLE;
 	VkImage                            accum_image;
 	VmaAllocation                      accum_image_alloc;
 	VkImageView                        accum_image_view;
@@ -168,6 +175,56 @@ struct OverlayContext {
 	ui::AudienceDiagnostics       diagnostics{};
 	bool                          show_control_panel = true;
 } overlay_ctx{};
+
+enum class MaterialEditMode : int {
+	Gui   = 0,
+	Voice = 1,
+};
+
+enum class RenderDebugViewMode : int {
+	Beauty    = 0,
+	ObjectIds = 1,
+};
+
+struct PathTracerPushConstants {
+	uint32_t  frame               = 0;
+	uint32_t  material_count      = 0;
+	int32_t   selected_mesh_index = -1;
+	uint32_t  outline_width       = 1;
+	int32_t   debug_view_mode     = static_cast<int32_t>(RenderDebugViewMode::Beauty);
+	uint32_t  _pad0               = 0;
+	uint32_t  _pad1               = 0;
+	uint32_t  _pad2               = 0;
+	glm::vec4 outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+};
+
+static_assert(sizeof(PathTracerPushConstants) == 48);
+
+struct ObjectIdEntry {
+	int         object_id      = -1;
+	std::string display_name;
+	int         mesh_index     = -1;
+	int         material_index = -1;
+};
+
+struct SelectionContext {
+	int              selected_mesh_index = -1;
+	MaterialEditMode material_edit_mode  = MaterialEditMode::Gui;
+	RenderDebugViewMode debug_view_mode  = RenderDebugViewMode::Beauty;
+	GPUMaterial      editor_material{};
+	glm::vec4        outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	uint32_t         outline_width       = 1;
+	std::vector<ObjectIdEntry> object_id_map;
+
+	SelectionContext() {
+		editor_material = Material{}.pack();
+	}
+} selection_ctx{};
+
+struct SelectionPanelResult {
+	bool selection_changed = false;
+	bool material_changed  = false;
+};
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -369,6 +426,396 @@ void applyOverlayLevel(float value) {
 	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
 	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
 	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
+}
+
+std::string meshDisplayName(const Scene* scene, int mesh_index) {
+	if (scene == nullptr || mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+		return "None";
+	}
+
+	const Mesh* mesh = scene->m_meshes[mesh_index].get();
+	if (mesh == nullptr || mesh->m_name.empty()) {
+		return "Mesh " + std::to_string(mesh_index);
+	}
+
+	return mesh->m_name;
+}
+
+void rebuildObjectIdMap(const Scene* scene) {
+	selection_ctx.object_id_map.clear();
+	if (scene == nullptr) {
+		return;
+	}
+
+	selection_ctx.object_id_map.reserve(scene->m_meshes.size());
+	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
+		const auto& mesh = scene->m_meshes[mesh_index];
+		ObjectIdEntry entry{};
+		entry.object_id      = mesh_index;
+		entry.mesh_index     = mesh_index;
+		entry.material_index = mesh_index;
+		entry.display_name   = meshDisplayName(scene, mesh_index);
+		if (mesh == nullptr || mesh->m_material == nullptr) {
+			entry.material_index = -1;
+		}
+		selection_ctx.object_id_map.push_back(std::move(entry));
+	}
+}
+
+const ObjectIdEntry* objectIdEntryForId(int object_id) {
+	if (object_id < 0 || object_id >= static_cast<int>(selection_ctx.object_id_map.size())) {
+		return nullptr;
+	}
+	return &selection_ctx.object_id_map[object_id];
+}
+
+void refreshSelectedMaterialEditor(const Scene* scene) {
+	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
+	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+		selection_ctx.editor_material = Material{}.pack();
+		return;
+	}
+
+	const auto& mesh = scene->m_meshes[selection_ctx.selected_mesh_index];
+	selection_ctx.editor_material =
+	    (mesh != nullptr && mesh->m_material != nullptr) ? mesh->m_material->pack() : Material{}.pack();
+}
+
+bool selectMesh(const Scene* scene, int mesh_index) {
+	const int max_mesh_index = (scene != nullptr) ? static_cast<int>(scene->m_meshes.size()) - 1 : -1;
+	const int clamped_index  = (mesh_index >= 0 && mesh_index <= max_mesh_index) ? mesh_index : -1;
+	if (selection_ctx.selected_mesh_index == clamped_index) {
+		return false;
+	}
+
+	selection_ctx.selected_mesh_index = clamped_index;
+	refreshSelectedMaterialEditor(scene);
+	return true;
+}
+
+void updateMaterialBufferSlot(VmaAllocator allocator, int material_index,
+                              const GPUMaterial& material) {
+	if (scene_ctx.material_mapped == nullptr || material_index < 0 ||
+	    material_index >= static_cast<int>(scene_ctx.material_count)) {
+		return;
+	}
+
+	auto* gpu_materials = reinterpret_cast<GPUMaterial*>(scene_ctx.material_mapped);
+	gpu_materials[material_index] = material;
+	vmaFlushAllocation(allocator, scene_ctx.material_alloc,
+	                   static_cast<VkDeviceSize>(material_index) * sizeof(GPUMaterial),
+	                   sizeof(GPUMaterial));
+}
+
+void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator) {
+	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
+	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+		return;
+	}
+
+	auto& mesh = scene->m_meshes[selection_ctx.selected_mesh_index];
+	if (mesh == nullptr || mesh->m_material == nullptr) {
+		return;
+	}
+
+	mesh->m_material->m_gpu = selection_ctx.editor_material;
+	updateMaterialBufferSlot(allocator, selection_ctx.selected_mesh_index,
+	                         selection_ctx.editor_material);
+}
+
+struct CpuRay {
+	glm::vec3 origin{};
+	glm::vec3 direction{};
+};
+
+glm::vec2 cursorPositionInFramebuffer(GLFWwindow* window, uint32_t framebuffer_width,
+                                      uint32_t framebuffer_height) {
+	double cursor_x = 0.0;
+	double cursor_y = 0.0;
+	glfwGetCursorPos(window, &cursor_x, &cursor_y);
+
+	int window_width  = 1;
+	int window_height = 1;
+	glfwGetWindowSize(window, &window_width, &window_height);
+
+	const float scale_x =
+	    window_width > 0 ? static_cast<float>(framebuffer_width) / static_cast<float>(window_width) :
+	                       1.0f;
+	const float scale_y = window_height > 0 ?
+	                          static_cast<float>(framebuffer_height) /
+	                              static_cast<float>(window_height) :
+	                          1.0f;
+
+	return glm::vec2(static_cast<float>(cursor_x) * scale_x,
+	                 static_cast<float>(cursor_y) * scale_y);
+}
+
+CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
+                    uint32_t framebuffer_height, const glm::vec2& cursor_position) {
+	const glm::vec3 origin = glm::vec3(camera.position);
+	const glm::vec3 target = glm::vec3(camera.target);
+	const glm::vec3 up     = glm::normalize(glm::vec3(camera.up));
+	const float     fov    = camera.fov_near_far.x;
+	const float aspect =
+	    static_cast<float>(framebuffer_width) / static_cast<float>(std::max(framebuffer_height, 1u));
+
+	const float half_height = std::tan(glm::radians(fov) * 0.5f);
+	const float half_width  = aspect * half_height;
+
+	const glm::vec3 forward = glm::normalize(target - origin);
+	const glm::vec3 right   = glm::normalize(glm::cross(forward, up));
+	const glm::vec3 up_axis = glm::cross(right, forward);
+
+	const glm::vec2 clamped_cursor =
+	    glm::clamp(cursor_position, glm::vec2(0.0f),
+	               glm::vec2(static_cast<float>(framebuffer_width),
+	                         static_cast<float>(framebuffer_height)));
+	const glm::vec2 uv =
+	    glm::vec2(clamped_cursor.x / static_cast<float>(std::max(framebuffer_width, 1u)),
+	              clamped_cursor.y / static_cast<float>(std::max(framebuffer_height, 1u)));
+
+	const float u = (2.0f * uv.x - 1.0f) * half_width;
+	const float v = (1.0f - 2.0f * uv.y) * half_height;
+
+	return CpuRay{origin, glm::normalize(forward + u * right + v * up_axis)};
+}
+
+bool intersectRayAabb(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& min,
+                      const glm::vec3& max, float& out_t_min, float& out_t_max) {
+	float t_min = 0.0f;
+	float t_max = std::numeric_limits<float>::infinity();
+
+	for (int axis = 0; axis < 3; ++axis) {
+		const float dir = direction[axis];
+		const float ori = origin[axis];
+
+		if (std::abs(dir) < 1.0e-8f) {
+			if (ori < min[axis] || ori > max[axis]) {
+				return false;
+			}
+			continue;
+		}
+
+		float t0 = (min[axis] - ori) / dir;
+		float t1 = (max[axis] - ori) / dir;
+		if (t0 > t1) {
+			std::swap(t0, t1);
+		}
+
+		t_min = std::max(t_min, t0);
+		t_max = std::min(t_max, t1);
+		if (t_min > t_max) {
+			return false;
+		}
+	}
+
+	out_t_min = t_min;
+	out_t_max = t_max;
+	return t_max >= 0.0f;
+}
+
+bool intersectRayTriangle(const CpuRay& ray, const glm::vec3& v0, const glm::vec3& v1,
+                          const glm::vec3& v2, float& out_t) {
+	constexpr float kEpsilon = 1.0e-7f;
+
+	const glm::vec3 edge1 = v1 - v0;
+	const glm::vec3 edge2 = v2 - v0;
+	const glm::vec3 pvec  = glm::cross(ray.direction, edge2);
+	const float     det   = glm::dot(edge1, pvec);
+
+	if (std::abs(det) < kEpsilon) {
+		return false;
+	}
+
+	const float     inv_det = 1.0f / det;
+	const glm::vec3 tvec    = ray.origin - v0;
+	const float     u       = glm::dot(tvec, pvec) * inv_det;
+	if (u < 0.0f || u > 1.0f) {
+		return false;
+	}
+
+	const glm::vec3 qvec = glm::cross(tvec, edge1);
+	const float     v    = glm::dot(ray.direction, qvec) * inv_det;
+	if (v < 0.0f || (u + v) > 1.0f) {
+		return false;
+	}
+
+	const float t = glm::dot(edge2, qvec) * inv_det;
+	if (t <= kEpsilon) {
+		return false;
+	}
+
+	out_t = t;
+	return true;
+}
+
+int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& camera,
+                     uint32_t framebuffer_width, uint32_t framebuffer_height) {
+	if (scene == nullptr || window == nullptr || framebuffer_width == 0 || framebuffer_height == 0) {
+		return -1;
+	}
+
+	const glm::vec2 cursor = cursorPositionInFramebuffer(window, framebuffer_width, framebuffer_height);
+	if (cursor.x < 0.0f || cursor.y < 0.0f || cursor.x >= static_cast<float>(framebuffer_width) ||
+	    cursor.y >= static_cast<float>(framebuffer_height)) {
+		return -1;
+	}
+
+	const CpuRay world_ray =
+	    buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
+	float best_t       = std::numeric_limits<float>::infinity();
+	int   best_mesh_id = -1;
+
+	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
+		const auto& mesh = scene->m_meshes[mesh_index];
+		if (mesh == nullptr || mesh->gpuIndices.size() < 3 || mesh->gpuVertices.empty()) {
+			continue;
+		}
+
+		const glm::mat4& inverse_transform = mesh->m_transform.m_inverseTransform;
+		const CpuRay     local_ray{
+		        glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
+		        glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
+        };
+
+		if (glm::dot(local_ray.direction, local_ray.direction) < 1.0e-12f) {
+			continue;
+		}
+
+		float aabb_t_min = 0.0f;
+		float aabb_t_max = 0.0f;
+		if (!intersectRayAabb(local_ray.origin, local_ray.direction, mesh->m_local_bounds_min,
+		                      mesh->m_local_bounds_max, aabb_t_min, aabb_t_max) ||
+		    aabb_t_min > best_t) {
+			continue;
+		}
+
+		for (size_t index = 0; index + 2 < mesh->gpuIndices.size(); index += 3) {
+			const glm::vec3& v0 = mesh->gpuVertices[mesh->gpuIndices[index + 0]].position;
+			const glm::vec3& v1 = mesh->gpuVertices[mesh->gpuIndices[index + 1]].position;
+			const glm::vec3& v2 = mesh->gpuVertices[mesh->gpuIndices[index + 2]].position;
+
+			float hit_t = 0.0f;
+			if (intersectRayTriangle(local_ray, v0, v1, v2, hit_t) && hit_t < best_t) {
+				best_t       = hit_t;
+				best_mesh_id = mesh_index;
+			}
+		}
+	}
+
+	return best_mesh_id;
+}
+
+SelectionPanelResult drawSelectionPanel(const Scene* scene) {
+	SelectionPanelResult result{};
+
+	ImGui::SetNextWindowPos(ImVec2(470.0f, 24.0f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(360.0f, 320.0f), ImGuiCond_FirstUseEver);
+	if (!ImGui::Begin("Object Inspector")) {
+		ImGui::End();
+		return result;
+	}
+
+	ImGui::TextUnformatted("Click the render view to select a mesh.");
+
+	int         edit_mode  = static_cast<int>(selection_ctx.material_edit_mode);
+	const char* edit_items = "GUI\0Voice\0";
+	if (ImGui::Combo("Material input", &edit_mode, edit_items)) {
+		selection_ctx.material_edit_mode = static_cast<MaterialEditMode>(edit_mode);
+	}
+
+	int         debug_view_mode  = static_cast<int>(selection_ctx.debug_view_mode);
+	const char* debug_view_items = "Beauty\0Object IDs\0";
+	if (ImGui::Combo("Renderer view", &debug_view_mode, debug_view_items)) {
+		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
+	}
+
+	ImGui::Text("Scene objects: %d", scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
+	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
+	ImGui::Text("Selected mesh: %s",
+	            meshDisplayName(scene, selection_ctx.selected_mesh_index).c_str());
+
+	const bool has_selection =
+	    scene != nullptr && selection_ctx.selected_mesh_index >= 0 &&
+	    selection_ctx.selected_mesh_index < static_cast<int>(scene->m_meshes.size());
+
+	if (has_selection) {
+		const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_mesh_index);
+		ImGui::Text("Object ID: %d", selected_entry != nullptr ? selected_entry->object_id : -1);
+		ImGui::Text("Mesh index: %d", selection_ctx.selected_mesh_index);
+		if (ImGui::Button("Clear selection")) {
+			result.selection_changed = selectMesh(scene, -1);
+		}
+	} else {
+		ImGui::TextUnformatted("No mesh selected.");
+	}
+
+	ImGui::Separator();
+	ImGui::TextUnformatted("Selection outline");
+	int outline_width = static_cast<int>(selection_ctx.outline_width);
+	if (ImGui::SliderInt("Outline width", &outline_width, 1, 4)) {
+		selection_ctx.outline_width = static_cast<uint32_t>(outline_width);
+	}
+	ImGui::ColorEdit4("Outline color", glm::value_ptr(selection_ctx.outline_color),
+	                  ImGuiColorEditFlags_AlphaBar);
+
+	if (ImGui::CollapsingHeader("Object ID Map")) {
+		for (const ObjectIdEntry& entry : selection_ctx.object_id_map) {
+			ImGui::Text("ID %d -> %s", entry.object_id, entry.display_name.c_str());
+		}
+	}
+
+	if (!has_selection) {
+		if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
+			ImGui::Separator();
+			ImGui::TextWrapped(
+			    "Voice mode is selected, but there is not yet a speech-to-text command layer for "
+			    "material edits in this project.");
+		}
+		ImGui::End();
+		return result;
+	}
+
+	ImGui::Separator();
+	ImGui::TextUnformatted("Material");
+	ImGui::TextWrapped("Texture-backed meshes use these controls as live multipliers and overrides.");
+
+	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
+	ImGui::BeginDisabled(!gui_mode_enabled);
+	result.material_changed |=
+	    ImGui::ColorEdit3("Base tint", glm::value_ptr(selection_ctx.editor_material.base_color));
+	result.material_changed |=
+	    ImGui::SliderFloat("Opacity", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f,
+	                       "%.2f");
+	result.material_changed |=
+	    ImGui::SliderFloat("Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f,
+	                       "%.2f");
+	result.material_changed |= ImGui::SliderFloat(
+	    "Roughness", &selection_ctx.editor_material.specular_roughness, 0.02f, 1.0f, "%.2f");
+	result.material_changed |= ImGui::SliderFloat(
+	    "Transmission", &selection_ctx.editor_material.transmission_weight, 0.0f, 1.0f, "%.2f");
+	result.material_changed |=
+	    ImGui::SliderFloat("IOR", &selection_ctx.editor_material.specular_ior, 1.0f, 2.5f, "%.2f");
+	result.material_changed |= ImGui::ColorEdit3(
+	    "Emission color", glm::value_ptr(selection_ctx.editor_material.emission_color));
+	result.material_changed |= ImGui::SliderFloat(
+	    "Emission intensity", &selection_ctx.editor_material.emission_luminance, 0.0f, 20.0f,
+	    "%.2f");
+	bool thin_walled = selection_ctx.editor_material.geometry_thin_walled > 0.5f;
+	if (ImGui::Checkbox("Thin walled", &thin_walled)) {
+		selection_ctx.editor_material.geometry_thin_walled = thin_walled ? 1.0f : 0.0f;
+		result.material_changed                            = true;
+	}
+	ImGui::EndDisabled();
+
+	if (!gui_mode_enabled) {
+		ImGui::TextWrapped(
+		    "Voice mode is selected, but there is not yet a speech-to-text command layer for "
+		    "material edits in this project.");
+	}
+
+	ImGui::End();
+	return result;
 }
 
 bool isSwapchainRecreationResult(VkResult result) {
@@ -714,6 +1161,9 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.storage_image,
 	                render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+	                render_target_ctx.object_id_image_alloc);
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
@@ -748,11 +1198,12 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	// -- Recreate render-target images at new size --
 	const VkExtent3D ext = {new_w, new_h, 1};
 
-	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkImageUsageFlags extra) {
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
 		VkImageCreateInfo ii{};
 		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 		ii.imageType     = VK_IMAGE_TYPE_2D;
-		ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
+		ii.format        = format;
 		ii.extent        = ext;
 		ii.mipLevels     = 1;
 		ii.arrayLayers   = 1;
@@ -766,12 +1217,18 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	};
 
 	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, 0);
 
 	render_target_ctx.storage_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
 	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.object_id_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	                      VK_IMAGE_VIEW_TYPE_2D);
 	render_target_ctx.accum_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
 	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
@@ -779,6 +1236,9 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	// Transition accum → GENERAL
 	{
 		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -791,11 +1251,14 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		VkDescriptorImageInfo out_img{};
 		out_img.imageView   = render_target_ctx.storage_image_view;
 		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 		VkDescriptorImageInfo accum_img{};
 		accum_img.imageView   = render_target_ctx.accum_image_view;
 		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-		VkWriteDescriptorSet writes[2]{};
+		VkWriteDescriptorSet writes[3]{};
 		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
@@ -807,12 +1270,20 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
 		             1,
 		             0,
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &accum_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
 	}
 
 	// Reset sync semaphores if the swapchain image count changed
@@ -1320,6 +1791,7 @@ App::App() {
 	m_scene->m_camera = Camera(glm::vec3(0.f, 20.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
+	rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
@@ -1442,12 +1914,13 @@ App::App() {
 	// === VI. Render target images
 	// ========================================
 	{
-		VkExtent3D ext          = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
-		auto       make_storage = [&](VkImage& img, VmaAllocation& a, VkImageUsageFlags extra) {
+		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
+		auto make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
+		                              VkImageUsageFlags extra) {
 			VkImageCreateInfo ii{};
 			ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 			ii.imageType     = VK_IMAGE_TYPE_2D;
-			ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
+			ii.format        = format;
 			ii.extent        = ext;
 			ii.mipLevels     = 1;
 			ii.arrayLayers   = 1;
@@ -1477,12 +1950,18 @@ App::App() {
 			if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
 				throw std::runtime_error("failed to create dummy image");
 		};
-		make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-		             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-		make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
+		make_storage_image(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+		                   VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+		make_storage_image(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+		                   VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+		make_storage_image(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+		                   VK_FORMAT_R8G8B8A8_UNORM, 0);
 		render_target_ctx.storage_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
 		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+		render_target_ctx.object_id_image_view =
+		    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image,
+		                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
 		render_target_ctx.accum_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
 		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
@@ -1553,6 +2032,14 @@ App::App() {
 		scene_ctx.material_count  = (uint32_t) gms.size();
 		scene_ctx.material_buffer = create_and_upload_buffer(
 		    allocator, sizeof(GPUMaterial) * gms.size(), gms.data(), SB, scene_ctx.material_alloc);
+		VmaAllocationInfo material_info{};
+		vmaGetAllocationInfo(allocator, scene_ctx.material_alloc, &material_info);
+		scene_ctx.material_mapped = material_info.pMappedData;
+		if (scene_ctx.material_mapped == nullptr &&
+		    vmaMapMemory(allocator, scene_ctx.material_alloc, &scene_ctx.material_mapped) !=
+		        VK_SUCCESS) {
+			throw std::runtime_error("failed to map material buffer");
+		}
 		std::cout << "[INFO] Uploaded " << scene_ctx.material_count << " materials\n";
 	}
 
@@ -1642,6 +2129,7 @@ App::App() {
 		    make_binding(10, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, NUM_LUTS),
 		    make_binding(11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MATERIAL_TEXTURES),
 		    make_binding(12, VK_DESCRIPTOR_TYPE_SAMPLER),
+		    make_binding(13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -1656,7 +2144,7 @@ App::App() {
 	}
 	{
 		std::vector<VkDescriptorPoolSize> ps = {
-		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3},
 		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
 		    {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
 		    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * NUM_LUTS + MAX_MATERIAL_TEXTURES},
@@ -1726,6 +2214,12 @@ App::App() {
 		                  render_target_ctx.descriptor_set, 1, 0, 1,
 		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &ai2});
 		// 2 — camera
+		VkDescriptorImageInfo object_id_info{};
+		object_id_info.imageView   = render_target_ctx.object_id_image_view;
+		object_id_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 13, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &object_id_info});
 		VkDescriptorBufferInfo cb{scene_ctx.camera_buffer, 0, VK_WHOLE_SIZE};
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 2, 0, 1,
@@ -1856,7 +2350,7 @@ App::App() {
 			throw std::runtime_error("failed to create shader module");
 		VkPushConstantRange pr{};
 		pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-		pr.size       = sizeof(uint32_t) * 2;
+		pr.size       = sizeof(PathTracerPushConstants);
 		VkPipelineLayoutCreateInfo pli{};
 		pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pli.setLayoutCount         = 1;
@@ -1913,6 +2407,9 @@ App::App() {
 	// Accum image → GENERAL
 	{
 		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -2012,6 +2509,7 @@ void App::MainLoop() {
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
 	int prev_f11 = GLFW_RELEASE;
+	int prev_lmb = GLFW_RELEASE;
 
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
@@ -2068,6 +2566,8 @@ void App::MainLoop() {
 			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
 		}
 
+		const SelectionPanelResult selection_panel_result = drawSelectionPanel(m_scene.get());
+
 		if (controls_changed) {
 			if (m_audio_controller != nullptr) {
 				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
@@ -2076,6 +2576,14 @@ void App::MainLoop() {
 			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 			applyOverlayLevel(audio_level);
 			update_water_and_floaters(updated_water_audio_level);
+		}
+
+		if (selection_panel_result.material_changed) {
+			applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
+			frame_number = 0;
+		}
+		if (selection_panel_result.selection_changed) {
+			frame_number = 0;
 		}
 
 		if (overlay_ctx.controls.reset_water_requested) {
@@ -2134,10 +2642,20 @@ void App::MainLoop() {
 			frame_number = 0;        // camera moved → reset accumulation
 
 		// Upload camera to GPU (persistent mapping – no staging needed)
-		{
-			GPUCamera gpu_cam = fly_cam.pack();
-			memcpy(scene_ctx.camera_mapped, &gpu_cam, sizeof(GPUCamera));
+		const GPUCamera gpu_camera = fly_cam.pack();
+
+		const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
+		if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE && !fly_cam.isMouseCaptured() &&
+		    !ImGui::GetIO().WantCaptureMouse) {
+			if (selectMesh(m_scene.get(), pickMeshAtCursor(m_scene.get(), m_window->handle(),
+			                                               gpu_camera, framebuffer_width,
+			                                               framebuffer_height))) {
+				frame_number = 0;
+			}
 		}
+		prev_lmb = current_lmb;
+
+		memcpy(scene_ctx.camera_mapped, &gpu_camera, sizeof(GPUCamera));
 
 		// ---- Frame rendering ------------------------------------------------
 		const uint32_t frame_idx = frame_number % (uint32_t) swapchain_ctx.images.size();
@@ -2179,10 +2697,13 @@ void App::MainLoop() {
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout, 0,
 		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
 
-		struct PC {
-			uint32_t frame, material_count;
-		};
-		PC pc{frame_number, scene_ctx.material_count};
+		PathTracerPushConstants pc{};
+		pc.frame               = frame_number;
+		pc.material_count      = scene_ctx.material_count;
+		pc.selected_mesh_index = selection_ctx.selected_mesh_index;
+		pc.outline_width       = selection_ctx.outline_width;
+		pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
+		pc.outline_color       = selection_ctx.outline_color;
 		vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 		                   sizeof(pc), &pc);
 

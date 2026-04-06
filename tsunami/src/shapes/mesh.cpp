@@ -1,6 +1,7 @@
 #include "tsunami/shapes/mesh.h"
 #include <assimp/material.h>
 #include <iostream>
+#include <utility>
 
 // ----------------------------------------------------------------
 // Helpers
@@ -35,6 +36,23 @@ static glm::mat4 ai_to_glm(const aiMatrix4x4& m) {
 	out[2][3] = m.d3;
 	out[3][3] = m.d4;
 	return out;
+}
+
+static std::string build_gltf_mesh_name(const aiNode* node, const aiMesh* ai_mesh,
+                                        unsigned int  mesh_idx) {
+	const std::string node_name = (node != nullptr) ? node->mName.C_Str() : "";
+	const std::string mesh_name = (ai_mesh != nullptr) ? ai_mesh->mName.C_Str() : "";
+
+	if (!node_name.empty() && !mesh_name.empty() && node_name != mesh_name) {
+		return node_name + " / " + mesh_name;
+	}
+	if (!mesh_name.empty()) {
+		return mesh_name;
+	}
+	if (!node_name.empty()) {
+		return node_name;
+	}
+	return "Mesh " + std::to_string(mesh_idx);
 }
 
 static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
@@ -149,7 +167,8 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		transform.m_inverseTransform = glm::inverse(glm_transform);
 
 		result.push_back(std::make_unique<Mesh>(std::move(verts), std::move(indices), transform,
-		                                        std::move(material)));
+		                                        std::move(material),
+		                                        build_gltf_mesh_name(node, ai_mesh, mesh_idx)));
 
 		std::cout << "[Mesh::load_gltf] node=" << node->mName.C_Str() << " mesh_idx=" << mesh_idx
 		          << " pos=(" << glm_transform[3][0] << ", " << glm_transform[3][1] << ", "
@@ -168,16 +187,19 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 Mesh::Mesh(const std::string& path, Transform transform, std::shared_ptr<Material> material) {
 	m_transform = transform;
 	m_material  = material;
+	m_name      = path;
 	if (!load_obj(path))
 		std::cerr << "[Mesh] Failed to load: " << path << "\n";
 }
 
 Mesh::Mesh(std::vector<GPUVertex> verts, std::vector<uint32_t> indices, Transform transform,
-           std::shared_ptr<Material> material) :
+           std::shared_ptr<Material> material, std::string name) :
     gpuVertices(std::move(verts)),
     gpuIndices(std::move(indices)),
     m_transform(transform),
-    m_material(std::move(material)) {
+    m_material(std::move(material)),
+    m_name(std::move(name)) {
+	compute_local_bounds();
 }
 
 // ----------------------------------------------------------------
@@ -211,6 +233,7 @@ bool Mesh::load_obj(const std::string& path) {
 			gpuIndices.push_back(vertBase + f.mIndices[2]);
 		}
 	}
+	compute_local_bounds();
 	return true;
 }
 
@@ -250,4 +273,20 @@ GPUMesh Mesh::pack(int matIndex, int vertexOffset, int indexOffset) const {
 	g.indexOffset      = indexOffset;
 	g.indexCount       = static_cast<int>(gpuIndices.size());
 	return g;
+}
+
+void Mesh::compute_local_bounds() {
+	if (gpuVertices.empty()) {
+		m_local_bounds_min = glm::vec3(0.0f);
+		m_local_bounds_max = glm::vec3(0.0f);
+		return;
+	}
+
+	m_local_bounds_min = gpuVertices.front().position;
+	m_local_bounds_max = gpuVertices.front().position;
+
+	for (const GPUVertex& vertex : gpuVertices) {
+		m_local_bounds_min = glm::min(m_local_bounds_min, vertex.position);
+		m_local_bounds_max = glm::max(m_local_bounds_max, vertex.position);
+	}
 }
