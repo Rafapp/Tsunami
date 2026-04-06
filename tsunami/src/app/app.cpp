@@ -344,148 +344,148 @@ static void upload_rgba32f_3d(VmaAllocator alloc, VkDevice dev, VkCommandPool po
 // =======================
 static uint32_t g_frame_number_ref = 0;
 static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb_h) {
-	vkDeviceWaitIdle(vulkan_ctx.device);
+    vkDeviceWaitIdle(vulkan_ctx.device);
 
-	uint32_t new_w = fb_w;
-	uint32_t new_h = fb_h;
-	if (new_w == 0 || new_h == 0)
-		return;        // minimised – skip
+    uint32_t new_w = fb_w;
+    uint32_t new_h = fb_h;
+    if (new_w == 0 || new_h == 0)
+        return;        // minimised – skip
 
-	VmaAllocator allocator = render_target_ctx.allocator;
+    VmaAllocator allocator = render_target_ctx.allocator;
 
-	// -- Destroy old swapchain image views --
-	for (auto v : swapchain_ctx.image_views)
-		vkDestroyImageView(vulkan_ctx.device, v, nullptr);
-	swapchain_ctx.image_views.clear();
+    // -- Destroy old swapchain image views --
+    for (auto v : swapchain_ctx.image_views)
+        vkDestroyImageView(vulkan_ctx.device, v, nullptr);
+    swapchain_ctx.image_views.clear();
 
-	// -- Destroy old render-target images --
-	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
-	vmaDestroyImage(allocator, render_target_ctx.storage_image,
-	                render_target_ctx.storage_image_alloc);
-	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
-	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+    // -- Destroy old render-target images --
+    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+    vmaDestroyImage(allocator, render_target_ctx.storage_image,
+	                    render_target_ctx.storage_image_alloc);
+    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+    vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
-	// -- Rebuild swapchain --
-	vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
-	auto           swap_ret =
-	    vkb::SwapchainBuilder{vulkan_ctx.log_device}
-	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-	        .set_desired_extent(new_w, new_h)
-	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-	        .set_old_swapchain(old_swapchain.swapchain)
-	        .build();
-	vkb::destroy_swapchain(old_swapchain);
+    // -- Rebuild swapchain --
+    vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
+    auto           swap_ret =
+        vkb::SwapchainBuilder{vulkan_ctx.log_device}
+            .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+            .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+            .set_desired_extent(new_w, new_h)
+            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            .set_old_swapchain(old_swapchain.swapchain)
+            .build();
+    vkb::destroy_swapchain(old_swapchain);
 
-	if (!swap_ret) {
-		std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
-		return;
-	}
-	swapchain_ctx.swapchain    = swap_ret.value();
-	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
-	auto images_ret            = swapchain_ctx.swapchain.get_images();
-	if (!images_ret)
-		return;
-	swapchain_ctx.images = images_ret.value();
-	auto views_ret       = swapchain_ctx.swapchain.get_image_views();
-	if (!views_ret)
-		return;
-	swapchain_ctx.image_views = views_ret.value();
-	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
+    if (!swap_ret) {
+        std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
+        return;
+    }
+    swapchain_ctx.swapchain    = swap_ret.value();
+    swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+    auto images_ret            = swapchain_ctx.swapchain.get_images();
+    if (!images_ret)
+        return;
+    swapchain_ctx.images = images_ret.value();
+    auto views_ret       = swapchain_ctx.swapchain.get_image_views();
+    if (!views_ret)
+        return;
+    swapchain_ctx.image_views = views_ret.value();
+    swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
 
-	// -- Recreate render-target images at new size --
-	const VkExtent3D ext = {new_w, new_h, 1};
+    // -- Recreate render-target images at new size --
+    const VkExtent3D ext = {new_w, new_h, 1};
 
-	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkImageUsageFlags extra) {
-		VkImageCreateInfo ii{};
-		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-		ii.imageType     = VK_IMAGE_TYPE_2D;
-		ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
-		ii.extent        = ext;
-		ii.mipLevels     = 1;
-		ii.arrayLayers   = 1;
-		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		VmaAllocationCreateInfo ai{};
-		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
-	};
+    auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkImageUsageFlags extra) {
+        VkImageCreateInfo ii{};
+        ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType     = VK_IMAGE_TYPE_2D;
+        ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
+        ii.extent        = ext;
+        ii.mipLevels     = 1;
+        ii.arrayLayers   = 1;
+        ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+        vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+    };
 
-	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
+    make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
 
-	render_target_ctx.storage_image_view =
-	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
-	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
-	render_target_ctx.accum_image_view =
-	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+    render_target_ctx.storage_image_view =
+        create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+    render_target_ctx.accum_image_view =
+        create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 
-	// Transition accum → GENERAL
-	{
-		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
-		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
-		                 cmd);
-	}
+    // Transition accum → GENERAL
+    {
+        VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+        transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                     cmd);
+    }
 
-	// Update the two storage-image descriptors (bindings 0 and 1)
-	{
-		VkDescriptorImageInfo out_img{};
-		out_img.imageView   = render_target_ctx.storage_image_view;
-		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		VkDescriptorImageInfo accum_img{};
-		accum_img.imageView   = render_target_ctx.accum_image_view;
-		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    // Update the two storage-image descriptors (bindings 0 and 1)
+    {
+        VkDescriptorImageInfo out_img{};
+        out_img.imageView   = render_target_ctx.storage_image_view;
+        out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo accum_img{};
+        accum_img.imageView   = render_target_ctx.accum_image_view;
+        accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-		VkWriteDescriptorSet writes[2]{};
-		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		             nullptr,
-		             render_target_ctx.descriptor_set,
-		             0,
-		             0,
-		             1,
-		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		             &out_img};
-		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		             nullptr,
-		             render_target_ctx.descriptor_set,
-		             1,
-		             0,
-		             1,
-		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		             &accum_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
-	}
+        VkWriteDescriptorSet writes[2]{};
+        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		                 nullptr,
+		                 render_target_ctx.descriptor_set,
+		                 0,
+		                 0,
+		                 1,
+		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		                 &out_img};
+        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		                 nullptr,
+		                 render_target_ctx.descriptor_set,
+		                 1,
+		                 0,
+		                 1,
+		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		                 &accum_img};
+        vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
+    }
 
-	// Reset sync semaphores if the swapchain image count changed
-	{
-		const uint32_t n = (uint32_t) swapchain_ctx.images.size();
-		if (n != (uint32_t) sync_ctx.image_available.size()) {
-			for (auto s : sync_ctx.image_available)
-				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-			for (auto s : sync_ctx.render_finished)
-				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-			sync_ctx.image_available.resize(n);
-			sync_ctx.render_finished.resize(n);
-			VkSemaphoreCreateInfo si{};
-			si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-			for (uint32_t i = 0; i < n; ++i) {
-				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
-				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
-			}
-		}
-	}
+    // Reset sync semaphores if the swapchain image count changed
+    {
+        const uint32_t n = (uint32_t) swapchain_ctx.images.size();
+        if (n != (uint32_t) sync_ctx.image_available.size()) {
+            for (auto s : sync_ctx.image_available)
+                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+            for (auto s : sync_ctx.render_finished)
+                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+            sync_ctx.image_available.resize(n);
+            sync_ctx.render_finished.resize(n);
+            VkSemaphoreCreateInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            for (uint32_t i = 0; i < n; ++i) {
+                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
+                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
+            }
+        }
+    }
 
-	render_target_ctx.storage_image_initialized = false;
-	frame_number                                = 0;        // reset temporal accumulation
+    render_target_ctx.storage_image_initialized = false;
+    frame_number                                = 0;        // reset temporal accumulation
 
-	std::cout << "[RESIZE] " << new_w << "x" << new_h << "\n";
+    std::cout << "[RESIZE] " << new_w << "x" << new_h << "\n";
 }
 
 // ============================================================
@@ -990,10 +990,10 @@ App::App() {
 	{
 		vkb::InstanceBuilder b;
 		auto                 r = b.set_app_name("tsunami")
-		                             .request_validation_layers()
-		                             .use_default_debug_messenger()
-		                             .require_api_version(1, 3, 0)
-		                             .build();
+		             .request_validation_layers()
+		             .use_default_debug_messenger()
+		             .require_api_version(1, 3, 0)
+		             .build();
 		if (!r)
 			throw std::runtime_error("failed to create Vulkan instance");
 		vulkan_ctx.instance = r.value();
@@ -1008,10 +1008,10 @@ App::App() {
 		                                 VK_KHR_RAY_QUERY_EXTENSION_NAME,
 		                                 VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 		auto                     r    = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
-		                                    .set_surface(vulkan_ctx.surface)
-		                                    .set_minimum_version(1, 3)
-		                                    .add_required_extensions(exts)
-		                                    .select();
+		             .set_surface(vulkan_ctx.surface)
+		             .set_minimum_version(1, 3)
+		             .add_required_extensions(exts)
+		             .select();
 		if (!r)
 			throw std::runtime_error("failed to select physical device");
 		vulkan_ctx.phys_device = r.value();
@@ -1030,10 +1030,10 @@ App::App() {
 		bf.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 		bf.bufferDeviceAddress = VK_TRUE;
 		auto r                 = vkb::DeviceBuilder{vulkan_ctx.phys_device}
-		                             .add_pNext(&af)
-		                             .add_pNext(&rf)
-		                             .add_pNext(&bf)
-		                             .build();
+		             .add_pNext(&af)
+		             .add_pNext(&rf)
+		             .add_pNext(&bf)
+		             .build();
 		if (!r)
 			throw std::runtime_error("failed to create logical device");
 		vulkan_ctx.log_device = r.value();
@@ -1114,21 +1114,21 @@ App::App() {
 	{
 		VkExtent3D ext          = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
 		auto       make_storage = [&](VkImage& img, VmaAllocation& a, VkImageUsageFlags extra) {
-			VkImageCreateInfo ii{};
-			ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-			ii.imageType     = VK_IMAGE_TYPE_2D;
-			ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
-			ii.extent        = ext;
-			ii.mipLevels     = 1;
-			ii.arrayLayers   = 1;
-			ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-			ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-			ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-			ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			VmaAllocationCreateInfo ai{};
-			ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-			if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
-				throw std::runtime_error("failed to create storage image");
+            VkImageCreateInfo ii{};
+            ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ii.imageType     = VK_IMAGE_TYPE_2D;
+            ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
+            ii.extent        = ext;
+            ii.mipLevels     = 1;
+            ii.arrayLayers   = 1;
+            ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+            ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+            if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
+                throw std::runtime_error("failed to create storage image");
 		};
 		auto make_dummy = [&](VkImageType itype, VkExtent3D e, VkImage& img, VmaAllocation& a) {
 			VkImageCreateInfo ii{};
