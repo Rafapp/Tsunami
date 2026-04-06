@@ -124,7 +124,7 @@ struct GPUMesh {
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
 static const int   MAX_BOUNCES = 8;
-static const float T_MIN       = 1e-4f;
+static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 
@@ -291,6 +291,7 @@ OpenPBR_ResolvedInputs material_to_openpbr(
 
     inp.transmission_weight                 = m.transmission_weight;
     inp.transmission_color                  = m.transmission_color.rgb;
+    //inp.transmission_color                  = float3(1,0,0); // debug red transmission to visualize where it's used
     inp.transmission_depth                  = m.transmission_depth;
     inp.transmission_scatter                = m.transmission_scatter.rgb;
     inp.transmission_scatter_anisotropy     = m.transmission_scatter_anisotropy;
@@ -392,14 +393,20 @@ float3 tracePath(Ray ray, inout RNG rng) {
         throughput *= openpbr_get_sum_of_diffuse_specular(weight);
 
         // Russian roulette after bounce 3
-        if (bounce >= 3) {
+        if (bounce >= 6) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
             if (rng.nextFloat() > p) break;
             throughput /= p;
         }
 
+        // check for refraction and flip the ray bias direction if needed to avoid self-intersection
+        float biasDir = 1.0f;
+        if ((sampled_type & OpenPBR_BsdfLobeTypeTransmission) == 1 && hit.front_face) {
+            biasDir = -1.0f;
+        }
+
         float3 offset_n = dot(light_dir, hit.normal) >= 0.f ? hit.normal : -hit.normal;
-        ray.origin = hitPos + offset_n * T_MIN;
+        ray.origin = hitPos + offset_n * (T_MIN * biasDir);
         ray.dir    = light_dir;
     }
 
