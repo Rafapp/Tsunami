@@ -138,9 +138,10 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		    .ior(ior)
 		    .transmission(transmission);
 
-		//Transmission stuff
+		// Transmission stuff
 		material->m_gpu.transmission_depth = 0.f;
-		material->m_gpu.transmission_color = glm::vec4(albedo, 1.f); // default to albedo if no transmission color provided
+		material->m_gpu.transmission_color =
+		    glm::vec4(albedo, 1.f);        // default to albedo if no transmission color provided
 		glm::mat4 glm_transform = ai_to_glm(world);
 
 		Transform transform{};
