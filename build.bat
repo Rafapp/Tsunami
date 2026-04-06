@@ -10,12 +10,18 @@ set "SLANG_DIR=vendors\slang-bin"
 set "BUILD=true"
 set "BUILD_TYPE=Release"
 set "PRESET=default"
+set SLANG_VERSION=2026.4.2
+set SLANG_DIR=vendors\slang-bin
+set BUILD=true
+set BUILD_TYPE=Release
+set PRESET=default
+set OUTPUT_DIR=build
 
 :: === Args ===
 :parse_args
 if "%~1"=="" goto end_args
-if /i "%~1"=="--setup-only" (set "BUILD=false" & shift & goto parse_args)
-if /i "%~1"=="--debug"      (set "BUILD_TYPE=Debug" & set "PRESET=debug" & shift & goto parse_args)
+if /i "%~1"=="--setup-only" (set BUILD=false & shift & goto parse_args)
+if /i "%~1"=="--debug"      (set BUILD_TYPE=Debug & set PRESET=debug & set OUTPUT_DIR=build-debug & shift & goto parse_args)
 if /i "%~1"=="--help" (
     echo Usage: setup.bat [options]
     echo.
@@ -103,34 +109,20 @@ if errorlevel 1 (
 echo       OK: cppformat ready
 echo.
 
-:: === Step 4: Find and load MSVC environment ===
-echo [4/4] Locating Visual Studio C++ toolchain...
-call :find_vcvars
-if errorlevel 1 (
-    echo ERROR: Could not find Visual Studio vcvars64.bat
-    echo.
-    echo Checked via vswhere and common install paths for:
-    echo   - Visual Studio 2022 / 2019
-    echo   - BuildTools / Community / Professional / Enterprise
-    echo.
-    echo Make sure the "Desktop development with C++" workload or MSVC build tools are installed.
+:: === Step 4: CMake ===
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+set "VCVARS="
+if exist "%VSWHERE%" (
+    for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find VC\Auxiliary\Build\vcvars64.bat`) do (
+        set "VCVARS=%%I"
+    )
+)
+if not defined VCVARS (
+    echo ERROR: Could not find Visual Studio vcvars64.bat. Install the Desktop development with C++ workload.
     exit /b 1
 )
-
-echo       Using: !VCVARS_PATH!
-call "!VCVARS_PATH!"
-if errorlevel 1 (
-    echo ERROR: Failed to initialize MSVC environment
-    exit /b 1
-)
-
-where cl >nul 2>nul
-if errorlevel 1 (
-    echo ERROR: vcvars64.bat ran, but cl.exe is still not available in PATH
-    exit /b 1
-)
-echo       OK: MSVC environment ready
-
+call "%VCVARS%"
+if errorlevel 1 (echo ERROR: Failed to initialize the Visual Studio build environment & exit /b 1)
 if "%BUILD%"=="true" goto do_build
 echo.
 echo Skipping build ^(--setup-only^)
@@ -208,7 +200,7 @@ echo ==========================================
 echo         All done^! Let it rip
 echo ==========================================
 echo.
-echo   Run: build\tsunami.exe
+echo   Run: %OUTPUT_DIR%\bin\tsunami.exe
 echo.
 pause
 endlocal

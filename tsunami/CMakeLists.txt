@@ -21,12 +21,17 @@ target_link_libraries(tsunami PRIVATE
     vk-bootstrap
     VulkanMemoryAllocator
     glfw
+    imgui
+    miniaudio
     volk
     glm
     assimp
     openpbr-bsdf 
     stb
 )
+
+# === compile definitions ===
+target_compile_definitions(tsunami PRIVATE VK_NO_PROTOTYPES)
 
 # === slang (optional — requires ./setup.sh to download binary) ===
 if(TARGET slang)
