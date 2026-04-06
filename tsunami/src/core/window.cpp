@@ -10,9 +10,6 @@ Window::Window(const WindowConfig& config) : m_config(config) {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, m_config.resizable ? GLFW_TRUE : GLFW_FALSE);
 
-	m_window = glfwCreateWindow(static_cast<int>(m_config.width), static_cast<int>(m_config.height),
-	                            m_config.title.c_str(), nullptr, nullptr);
-
 	m_window = glfwCreateWindow(static_cast<int>(config.width), static_cast<int>(config.height),
 	                            config.title.c_str(), nullptr, nullptr);
 	if (!m_window)
@@ -36,6 +33,9 @@ bool Window::shouldClose() const {
 }
 void Window::pollEvents() const {
 	glfwPollEvents();
+}
+void Window::waitEvents() const {
+	glfwWaitEvents();
 }
 
 void Window::toggle_fullscreen() {

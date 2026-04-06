@@ -6,7 +6,7 @@
 
 namespace simulation {
 
-constexpr uint32_t kMaxFloatingObjects = 8;
+constexpr uint32_t kMaxFloatingObjects            = 8;
 constexpr uint32_t kMaxFloatingObjectInteractions = kMaxFloatingObjects * 8;
 
 struct WaterSurfaceSettings {
@@ -23,18 +23,18 @@ struct WaterSurfaceSettings {
 };
 
 struct WaterSurfaceDiagnostics {
-	float audio_drive_level = 0.0f;
-	float impulse_strength  = 0.0f;
-	float emitter_u         = 0.5f;
-	float emitter_v         = 0.5f;
-	uint32_t grid_width     = 0;
-	uint32_t grid_height    = 0;
-	uint32_t dispatch_groups_x = 0;
-	uint32_t dispatch_groups_y = 0;
+	float    audio_drive_level   = 0.0f;
+	float    impulse_strength    = 0.0f;
+	float    emitter_u           = 0.5f;
+	float    emitter_v           = 0.5f;
+	uint32_t grid_width          = 0;
+	uint32_t grid_height         = 0;
+	uint32_t dispatch_groups_x   = 0;
+	uint32_t dispatch_groups_y   = 0;
 	uint32_t history_image_count = 0;
-	uint64_t sample_count       = 0;
-	uint64_t cell_count         = 0;
-	uint64_t triangle_count     = 0;
+	uint64_t sample_count        = 0;
+	uint64_t cell_count          = 0;
+	uint64_t triangle_count      = 0;
 };
 
 struct alignas(16) FloatingObjectRenderData {

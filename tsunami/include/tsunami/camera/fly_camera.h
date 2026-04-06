@@ -21,7 +21,7 @@ class FlyCamera {
 	FlyCamera() = default;
 
 	// Construct from an existing scene camera position and look-at target
-	FlyCamera(glm::vec3 position, glm::vec3 target, float fov_deg = 60.f, float speed = 10.f);
+	FlyCamera(glm::vec3 position, glm::vec3 target, float fov_deg = 60.f, float speed = 1.f);
 
 	// Call once per frame.  dt is seconds elapsed since last frame.
 	// Returns true if the camera moved (so the caller can reset accumulation).
@@ -31,12 +31,12 @@ class FlyCamera {
 	GPUCamera pack() const;
 
 	// ---- tweakable parameters ----
-	float speed       = 0.5f;           // units / second
-	float sensitivity = 0.0018f;        // radians / pixel
+	float speed       = 0.1f;           // units / second
+	float sensitivity = 0.0005f;        // radians / pixel
 	float fov         = 60.f;           // vertical field-of-view in degrees
 
   private:
-	glm::vec3 m_position{0.f, 50.f, 0.f};
+	glm::vec3 m_position{0.f, 10.f, 0.f};
 	float     m_yaw   = 0.f;        // radians, around world-Y
 	float     m_pitch = 0.f;        // radians, clamped to ±89°
 

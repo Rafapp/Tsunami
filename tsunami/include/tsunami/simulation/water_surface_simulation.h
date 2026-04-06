@@ -6,7 +6,7 @@
 #include <vector>
 
 #ifndef VK_NO_PROTOTYPES
-#define VK_NO_PROTOTYPES
+#	define VK_NO_PROTOTYPES
 #endif
 
 #include "vk_mem_alloc.h"
@@ -33,9 +33,9 @@ class WaterSurfaceSimulation {
 	const WaterSurfaceDiagnostics& prepareFrame(const WaterSurfaceSettings& settings,
 	                                            float audio_level, float time_seconds,
 	                                            float delta_time);
-	void requestReset();
-	void requestObjectReset();
-	void record(VkCommandBuffer command_buffer);
+	void                           requestReset();
+	void                           requestObjectReset();
+	void                           record(VkCommandBuffer command_buffer);
 
 	VkImage outputImage() const {
 		return m_output_image;
@@ -73,16 +73,16 @@ class WaterSurfaceSimulation {
 	VkPipeline       m_water_pipeline         = VK_NULL_HANDLE;
 	VkPipeline       m_object_pipeline        = VK_NULL_HANDLE;
 
-	VkBuffer      m_floating_object_settings_buffer     = VK_NULL_HANDLE;
-	VmaAllocation m_floating_object_settings_allocation = nullptr;
-	VkBuffer      m_floating_object_states_buffer       = VK_NULL_HANDLE;
-	VmaAllocation m_floating_object_states_allocation   = nullptr;
-	VkBuffer      m_floating_objects_buffer             = VK_NULL_HANDLE;
-	VmaAllocation m_floating_objects_allocation         = nullptr;
-	VkBuffer      m_floating_object_interactions_buffer = VK_NULL_HANDLE;
-	VmaAllocation m_floating_object_interactions_allocation = nullptr;
-	uint32_t      m_floating_object_count                 = 0;
-	uint32_t      m_floating_object_interaction_count     = 0;
+	VkBuffer                m_floating_object_settings_buffer         = VK_NULL_HANDLE;
+	VmaAllocation           m_floating_object_settings_allocation     = nullptr;
+	VkBuffer                m_floating_object_states_buffer           = VK_NULL_HANDLE;
+	VmaAllocation           m_floating_object_states_allocation       = nullptr;
+	VkBuffer                m_floating_objects_buffer                 = VK_NULL_HANDLE;
+	VmaAllocation           m_floating_objects_allocation             = nullptr;
+	VkBuffer                m_floating_object_interactions_buffer     = VK_NULL_HANDLE;
+	VmaAllocation           m_floating_object_interactions_allocation = nullptr;
+	uint32_t                m_floating_object_count                   = 0;
+	uint32_t                m_floating_object_interaction_count       = 0;
 	WaterSurfaceDiagnostics m_diagnostics{};
 	float                   m_height_to_world_scale = 1.0f;
 
@@ -99,8 +99,8 @@ class WaterSurfaceSimulation {
 
 	struct WaterPushConstants;
 	struct FloatingObjectPushConstants;
-	WaterPushConstants*          m_water_push_constants   = nullptr;
-	FloatingObjectPushConstants* m_object_push_constants  = nullptr;
+	WaterPushConstants*          m_water_push_constants  = nullptr;
+	FloatingObjectPushConstants* m_object_push_constants = nullptr;
 };
 
 }        // namespace simulation

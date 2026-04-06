@@ -19,31 +19,31 @@
 
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
+constexpr float    kPi                  = 3.14159265358979323846f;
 constexpr uint64_t kMaxSimulationPixels = 1280ull * 720ull;
 struct WaterPushConstantsRaw {
-	float time_seconds         = 0.0f;
-	float delta_time           = 1.0f / 60.0f;
-	float propagation          = 0.18f;
-	float damping              = 0.028f;
-	float restoring_force      = 0.08f;
-	float audio_level          = 0.0f;
-	float height_scale         = 24.0f;
-	float ripple_radius        = 0.035f;
-	float impulse_strength     = 0.0f;
-	float impulse_frequency_hz = 1.4f;
-	float emitter_u            = 0.5f;
-	float emitter_v            = 0.5f;
-	uint32_t floating_object_count = 0;
+	float    time_seconds                      = 0.0f;
+	float    delta_time                        = 1.0f / 60.0f;
+	float    propagation                       = 0.18f;
+	float    damping                           = 0.028f;
+	float    restoring_force                   = 0.08f;
+	float    audio_level                       = 0.0f;
+	float    height_scale                      = 24.0f;
+	float    ripple_radius                     = 0.035f;
+	float    impulse_strength                  = 0.0f;
+	float    impulse_frequency_hz              = 1.4f;
+	float    emitter_u                         = 0.5f;
+	float    emitter_v                         = 0.5f;
+	uint32_t floating_object_count             = 0;
 	uint32_t floating_object_interaction_count = 0;
 };
 
 struct FloatingObjectPushConstantsRaw {
-	float    time_seconds           = 0.0f;
-	float    delta_time             = 1.0f / 60.0f;
-	float    height_to_world_scale  = 1.0f;
-	uint32_t object_count           = 0;
-	uint32_t reset_requested        = 0;
+	float    time_seconds          = 0.0f;
+	float    delta_time            = 1.0f / 60.0f;
+	float    height_to_world_scale = 1.0f;
+	uint32_t object_count          = 0;
+	uint32_t reset_requested       = 0;
 };
 
 struct alignas(16) FloatingObjectSettingsGpu {
@@ -69,25 +69,25 @@ static_assert(sizeof(FloatingObjectPushConstantsRaw) <= 128,
 
 const std::array<FloatingObjectSettingsGpu, 3> kDefaultFloatingObjectSettings = {
     FloatingObjectSettingsGpu{
-        .anchor_base_height_yaw = glm::vec4(-0.42f, -0.08f, 0.03f, 12.0f * (kPi / 180.0f)),
-        .size_mass              = glm::vec4(0.30f, 0.12f, 0.20f, 1.0f),
-        .color_buoyancy         = glm::vec4(0.82f, 0.52f, 0.28f, 34.0f),
+        .anchor_base_height_yaw  = glm::vec4(-0.42f, -0.08f, 0.03f, 12.0f * (kPi / 180.0f)),
+        .size_mass               = glm::vec4(0.30f, 0.12f, 0.20f, 1.0f),
+        .color_buoyancy          = glm::vec4(0.82f, 0.52f, 0.28f, 34.0f),
         .buoyancy_linear_angular = glm::vec4(7.5f, 1.8f, 13.0f, 5.5f),
         .motion_planar           = glm::vec4(6.5f, 0.35f, 2.5f, 1.4f),
         .anchor_waterline_yaw    = glm::vec4(0.45f, 0.50f, 0.010f, 2.2f),
     },
     FloatingObjectSettingsGpu{
-        .anchor_base_height_yaw = glm::vec4(0.28f, 0.14f, 0.025f, -18.0f * (kPi / 180.0f)),
-        .size_mass              = glm::vec4(0.24f, 0.10f, 0.18f, 0.85f),
-        .color_buoyancy         = glm::vec4(0.69f, 0.42f, 0.22f, 30.0f),
+        .anchor_base_height_yaw  = glm::vec4(0.28f, 0.14f, 0.025f, -18.0f * (kPi / 180.0f)),
+        .size_mass               = glm::vec4(0.24f, 0.10f, 0.18f, 0.85f),
+        .color_buoyancy          = glm::vec4(0.69f, 0.42f, 0.22f, 30.0f),
         .buoyancy_linear_angular = glm::vec4(7.5f, 1.8f, 13.0f, 5.5f),
         .motion_planar           = glm::vec4(6.5f, 0.35f, 2.8f, 1.4f),
         .anchor_waterline_yaw    = glm::vec4(0.45f, 0.44f, 0.010f, 2.2f),
     },
     FloatingObjectSettingsGpu{
-        .anchor_base_height_yaw = glm::vec4(0.06f, 0.38f, 0.04f, 32.0f * (kPi / 180.0f)),
-        .size_mass              = glm::vec4(0.36f, 0.14f, 0.24f, 1.25f),
-        .color_buoyancy         = glm::vec4(0.91f, 0.66f, 0.35f, 38.0f),
+        .anchor_base_height_yaw  = glm::vec4(0.06f, 0.38f, 0.04f, 32.0f * (kPi / 180.0f)),
+        .size_mass               = glm::vec4(0.36f, 0.14f, 0.24f, 1.25f),
+        .color_buoyancy          = glm::vec4(0.91f, 0.66f, 0.35f, 38.0f),
         .buoyancy_linear_angular = glm::vec4(7.5f, 1.8f, 11.0f, 5.5f),
         .motion_planar           = glm::vec4(6.5f, 0.35f, 1.9f, 1.4f),
         .anchor_waterline_yaw    = glm::vec4(0.45f, 0.56f, 0.012f, 2.2f),
@@ -96,10 +96,10 @@ const std::array<FloatingObjectSettingsGpu, 3> kDefaultFloatingObjectSettings = 
 
 FloatingObjectStateGpu makeInitialFloatingObjectState(const FloatingObjectSettingsGpu& settings) {
 	FloatingObjectStateGpu state{};
-	state.position_hull = glm::vec4(settings.anchor_base_height_yaw.x,
-	                                settings.anchor_base_height_yaw.z,
-	                                settings.anchor_base_height_yaw.y, 0.0f);
-	state.rotation_pad  = glm::vec4(0.0f, settings.anchor_base_height_yaw.w, 0.0f, 0.0f);
+	state.position_hull =
+	    glm::vec4(settings.anchor_base_height_yaw.x, settings.anchor_base_height_yaw.z,
+	              settings.anchor_base_height_yaw.y, 0.0f);
+	state.rotation_pad = glm::vec4(0.0f, settings.anchor_base_height_yaw.w, 0.0f, 0.0f);
 	return state;
 }
 
@@ -112,8 +112,8 @@ VkExtent2D computeCappedExtent(VkExtent2D requested_extent, uint64_t max_pixels)
 		return requested_extent;
 	}
 
-	const uint64_t requested_pixels =
-	    static_cast<uint64_t>(requested_extent.width) * static_cast<uint64_t>(requested_extent.height);
+	const uint64_t requested_pixels = static_cast<uint64_t>(requested_extent.width) *
+	                                  static_cast<uint64_t>(requested_extent.height);
 	if (requested_pixels <= max_pixels) {
 		return requested_extent;
 	}
@@ -121,10 +121,10 @@ VkExtent2D computeCappedExtent(VkExtent2D requested_extent, uint64_t max_pixels)
 	const double scale =
 	    std::sqrt(static_cast<double>(max_pixels) / static_cast<double>(requested_pixels));
 	return VkExtent2D{
-	    std::max(1u, static_cast<uint32_t>(std::lround(static_cast<double>(requested_extent.width) *
-	                                                   scale))),
-	    std::max(1u, static_cast<uint32_t>(std::lround(static_cast<double>(requested_extent.height) *
-	                                                   scale))),
+	    std::max(1u, static_cast<uint32_t>(
+	                     std::lround(static_cast<double>(requested_extent.width) * scale))),
+	    std::max(1u, static_cast<uint32_t>(
+	                     std::lround(static_cast<double>(requested_extent.height) * scale))),
 	};
 }
 
@@ -319,7 +319,7 @@ WaterSurfaceSimulation::WaterSurfaceSimulation(const WaterSurfaceCreateInfo& cre
 		    "water surface simulation requires a valid Vulkan device and extent");
 	}
 
-	m_floating_object_count             = static_cast<uint32_t>(kDefaultFloatingObjectSettings.size());
+	m_floating_object_count = static_cast<uint32_t>(kDefaultFloatingObjectSettings.size());
 	m_floating_object_interaction_count = m_floating_object_count;
 	createImages();
 	createDescriptors();
@@ -430,8 +430,8 @@ const WaterSurfaceDiagnostics&
 			if (cadence_pulse || attack_pulse) {
 				const float energy = clamp01(speed_drive * 0.80f + attack * 2.00f);
 				impulse_strength   = std::max(settings.base_impulse, 0.0f) +
-				                     energy * std::max(settings.audio_impulse_scale, 0.0f) *
-				                         (0.70f + speed_drive * 0.90f);
+				                   energy * std::max(settings.audio_impulse_scale, 0.0f) *
+				                       (0.70f + speed_drive * 0.90f);
 			}
 		} else {
 			m_emission_accumulator = 0.0f;
@@ -467,42 +467,39 @@ const WaterSurfaceDiagnostics&
 	    std::clamp(settings.height_scale * (0.84f + speed_drive * 0.36f), 0.1f, 28.0f);
 	const float clamped_emitter_u = std::clamp(emitter_u, 0.05f, 0.95f);
 	const float clamped_emitter_v = std::clamp(emitter_v, 0.05f, 0.95f);
-	m_height_to_world_scale = height_scale * 0.045f;
+	m_height_to_world_scale       = height_scale * 0.045f;
 
-	m_diagnostics.audio_drive_level = speed_drive;
-	m_diagnostics.impulse_strength  = m_pending_impulse;
-	m_diagnostics.emitter_u         = clamped_emitter_u;
-	m_diagnostics.emitter_v         = clamped_emitter_v;
-	m_diagnostics.grid_width        = m_output_extent.width;
-	m_diagnostics.grid_height       = m_output_extent.height;
-	m_diagnostics.dispatch_groups_x = (m_output_extent.width + 15) / 16;
-	m_diagnostics.dispatch_groups_y = (m_output_extent.height + 15) / 16;
-	m_diagnostics.history_image_count =
-	    static_cast<uint32_t>(std::size(m_height_images));
-	m_diagnostics.sample_count =
-	    static_cast<uint64_t>(m_output_extent.width) * static_cast<uint64_t>(m_output_extent.height);
-	m_diagnostics.cell_count =
-	    m_output_extent.width > 0 && m_output_extent.height > 0 ?
-	        static_cast<uint64_t>(m_output_extent.width - 1) *
-	            static_cast<uint64_t>(m_output_extent.height - 1) :
-	        0ull;
+	m_diagnostics.audio_drive_level   = speed_drive;
+	m_diagnostics.impulse_strength    = m_pending_impulse;
+	m_diagnostics.emitter_u           = clamped_emitter_u;
+	m_diagnostics.emitter_v           = clamped_emitter_v;
+	m_diagnostics.grid_width          = m_output_extent.width;
+	m_diagnostics.grid_height         = m_output_extent.height;
+	m_diagnostics.dispatch_groups_x   = (m_output_extent.width + 15) / 16;
+	m_diagnostics.dispatch_groups_y   = (m_output_extent.height + 15) / 16;
+	m_diagnostics.history_image_count = static_cast<uint32_t>(std::size(m_height_images));
+	m_diagnostics.sample_count        = static_cast<uint64_t>(m_output_extent.width) *
+	                             static_cast<uint64_t>(m_output_extent.height);
+	m_diagnostics.cell_count     = m_output_extent.width > 0 && m_output_extent.height > 0 ?
+	                                   static_cast<uint64_t>(m_output_extent.width - 1) *
+                                       static_cast<uint64_t>(m_output_extent.height - 1) :
+	                                   0ull;
 	m_diagnostics.triangle_count = m_diagnostics.cell_count * 2ull;
 
-	m_water_push_constants->time_seconds         = time_seconds;
-	m_water_push_constants->delta_time           = clamped_delta_time;
-	m_water_push_constants->propagation          = propagation;
-	m_water_push_constants->damping              = damping;
-	m_water_push_constants->restoring_force      = restoring_force;
-	m_water_push_constants->audio_level          = speed_drive;
-	m_water_push_constants->height_scale         = height_scale;
-	m_water_push_constants->ripple_radius        = ripple_radius;
-	m_water_push_constants->impulse_strength     = m_pending_impulse;
-	m_water_push_constants->impulse_frequency_hz = std::max(settings.impulse_frequency_hz, 0.0f);
-	m_water_push_constants->emitter_u            = m_diagnostics.emitter_u;
-	m_water_push_constants->emitter_v            = m_diagnostics.emitter_v;
+	m_water_push_constants->time_seconds          = time_seconds;
+	m_water_push_constants->delta_time            = clamped_delta_time;
+	m_water_push_constants->propagation           = propagation;
+	m_water_push_constants->damping               = damping;
+	m_water_push_constants->restoring_force       = restoring_force;
+	m_water_push_constants->audio_level           = speed_drive;
+	m_water_push_constants->height_scale          = height_scale;
+	m_water_push_constants->ripple_radius         = ripple_radius;
+	m_water_push_constants->impulse_strength      = m_pending_impulse;
+	m_water_push_constants->impulse_frequency_hz  = std::max(settings.impulse_frequency_hz, 0.0f);
+	m_water_push_constants->emitter_u             = m_diagnostics.emitter_u;
+	m_water_push_constants->emitter_v             = m_diagnostics.emitter_v;
 	m_water_push_constants->floating_object_count = m_floating_object_count;
-	m_water_push_constants->floating_object_interaction_count =
-	    m_floating_object_interaction_count;
+	m_water_push_constants->floating_object_interaction_count = m_floating_object_interaction_count;
 
 	m_object_push_constants->time_seconds          = time_seconds;
 	m_object_push_constants->delta_time            = clamped_delta_time;
@@ -541,10 +538,12 @@ void WaterSurfaceSimulation::initializeFloatingObjects() {
 
 	std::array<FloatingObjectStateGpu, kMaxFloatingObjects> initial_states{};
 	for (uint32_t index = 0; index < m_floating_object_count; ++index) {
-		initial_states[index] = makeInitialFloatingObjectState(kDefaultFloatingObjectSettings[index]);
+		initial_states[index] =
+		    makeInitialFloatingObjectState(kDefaultFloatingObjectSettings[index]);
 	}
 
-	if (vmaMapMemory(m_allocator, m_floating_object_states_allocation, &mapped_memory) != VK_SUCCESS) {
+	if (vmaMapMemory(m_allocator, m_floating_object_states_allocation, &mapped_memory) !=
+	    VK_SUCCESS) {
 		throw std::runtime_error("failed to map floating object state buffer");
 	}
 	std::memcpy(mapped_memory, initial_states.data(), sizeof(initial_states));
@@ -630,9 +629,9 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 	}
 
 	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_object_pipeline);
-	vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_object_pipeline_layout,
-	                        0, 1, &m_object_descriptor_sets[m_active_descriptor_set_index], 0,
-	                        nullptr);
+	vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+	                        m_object_pipeline_layout, 0, 1,
+	                        &m_object_descriptor_sets[m_active_descriptor_set_index], 0, nullptr);
 	vkCmdPushConstants(command_buffer, m_object_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 	                   sizeof(FloatingObjectPushConstants), m_object_push_constants);
 	vkCmdDispatch(command_buffer, 1, 1, 1);
@@ -642,16 +641,15 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 	object_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 	object_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 	vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &object_barrier, 0, nullptr,
-	                     0, nullptr);
+	                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &object_barrier, 0, nullptr, 0,
+	                     nullptr);
 
 	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_water_pipeline);
 	vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_water_pipeline_layout,
 	                        0, 1, &m_water_descriptor_sets[m_active_descriptor_set_index], 0,
 	                        nullptr);
 	m_water_push_constants->floating_object_count             = m_floating_object_count;
-	m_water_push_constants->floating_object_interaction_count =
-	    m_floating_object_interaction_count;
+	m_water_push_constants->floating_object_interaction_count = m_floating_object_interaction_count;
 	vkCmdPushConstants(command_buffer, m_water_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 	                   sizeof(WaterPushConstants), m_water_push_constants);
 
@@ -674,10 +672,10 @@ void WaterSurfaceSimulation::record(VkCommandBuffer command_buffer) {
 	                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
 	                     &transfer_barrier);
 
-	m_height_layout_initialized   = true;
-	m_output_in_transfer_src      = true;
-	m_active_descriptor_set_index = 1 - m_active_descriptor_set_index;
-	m_reset_objects_requested     = false;
+	m_height_layout_initialized              = true;
+	m_output_in_transfer_src                 = true;
+	m_active_descriptor_set_index            = 1 - m_active_descriptor_set_index;
+	m_reset_objects_requested                = false;
 	m_object_push_constants->reset_requested = 0;
 }
 
@@ -714,8 +712,7 @@ void WaterSurfaceSimulation::createDescriptors() {
 	             sizeof(FloatingObjectInteractionData) *
 	                 static_cast<VkDeviceSize>(kMaxFloatingObjectInteractions),
 	             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
-	             m_floating_object_interactions_buffer,
-	             m_floating_object_interactions_allocation);
+	             m_floating_object_interactions_buffer, m_floating_object_interactions_allocation);
 
 	VkDescriptorSetLayoutBinding storage_image_binding{};
 	storage_image_binding.binding         = 0;
@@ -750,23 +747,20 @@ void WaterSurfaceSimulation::createDescriptors() {
 	    floating_object_interactions_binding,
 	};
 
-	VkDescriptorSetLayoutBinding object_height_binding = storage_image_binding;
-	object_height_binding.binding                      = 0;
-	VkDescriptorSetLayoutBinding object_settings_binding = storage_buffer_binding;
-	object_settings_binding.binding                      = 1;
-	VkDescriptorSetLayoutBinding object_states_binding   = storage_buffer_binding;
-	object_states_binding.binding                        = 2;
-	VkDescriptorSetLayoutBinding object_render_binding   = storage_buffer_binding;
-	object_render_binding.binding                        = 3;
+	VkDescriptorSetLayoutBinding object_height_binding       = storage_image_binding;
+	object_height_binding.binding                            = 0;
+	VkDescriptorSetLayoutBinding object_settings_binding     = storage_buffer_binding;
+	object_settings_binding.binding                          = 1;
+	VkDescriptorSetLayoutBinding object_states_binding       = storage_buffer_binding;
+	object_states_binding.binding                            = 2;
+	VkDescriptorSetLayoutBinding object_render_binding       = storage_buffer_binding;
+	object_render_binding.binding                            = 3;
 	VkDescriptorSetLayoutBinding object_interactions_binding = storage_buffer_binding;
 	object_interactions_binding.binding                      = 4;
 
 	const std::array<VkDescriptorSetLayoutBinding, 5> object_bindings = {
-	    object_height_binding,
-	    object_settings_binding,
-	    object_states_binding,
-	    object_render_binding,
-	    object_interactions_binding,
+	    object_height_binding, object_settings_binding,     object_states_binding,
+	    object_render_binding, object_interactions_binding,
 	};
 
 	VkDescriptorSetLayoutCreateInfo layout_info{};
@@ -775,8 +769,7 @@ void WaterSurfaceSimulation::createDescriptors() {
 	layout_info.pBindings    = water_bindings.data();
 
 	if (vkCreateDescriptorSetLayout(m_device, &layout_info, nullptr,
-	                                &m_water_descriptor_set_layout) !=
-	    VK_SUCCESS) {
+	                                &m_water_descriptor_set_layout) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create water descriptor set layout");
 	}
 
@@ -806,19 +799,20 @@ void WaterSurfaceSimulation::createDescriptors() {
 	allocate_info.sType          = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 	allocate_info.descriptorPool = m_descriptor_pool;
 
-	const std::array<VkDescriptorSetLayout, 2> water_layouts = {
-	    m_water_descriptor_set_layout, m_water_descriptor_set_layout};
+	const std::array<VkDescriptorSetLayout, 2> water_layouts = {m_water_descriptor_set_layout,
+	                                                            m_water_descriptor_set_layout};
 	allocate_info.descriptorSetCount = static_cast<uint32_t>(water_layouts.size());
 	allocate_info.pSetLayouts        = water_layouts.data();
 	if (vkAllocateDescriptorSets(m_device, &allocate_info, m_water_descriptor_sets) != VK_SUCCESS) {
 		throw std::runtime_error("failed to allocate water descriptor sets");
 	}
 
-	const std::array<VkDescriptorSetLayout, 2> object_layouts = {
-	    m_object_descriptor_set_layout, m_object_descriptor_set_layout};
+	const std::array<VkDescriptorSetLayout, 2> object_layouts = {m_object_descriptor_set_layout,
+	                                                             m_object_descriptor_set_layout};
 	allocate_info.descriptorSetCount = static_cast<uint32_t>(object_layouts.size());
 	allocate_info.pSetLayouts        = object_layouts.data();
-	if (vkAllocateDescriptorSets(m_device, &allocate_info, m_object_descriptor_sets) != VK_SUCCESS) {
+	if (vkAllocateDescriptorSets(m_device, &allocate_info, m_object_descriptor_sets) !=
+	    VK_SUCCESS) {
 		throw std::runtime_error("failed to allocate floating object descriptor sets");
 	}
 
@@ -968,15 +962,14 @@ void WaterSurfaceSimulation::createDescriptors() {
 void WaterSurfaceSimulation::createPipeline() {
 	const std::vector<uint32_t> object_spirv =
 	    compileSlangShader("shaders/floating_objects.slang", "main");
-	m_object_pipeline = createComputePipeline(m_device, object_spirv, m_object_descriptor_set_layout,
-	                                          sizeof(FloatingObjectPushConstants),
-	                                          m_object_pipeline_layout);
+	m_object_pipeline =
+	    createComputePipeline(m_device, object_spirv, m_object_descriptor_set_layout,
+	                          sizeof(FloatingObjectPushConstants), m_object_pipeline_layout);
 
 	const std::vector<uint32_t> water_spirv =
 	    compileSlangShader("shaders/water_surface.slang", "main");
 	m_water_pipeline = createComputePipeline(m_device, water_spirv, m_water_descriptor_set_layout,
-	                                         sizeof(WaterPushConstants),
-	                                         m_water_pipeline_layout);
+	                                         sizeof(WaterPushConstants), m_water_pipeline_layout);
 }
 
 }        // namespace simulation

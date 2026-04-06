@@ -6,14 +6,14 @@
 namespace core {
 
 struct WindowConfig {
-	uint32_t width 			= 1280;
-	uint32_t height 		= 720;
-	std::string title 		= "Tsunami 🌊";
-	bool resizable 			= true;
+	uint32_t    width     = 1280;
+	uint32_t    height    = 720;
+	std::string title     = "Tsunami 🌊";
+	bool        resizable = true;
 };
 
 class Window {
-	public:
+  public:
 	explicit Window(const WindowConfig& config = {});
 	~Window();
 
@@ -34,7 +34,7 @@ class Window {
 			return m_width;
 		}
 
-		int framebuffer_width = 0;
+		int framebuffer_width  = 0;
 		int framebuffer_height = 0;
 		glfwGetFramebufferSize(m_window, &framebuffer_width, &framebuffer_height);
 		return framebuffer_width > 0 ? static_cast<uint32_t>(framebuffer_width) : 0u;
@@ -45,7 +45,7 @@ class Window {
 			return m_height;
 		}
 
-		int framebuffer_width = 0;
+		int framebuffer_width  = 0;
 		int framebuffer_height = 0;
 		glfwGetFramebufferSize(m_window, &framebuffer_width, &framebuffer_height);
 		return framebuffer_height > 0 ? static_cast<uint32_t>(framebuffer_height) : 0u;
@@ -64,9 +64,9 @@ class Window {
   private:
 	static void framebuffer_size_cb(GLFWwindow* w, int width, int height);
 
-	uint32_t     m_width   = 0;
-	uint32_t     m_height  = 0;
-	bool         m_resized = false;
+	uint32_t m_width   = 0;
+	uint32_t m_height  = 0;
+	bool     m_resized = false;
 
 	// Saved windowed state so we can restore when leaving fullscreen
 	bool m_fullscreen = false;
@@ -79,4 +79,4 @@ class Window {
 	GLFWwindow*  m_window = nullptr;
 };
 
-} // namespace core
+}        // namespace core

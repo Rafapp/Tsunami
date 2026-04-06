@@ -136,8 +136,7 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 		            diagnostics.render.min_fps, diagnostics.render.max_fps);
 		ImGui::Text("Frame time: %.2f ms current | %.2f avg | %.2f min | %.2f max",
 		            diagnostics.render.current_frame_time_ms,
-		            diagnostics.render.average_frame_time_ms,
-		            diagnostics.render.min_frame_time_ms,
+		            diagnostics.render.average_frame_time_ms, diagnostics.render.min_frame_time_ms,
 		            diagnostics.render.max_frame_time_ms);
 		ImGui::Text("Timing window: %u frames", diagnostics.render.frame_sample_count);
 	}
@@ -157,7 +156,7 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	            diagnostics.render.imgui_vertex_count, diagnostics.render.imgui_index_count,
 	            diagnostics.render.imgui_window_count);
 
-	ImGui::Separator(); 
+	ImGui::Separator();
 	ImGui::TextUnformatted("Diagnostics");
 	ImGui::Text("Microphone: %s", diagnostics.audio.source_name.c_str());
 	if (diagnostics.audio.source_available) {
