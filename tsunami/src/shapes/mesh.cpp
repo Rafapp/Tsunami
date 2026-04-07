@@ -49,8 +49,8 @@ static glm::vec3 safe_normalize(const glm::vec3& v, const glm::vec3& fallback) {
 }
 
 static glm::vec3 build_orthonormal_tangent(const glm::vec3& n) {
-	const glm::vec3 axis = (std::abs(n.y) < 0.999f) ? glm::vec3(0.0f, 1.0f, 0.0f) :
-	                                                    glm::vec3(1.0f, 0.0f, 0.0f);
+	const glm::vec3 axis =
+	    (std::abs(n.y) < 0.999f) ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
 	return safe_normalize(glm::cross(axis, n), glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
@@ -98,9 +98,9 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 			               ai_mesh->mVertices[v].z};
 
 			if (has_normals) {
-				gv.normal = safe_normalize(
-				    glm::vec3(ai_mesh->mNormals[v].x, ai_mesh->mNormals[v].y, ai_mesh->mNormals[v].z),
-				    glm::vec3(0.0f, 1.0f, 0.0f));
+				gv.normal = safe_normalize(glm::vec3(ai_mesh->mNormals[v].x, ai_mesh->mNormals[v].y,
+				                                     ai_mesh->mNormals[v].z),
+				                           glm::vec3(0.0f, 1.0f, 0.0f));
 			} else {
 				gv.normal = glm::vec3(0.0f, 1.0f, 0.0f);
 			}
@@ -114,11 +114,13 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 				const auto& t = ai_mesh->mTangents[v];
 				const auto& b = ai_mesh->mBitangents[v];
 
-				glm::vec3 tangent   = safe_normalize(glm::vec3(t.x, t.y, t.z), build_orthonormal_tangent(gv.normal));
-				glm::vec3 bitangent = safe_normalize(glm::vec3(b.x, b.y, b.z), glm::cross(gv.normal, tangent));
-				glm::vec3 normal    = gv.normal;
-				tangent = safe_normalize(tangent - normal * glm::dot(normal, tangent),
-				                         build_orthonormal_tangent(normal));
+				glm::vec3 tangent =
+				    safe_normalize(glm::vec3(t.x, t.y, t.z), build_orthonormal_tangent(gv.normal));
+				glm::vec3 bitangent =
+				    safe_normalize(glm::vec3(b.x, b.y, b.z), glm::cross(gv.normal, tangent));
+				glm::vec3 normal = gv.normal;
+				tangent          = safe_normalize(tangent - normal * glm::dot(normal, tangent),
+				                                  build_orthonormal_tangent(normal));
 
 				float handedness =
 				    (glm::dot(glm::cross(normal, tangent), bitangent) < 0.0f) ? -1.0f : 1.0f;
@@ -240,10 +242,10 @@ bool Mesh::load_obj(const std::string& path) {
 		return false;
 	}
 	for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
-		const aiMesh*  mesh     = scene->mMeshes[m];
-		const uint32_t vertBase = static_cast<uint32_t>(gpuVertices.size());
-		const bool     has_uv   = mesh->HasTextureCoords(0);
-		const bool     has_normals = mesh->HasNormals();
+		const aiMesh*  mesh         = scene->mMeshes[m];
+		const uint32_t vertBase     = static_cast<uint32_t>(gpuVertices.size());
+		const bool     has_uv       = mesh->HasTextureCoords(0);
+		const bool     has_normals  = mesh->HasNormals();
 		const bool     has_tangents = mesh->HasTangentsAndBitangents();
 
 		for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
@@ -261,13 +263,12 @@ bool Mesh::load_obj(const std::string& path) {
 			if (has_tangents) {
 				const auto& t = mesh->mTangents[i];
 				const auto& b = mesh->mBitangents[i];
-				glm::vec3 tangent =
+				glm::vec3   tangent =
 				    safe_normalize(glm::vec3(t.x, t.y, t.z), build_orthonormal_tangent(gv.normal));
-				glm::vec3 bitangent = safe_normalize(glm::vec3(b.x, b.y, b.z),
-				                                     glm::cross(gv.normal, tangent));
-				tangent = safe_normalize(
-				    tangent - gv.normal * glm::dot(gv.normal, tangent),
-				    build_orthonormal_tangent(gv.normal));
+				glm::vec3 bitangent =
+				    safe_normalize(glm::vec3(b.x, b.y, b.z), glm::cross(gv.normal, tangent));
+				tangent = safe_normalize(tangent - gv.normal * glm::dot(gv.normal, tangent),
+				                         build_orthonormal_tangent(gv.normal));
 				const float handedness =
 				    (glm::dot(glm::cross(gv.normal, tangent), bitangent) < 0.0f) ? -1.0f : 1.0f;
 				gv.tangent = glm::vec4(tangent, handedness);
