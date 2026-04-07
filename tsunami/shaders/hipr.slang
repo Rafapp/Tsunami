@@ -161,7 +161,7 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 4;
+static const int   MAX_BOUNCES = 128;
 static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
@@ -184,12 +184,36 @@ struct Hit {
     int    instanceID;
 };
 
+// ─── Halton low-discrepancy jitter ───────────────────────────────────────────
+// Radical inverse base 2 via bit reversal — O(1), exact.
+float halton2(uint n) { return float(reversebits(n)) * (1.f / 4294967296.f); }
+
+// Radical inverse base 3 — converges in ≤12 iterations for n < 3^12 ≈ 530k.
+float halton3(uint n) {
+    float f = 1.f, r = 0.f;
+    while (n > 0u) { f /= 3.f; r += f * float(n % 3u); n /= 3u; }
+    return r;
+}
+
+// Returns a jittered pixel offset in [0,1)^2.
+// sample_index should be frame * SPP + spp_i so consecutive frames extend the
+// sequence rather than restarting it, giving full low-discrepancy coverage over time.
+// The per-pixel Cranley-Patterson offset decorrelates neighbouring pixels so they
+// don't all sample the same directions simultaneously.
+float2 haltonJitter(uint sample_index, uint2 pixel) {
+    float ox = frac(float(pixel.x * 0x9E3779B9u) * (1.f / 4294967296.f));
+    float oy = frac(float(pixel.y * 0x6C62272Eu) * (1.f / 4294967296.f));
+    return float2(frac(halton2(sample_index) + ox),
+                  frac(halton3(sample_index) + oy));
+}
+
 // ─── RNG ──────────────────────────────────────────────────────────────────────
 struct RNG {
     uint state;
     static RNG make(uint2 pixel, uint frame) {
         RNG r;
         r.state = pixel.x ^ (pixel.y << 16) ^ (frame * 719393u);
+        r.next(); // warm-up: advance past the raw seed to break inter-pixel/frame correlation
         return r;
     }
     [mutating] uint next() {
@@ -489,8 +513,8 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
         // weight = BSDF × cosine / pdf — standard MC estimator
         throughput *= openpbr_get_sum_of_diffuse_specular(weight);
 
-        // Russian roulette after bounce 3
-        if (bounce >= 6) {
+        // Russian roulette after bounce 2
+        if (bounce >= 8) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
             if (rng.nextFloat() > p) break;
             throughput /= p;
@@ -498,7 +522,7 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
 
         // check for refraction and flip the ray bias direction if needed to avoid self-intersection
         float biasDir = 1.0f;
-        if ((sampled_type & OpenPBR_BsdfLobeTypeTransmission) == 1 && hit.front_face) {
+        if ((sampled_type & OpenPBR_BsdfLobeTypeTransmission) != 0 && hit.front_face) {
             biasDir = -1.0f;
         }
 
@@ -874,9 +898,10 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     // Path trace this pixel and accumulate into the running average.
     RNG rng = RNG::make(pixel, push.frame);
     float3 colorAccum = float3(0, 0, 0);
-    static const int SPP = 1;
+    static const int SPP = 64;
     for (int i = 0; i < SPP; ++i) {
-        float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
+        uint sample_index = push.frame * uint(SPP) + uint(i);
+        float2 jitter = haltonJitter(sample_index, pixel);
         bool collect_influence = (push.stage == 1) && is_selected_pixel && (push.selected_mesh_index >= 0);
         colorAccum += tracePath(makeRay(pixel, dims, jitter), rng, collect_influence);
     }
