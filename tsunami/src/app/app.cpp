@@ -204,14 +204,14 @@ struct PathTracerPushConstants {
 	uint32_t  hipr_object_count   = 0;
 	uint32_t  hipr_top_k          = HIPR_TOP_K;
 	int32_t   hipr_render_rank    = -1;
-	uint32_t  hipr_incremental_sort = 1;
-	uint32_t  hipr_clear_order      = 1;
-	uint32_t  hipr_vis_enable_tint  = 1;
-	uint32_t  hipr_vis_rainbow_tint = 1;
-	uint32_t  hipr_update_period    = HIPR_UPDATE_PERIOD;
-	float     hipr_score_blend      = 0.25f;
+	uint32_t  hipr_incremental_sort  = 1;
+	uint32_t  hipr_clear_order       = 1;
+	uint32_t  hipr_vis_enable_tint   = 1;
+	uint32_t  hipr_vis_rainbow_tint  = 1;
+	uint32_t  hipr_update_period     = HIPR_UPDATE_PERIOD;
+	float     hipr_score_blend       = 0.25f;
 	float     hipr_vis_tint_strength = 0.2f;
-	uint32_t  _pad3                 = 0;
+	uint32_t  _pad3                  = 0;
 };
 
 static_assert(sizeof(PathTracerPushConstants) == 100);
@@ -2698,10 +2698,10 @@ void App::MainLoop() {
 	bool needs_visibility_pass = true;
 
 	// Tracks active material drag/edit interactions from the selection panel.
-	bool                    material_edit_mode   = false;
-	bool                    camera_was_moving    = false;
+	bool                    material_edit_mode     = false;
+	bool                    camera_was_moving      = false;
 	bool                    hipr_force_clear_order = true;
-	ui::RenderDebugViewMode last_render_mode     = ui::selection_ctx.debug_view_mode;
+	ui::RenderDebugViewMode last_render_mode       = ui::selection_ctx.debug_view_mode;
 
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
@@ -2769,10 +2769,10 @@ void App::MainLoop() {
 		    ui::drawSelectionPanel(m_scene.get());
 
 		if (ui::selection_ctx.debug_view_mode != last_render_mode) {
-			frame_number          = 0;
-			needs_visibility_pass = true;
+			frame_number           = 0;
+			needs_visibility_pass  = true;
 			hipr_force_clear_order = true;
-			last_render_mode      = ui::selection_ctx.debug_view_mode;
+			last_render_mode       = ui::selection_ctx.debug_view_mode;
 		}
 
 		if (controls_changed) {
@@ -2809,9 +2809,9 @@ void App::MainLoop() {
 		}
 
 		if (selection_panel_result.selection_changed) {
-			frame_number          = 0;
-			needs_visibility_pass = true;
-			material_edit_mode    = false;
+			frame_number           = 0;
+			needs_visibility_pass  = true;
+			material_edit_mode     = false;
 			hipr_force_clear_order = true;
 		}
 
@@ -2871,8 +2871,8 @@ void App::MainLoop() {
 		// ---- Fly-camera update ----------------------------------------------
 		const bool camera_moving_this_frame = fly_cam.update(m_window->handle(), dt);
 		if (camera_moving_this_frame) {
-			frame_number          = 0;
-			needs_visibility_pass = true;
+			frame_number           = 0;
+			needs_visibility_pass  = true;
 			hipr_force_clear_order = true;
 		}
 		if (!camera_moving_this_frame && camera_was_moving) {
@@ -2956,18 +2956,15 @@ void App::MainLoop() {
 		pc.enable_tonemapping  = overlay_ctx.controls.render_post.enable_tonemapping ? 1u : 0u;
 		pc.exposure_bias       = overlay_ctx.controls.render_post.exposure_bias;
 		pc.hipr_object_count   = scene_ctx.mesh_count;
-		pc.hipr_top_k          = std::min(scene_ctx.hipr_top_k,
-		                                  std::max(ui::selection_ctx.hipr_debug.rank_count, 1u));
-		pc.hipr_render_rank    = -1;
-		pc.hipr_incremental_sort =
-		    ui::selection_ctx.hipr_debug.incremental_sorting ? 1u : 0u;
+		pc.hipr_top_k =
+		    std::min(scene_ctx.hipr_top_k, std::max(ui::selection_ctx.hipr_debug.rank_count, 1u));
+		pc.hipr_render_rank      = -1;
+		pc.hipr_incremental_sort = ui::selection_ctx.hipr_debug.incremental_sorting ? 1u : 0u;
 		pc.hipr_clear_order      = hipr_force_clear_order ? 1u : 0u;
 		pc.hipr_vis_enable_tint  = ui::selection_ctx.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
 		pc.hipr_vis_rainbow_tint = ui::selection_ctx.hipr_debug.vis_rainbow_tint ? 1u : 0u;
-		pc.hipr_update_period =
-		    std::max(ui::selection_ctx.hipr_debug.update_period_frames, 1u);
-		pc.hipr_score_blend =
-		    std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
+		pc.hipr_update_period    = std::max(ui::selection_ctx.hipr_debug.update_period_frames, 1u);
+		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
 		    std::clamp(ui::selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f);
 
