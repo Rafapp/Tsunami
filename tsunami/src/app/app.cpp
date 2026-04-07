@@ -14,7 +14,7 @@
 #include "imgui_impl_vulkan.h"
 
 #ifndef VK_NO_PROTOTYPES
-#	define VK_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES
 #endif
 
 #define VOLK_IMPLEMENTATION
@@ -158,6 +158,10 @@ struct RenderTargetContext {
 	VmaAllocation tile_render_flags_buffer_alloc = VK_NULL_HANDLE;
 	void*         tile_render_flags_mapped       = nullptr;
 	uint32_t      tile_count                     = 0;
+	// debug: store image extents used for created images
+	uint32_t storage_width = 0, storage_height = 0;
+	uint32_t object_id_width = 0, object_id_height = 0;
+	uint32_t accum_width = 0, accum_height = 0;
 } render_target_ctx;
 
 struct ComputePipelineContext {
@@ -303,6 +307,25 @@ void check_vk_result(VkResult result) {
 	if (result < 0) {
 		throw std::runtime_error("Vulkan call failed");
 	}
+}
+
+// Cleanup function to destroy tile buffers when the render target is resized or destroyed
+static void destroy_tile_buffers(VmaAllocator alloc) {
+    if (render_target_ctx.tile_buffer != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(alloc, render_target_ctx.tile_buffer,
+                         render_target_ctx.tile_buffer_alloc);
+        render_target_ctx.tile_buffer = VK_NULL_HANDLE;
+        render_target_ctx.tile_buffer_alloc = VK_NULL_HANDLE;
+        render_target_ctx.tile_buffer_mapped = nullptr;
+    }
+    if (render_target_ctx.tile_render_flags_buffer != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(alloc, render_target_ctx.tile_render_flags_buffer,
+                         render_target_ctx.tile_render_flags_buffer_alloc);
+        render_target_ctx.tile_render_flags_buffer = VK_NULL_HANDLE;
+        render_target_ctx.tile_render_flags_buffer_alloc = VK_NULL_HANDLE;
+        render_target_ctx.tile_render_flags_mapped = nullptr;
+    }
+    render_target_ctx.tile_count = 0;
 }
 
 void create_overlay_render_pass() {
@@ -520,6 +543,7 @@ bool selectMesh(const Scene* scene, int mesh_index) {
 	}
 
 	selection_ctx.selected_mesh_index = clamped_index;
+	std::cout << "[DEBUG] selectMesh -> selected_mesh_index = " << selection_ctx.selected_mesh_index << "\n";
 	refreshSelectedMaterialEditor(scene);
 	return true;
 }
@@ -1103,6 +1127,13 @@ void App::recreateSwapchainResources() {
 	shutdown_imgui_renderer();
 	destroySwapchainResources();
 	createSwapchainResources();
+	// In recreateSwapchainResources(), after destroySwapchainResources() / createSwapchainResources():
+	destroy_tile_buffers(render_target_ctx.allocator);
+	{
+		const uint32_t new_tiles_x = (swapchain_ctx.extent.width  + 15u) / 16u;
+		const uint32_t new_tiles_y = (swapchain_ctx.extent.height + 15u) / 16u;
+		create_tile_buffers(render_target_ctx.allocator, new_tiles_x, new_tiles_y);
+	}
 	initialize_imgui_renderer();
 
 	// Recreate pathtracer storage/accum images at the new swapchain extent
@@ -1112,6 +1143,16 @@ void App::recreateSwapchainResources() {
 	                render_target_ctx.storage_image_alloc);
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+
+	// Also destroy object_id image/view so it will be recreated at the new extent
+	if (render_target_ctx.object_id_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+		render_target_ctx.object_id_image_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.object_id_image != VK_NULL_HANDLE) {
+		vmaDestroyImage(allocator, render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc);
+		render_target_ctx.object_id_image = VK_NULL_HANDLE;
+	}
 
 	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkImageUsageFlags extra) {
 		VkImageCreateInfo ii{};
@@ -1129,20 +1170,55 @@ void App::recreateSwapchainResources() {
 		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
 	};
+
+	// create storage & accum as before
 	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
+			 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	render_target_ctx.storage_width = swapchain_ctx.extent.width;
+	render_target_ctx.storage_height = swapchain_ctx.extent.height;
+	std::cout << "[DEBUG] created storage_image (recreate path) " << render_target_ctx.storage_width
+		  << "x" << render_target_ctx.storage_height << "\n";
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	         VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+	// create object_id image with R32_SINT format
+	{
+		VkImageCreateInfo ii{};
+		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ii.imageType     = VK_IMAGE_TYPE_2D;
+		ii.format        = VK_FORMAT_R32_SINT;
+		ii.extent        = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+		ii.mipLevels     = 1;
+		ii.arrayLayers   = 1;
+		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &render_target_ctx.object_id_image, &render_target_ctx.object_id_image_alloc, nullptr);
+		render_target_ctx.object_id_width = swapchain_ctx.extent.width;
+		render_target_ctx.object_id_height = swapchain_ctx.extent.height;
+		std::cout << "[DEBUG] created object_id_image (recreate path) " << render_target_ctx.object_id_width
+			  << "x" << render_target_ctx.object_id_height << "\n";
+	}
 
 	render_target_ctx.storage_image_view = create_image_view(
 	    vulkan_ctx.device, render_target_ctx.storage_image, VK_FORMAT_R8G8B8A8_UNORM,
+	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.object_id_image_view = create_image_view(
+	    vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
 	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
 	render_target_ctx.accum_image_view = create_image_view(
 	    vulkan_ctx.device, render_target_ctx.accum_image, VK_FORMAT_R8G8B8A8_UNORM,
 	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
 
-	// Transition accum → GENERAL so the shader can read/write it
+	// Transition object_id & accum → GENERAL so the shader can read/write them
 	{
 		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -1150,15 +1226,18 @@ void App::recreateSwapchainResources() {
 		                 cmd);
 	}
 
-	// Update descriptor set bindings 0 (output) and 1 (accum)
+	// Update descriptor set bindings 0 (output), 13 (object_id) and 1 (accum)
 	{
 		VkDescriptorImageInfo out_img{};
 		out_img.imageView   = render_target_ctx.storage_image_view;
 		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 		VkDescriptorImageInfo accum_img{};
 		accum_img.imageView   = render_target_ctx.accum_image_view;
 		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		VkWriteDescriptorSet writes[2]{};
+		VkWriteDescriptorSet writes[3]{};
 		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
@@ -1170,12 +1249,35 @@ void App::recreateSwapchainResources() {
 		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
 		             1,
 		             0,
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &accum_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+	}
+
+	// At the end of recreateSwapchainResources(), after the existing descriptor updates:
+	{
+		VkDescriptorBufferInfo tile_buf_info{render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE};
+		VkDescriptorBufferInfo tile_flags_info{render_target_ctx.tile_render_flags_buffer, 0,
+											VK_WHOLE_SIZE};
+		VkWriteDescriptorSet tile_writes[2]{};
+		tile_writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+						render_target_ctx.descriptor_set, 14, 0, 1,
+						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info};
+		tile_writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+						render_target_ctx.descriptor_set, 15, 0, 1,
+						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 2, tile_writes, 0, nullptr);
 	}
 
 	render_target_ctx.storage_image_initialized = false;
@@ -1432,6 +1534,13 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	swapchain_ctx.swapchain    = swap_ret.value();
 	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
 	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
+	// Recreate tile buffers at new resolution
+	destroy_tile_buffers(allocator);
+	{
+		const uint32_t new_tiles_x = (swapchain_ctx.extent.width  + 15u) / 16u;
+		const uint32_t new_tiles_y = (swapchain_ctx.extent.height + 15u) / 16u;
+		create_tile_buffers(allocator, new_tiles_x, new_tiles_y);
+	}
 	auto images_ret            = swapchain_ctx.swapchain.get_images();
 	if (!images_ret)
 		return;
@@ -1465,11 +1574,24 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	};
 
 	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+				 VK_FORMAT_R8G8B8A8_UNORM,
+				 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	render_target_ctx.storage_width = swapchain_ctx.extent.width;
+	render_target_ctx.storage_height = swapchain_ctx.extent.height;
+	std::cout << "[DEBUG] created storage_image (resize path) " << render_target_ctx.storage_width
+			  << "x" << render_target_ctx.storage_height << "\n";
 	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
 	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	render_target_ctx.object_id_width = swapchain_ctx.extent.width;
+	render_target_ctx.object_id_height = swapchain_ctx.extent.height;
+	std::cout << "[DEBUG] created object_id_image (resize path) " << render_target_ctx.object_id_width
+	          << "x" << render_target_ctx.object_id_height << "\n";
 	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	             VK_FORMAT_R8G8B8A8_UNORM, 0);
+             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	render_target_ctx.accum_width = swapchain_ctx.extent.width;
+	render_target_ctx.accum_height = swapchain_ctx.extent.height;
+	std::cout << "[DEBUG] created accum_image (resize path) " << render_target_ctx.accum_width
+	          << "x" << render_target_ctx.accum_height << "\n";
 
 	render_target_ctx.storage_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
@@ -1532,6 +1654,21 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &accum_img};
 		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+	}
+
+	// Rebind tile buffers to their new post-resize allocations
+	{
+		VkDescriptorBufferInfo tile_buf_info{render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE};
+		VkDescriptorBufferInfo tile_flags_info{render_target_ctx.tile_render_flags_buffer, 0,
+											VK_WHOLE_SIZE};
+		VkWriteDescriptorSet tile_writes[2]{};
+		tile_writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+						render_target_ctx.descriptor_set, 14, 0, 1,
+						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info};
+		tile_writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+						render_target_ctx.descriptor_set, 15, 0, 1,
+						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 2, tile_writes, 0, nullptr);
 	}
 
 	// Reset sync semaphores if the swapchain image count changed
@@ -2183,6 +2320,11 @@ App::App() {
 	// ========================================
 	{
 		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
+		// If swapchain extent is already known (e.g. after createSwapchainResources), prefer it
+		if (swapchain_ctx.extent.width > 0 && swapchain_ctx.extent.height > 0) {
+			ext.width = swapchain_ctx.extent.width;
+			ext.height = swapchain_ctx.extent.height;
+		}
 		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
 		                                    VkImageUsageFlags extra) {
 			VkImageCreateInfo ii{};
@@ -2219,21 +2361,43 @@ App::App() {
 				throw std::runtime_error("failed to create dummy image");
 		};
 		make_storage_image(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-		                   VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+						   VK_FORMAT_R8G8B8A8_UNORM,
+						   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+		render_target_ctx.storage_width = (uint32_t) m_window->width();
+		render_target_ctx.storage_height = (uint32_t) m_window->height();
+		std::cout << "[DEBUG] created storage_image (initial) " << render_target_ctx.storage_width
+				  << "x" << render_target_ctx.storage_height << "\n";
 		make_storage_image(render_target_ctx.object_id_image,
-		                   render_target_ctx.object_id_image_alloc, VK_FORMAT_R32_SINT,
-		                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+						   render_target_ctx.object_id_image_alloc, VK_FORMAT_R32_SINT,
+						   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+		render_target_ctx.object_id_width = (uint32_t) m_window->width();
+		render_target_ctx.object_id_height = (uint32_t) m_window->height();
+		std::cout << "[DEBUG] created object_id_image (initial) " << render_target_ctx.object_id_width
+				  << "x" << render_target_ctx.object_id_height << "\n";
 		make_storage_image(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-		                   VK_FORMAT_R8G8B8A8_UNORM, 0);
+				   VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+		render_target_ctx.accum_width = (uint32_t) m_window->width();
+		render_target_ctx.accum_height = (uint32_t) m_window->height();
+		std::cout << "[DEBUG] created accum_image (initial) " << render_target_ctx.accum_width << "x"
+				  << render_target_ctx.accum_height << "\n";
 		render_target_ctx.storage_image_view =
-		    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
-		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+			create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+							  VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 		render_target_ctx.object_id_image_view =
-		    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image,
-		                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
+			create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image,
+							  VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
 		render_target_ctx.accum_image_view =
-		    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+			create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+							  VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+
+		// Record the extents we used for these images (debug)
+		render_target_ctx.storage_width = ext.width;
+		render_target_ctx.storage_height = ext.height;
+		render_target_ctx.object_id_width = ext.width;
+		render_target_ctx.object_id_height = ext.height;
+		render_target_ctx.accum_width = ext.width;
+		render_target_ctx.accum_height = ext.height;
+		std::cout << "[DEBUG] created initial images (use ext=" << ext.width << "x" << ext.height << ")\n";
 		make_dummy(VK_IMAGE_TYPE_2D, {1, 1, 1}, render_target_ctx.dummy_image_2d,
 		           render_target_ctx.dummy_image_2d_alloc);
 		render_target_ctx.dummy_image_2d_view =
@@ -2372,10 +2536,19 @@ App::App() {
 	// === VIII.6  Tile probe buffers
 	// ===================================================
 	{
-		const uint32_t tiles_x = (m_window->width() + 15u) / 16u;
-		const uint32_t tiles_y = (m_window->height() + 15u) / 16u;
+		uint32_t wnd_w = m_window->width();
+		uint32_t wnd_h = m_window->height();
+		uint32_t sc_w = swapchain_ctx.extent.width;
+		uint32_t sc_h = swapchain_ctx.extent.height;
+		// Prefer swapchain extent for GPU-sized buffers; fall back to window size.
+		uint32_t use_w = (sc_w > 0) ? sc_w : wnd_w;
+		uint32_t use_h = (sc_h > 0) ? sc_h : wnd_h;
+		const uint32_t tiles_x = (use_w + 15u) / 16u;
+		const uint32_t tiles_y = (use_h + 15u) / 16u;
 		create_tile_buffers(allocator, tiles_x, tiles_y);
-		std::cout << "[INFO] Tile buffers: " << tiles_x * tiles_y << " tiles\n";
+		std::cout << "[INFO] Tile buffers: " << tiles_x * tiles_y << " tiles"
+				  << " (window=" << wnd_w << "x" << wnd_h << ", swapchain=" << sc_w
+				  << "x" << sc_h << ")\n";
 	}
 
 	// ==============================================
@@ -2610,18 +2783,31 @@ App::App() {
 			writes.push_back(w);
 		}
 
-		// 14 — tile_buffer
-		VkDescriptorBufferInfo tile_buf_info{render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE};
-		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-		                  render_target_ctx.descriptor_set, 14, 0, 1,
-		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info});
+		// // 14 — tile_buffer
+		// VkDescriptorBufferInfo tile_buf_info{render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE};
+		// writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		//                   render_target_ctx.descriptor_set, 14, 0, 1,
+		//                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info});
 
-		// 15 — tile_render_flags
-		VkDescriptorBufferInfo tile_flags_info{render_target_ctx.tile_render_flags_buffer, 0,
-		                                       VK_WHOLE_SIZE};
-		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-		                  render_target_ctx.descriptor_set, 15, 0, 1,
-		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info});
+		// // 15 — tile_render_flags
+		// VkDescriptorBufferInfo tile_flags_info{render_target_ctx.tile_render_flags_buffer, 0,
+		//                                        VK_WHOLE_SIZE};
+		// writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		//                   render_target_ctx.descriptor_set, 15, 0, 1,
+		//                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info});
+		
+		// Re-bind tile buffers (bindings 14 and 15)
+		VkDescriptorBufferInfo tile_buf_info{render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE};
+		VkDescriptorBufferInfo tile_flags_info{render_target_ctx.tile_render_flags_buffer, 0, VK_WHOLE_SIZE};
+
+		VkWriteDescriptorSet tile_writes[2]{};
+		tile_writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+						render_target_ctx.descriptor_set, 14, 0, 1,
+						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info};
+		tile_writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+						render_target_ctx.descriptor_set, 15, 0, 1,
+						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 2, tile_writes, 0, nullptr);
 
 		// 12 — sampler for material textures
 		VkDescriptorImageInfo material_sampler_info{};
@@ -3080,6 +3266,13 @@ void App::MainLoop() {
 			       sizeof(uint32_t) * tile_count);
 			vmaFlushAllocation(render_target_ctx.allocator,
 			                   render_target_ctx.tile_render_flags_buffer_alloc, 0, VK_WHOLE_SIZE);
+
+			// Debug: report probe result summary
+			size_t flagged_count = 0;
+			for (uint32_t f : flags)
+				if (f != 0u) ++flagged_count;
+			std::cout << "[DEBUG] probe completed: selected=" << selection_ctx.selected_mesh_index
+					  << ", flagged_tiles=" << flagged_count << "\n";
 
 			probe_ctx.valid             = true;
 			probe_ctx.last_selected     = selection_ctx.selected_mesh_index;
