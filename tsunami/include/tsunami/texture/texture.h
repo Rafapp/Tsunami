@@ -15,7 +15,7 @@ class Texture {
 
 	static std::shared_ptr<Texture> load_from_file(const std::string& path, bool srgb = true);
 	static std::shared_ptr<Texture> load_from_assimp(const aiScene*     scene,
-	                                                 const std::string& scene_dir,
+	                                                 const std::string& scene_source_path,
 	                                                 const aiString& tex_path, bool srgb = true);
 
 	bool valid() const {

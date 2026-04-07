@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -41,6 +43,7 @@
 #define OPENPBR_ENERGY_TABLES_USE_UINT16 0        // uint32 for broadest platform compat
 #include "openpbr.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 // Raw data headers — these define the C arrays we will upload.
 // HOW TO USE:
@@ -73,6 +76,7 @@ struct LutTexture3D {
 };
 static constexpr uint32_t NUM_LUTS              = 8;
 static constexpr uint32_t MAX_MATERIAL_TEXTURES = 256;
+static constexpr VkFormat kAccumulationImageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 // =======================
 // === Context structs ===
@@ -85,6 +89,7 @@ struct SceneContext {
 	VkBuffer      material_buffer = VK_NULL_HANDLE;
 	VmaAllocation material_alloc  = VK_NULL_HANDLE;
 	uint32_t      material_count  = 0;
+	void*         mesh_mapped     = nullptr;
 	VkBuffer      mesh_buffer     = VK_NULL_HANDLE;
 	VmaAllocation mesh_alloc      = VK_NULL_HANDLE;
 	VkBuffer      vertex_buffer   = VK_NULL_HANDLE;
@@ -125,6 +130,7 @@ struct RenderResourcesContext {
 
 struct RenderTargetContext {
 	VmaAllocator                       allocator;
+	VkExtent2D                         extent = {};
 	VkImage                            storage_image;
 	VmaAllocation                      storage_image_alloc;
 	VkImageView                        storage_image_view;
@@ -177,6 +183,9 @@ struct OverlayContext {
 	bool                          show_control_panel = true;
 } overlay_ctx{};
 
+static constexpr float kMinRenderScale = 0.50f;
+static VkExtent2D      computePathTracerExtent(VkExtent2D presentation_extent);
+
 enum class MaterialEditMode : int {
 	Gui   = 0,
 	Voice = 1,
@@ -190,6 +199,7 @@ enum class VoiceDrivenParameter : int {
 	Transmission      = 4,
 	Ior               = 5,
 	EmissionIntensity = 6,
+	ObjectScale       = 7,
 };
 
 enum class RenderDebugViewMode : int {
@@ -208,8 +218,8 @@ struct PathTracerPushConstants {
 	uint32_t  water_enabled                  = 0;
 	int32_t   water_material_index           = -1;
 	float     water_height_to_world_scale    = 1.0f;
+	int32_t   first_floating_object_id       = -1;
 	float     _pad0                          = 0.0f;
-	float     _pad1                          = 0.0f;
 	glm::vec4 outline_color                  = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	glm::vec4 water_center_trace_half_height = glm::vec4(0.0f);
 	glm::vec4 water_axis_u_half_extent       = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -232,6 +242,7 @@ struct SelectionContext {
 	VoiceDrivenParameter       voice_parameter    = VoiceDrivenParameter::BaseTint;
 	RenderDebugViewMode        debug_view_mode    = RenderDebugViewMode::Beauty;
 	GPUMaterial                editor_material{};
+	float                      editor_scale  = 1.0f;
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;
 	std::vector<ObjectIdEntry> object_id_map;
@@ -244,6 +255,12 @@ struct SelectionContext {
 struct SelectionPanelResult {
 	bool selection_changed = false;
 	bool material_changed  = false;
+	bool transform_changed = false;
+};
+
+struct VoiceDrivenSyncResult {
+	bool material_changed  = false;
+	bool transform_changed = false;
 };
 
 struct WaterSurfaceRenderPlacement {
@@ -260,12 +277,49 @@ struct WaterSurfaceRenderPlacement {
 
 WaterSurfaceRenderPlacement water_surface_render_ctx{};
 
+namespace fs = std::filesystem;
+
+struct ScaleOwnerData {
+	std::string                        display_name;
+	std::vector<int>                   mesh_indices;
+	float                              user_scale             = 1.0f;
+	bool                               is_floating            = false;
+	int                                simulation_index       = -1;
+	simulation::FloatingObjectSettings floating_settings_base = {};
+};
+
+std::vector<glm::mat4>                        mesh_pose_transforms;
+std::vector<glm::mat4>                        mesh_base_transforms;
+std::vector<int>                              mesh_scale_owner;
+std::vector<ScaleOwnerData>                   scale_owners;
+std::vector<simulation::FloatingObjectSettings> floating_simulation_settings;
+bool                                          scene_mesh_transforms_dirty = false;
+bool                                          tlas_update_pending         = false;
+bool                                          floating_settings_dirty     = false;
+
 constexpr int              kRequestedPoolWaterMeshIndex     = 98;
 constexpr std::string_view kRequestedPoolWaterMeshName      = "Pool F.017 / Pool F";
 constexpr std::string_view kPoolWaterObjectDisplayName      = "Pool Water";
 constexpr float            kPoolWaterPlanarInsetWorld       = 0.08f;
 constexpr float            kPoolWaterSurfaceDepthInsetWorld = 0.02f;
 constexpr float            kPoolWaterTraceHalfHeightWorld   = 0.45f;
+
+int firstFloatingObjectId() {
+	int first_object_id = -1;
+	for (const ScaleOwnerData& owner : scale_owners) {
+		if (!owner.is_floating) {
+			continue;
+		}
+		for (int mesh_index : owner.mesh_indices) {
+			if (mesh_index < 0) {
+				continue;
+			}
+			first_object_id =
+			    first_object_id < 0 ? mesh_index : std::min(first_object_id, mesh_index);
+		}
+	}
+	return first_object_id;
+}
 
 GPUMaterial makeDefaultWaterSurfaceMaterial() {
 	GPUMaterial water                         = Material{}.pack();
@@ -674,6 +728,438 @@ std::string meshDisplayName(const Scene* scene, int mesh_index) {
 	return mesh->m_name;
 }
 
+std::string toLowerCopy(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return value;
+}
+
+glm::vec3 transformPoint(const glm::mat4& transform, const glm::vec3& point) {
+	return glm::vec3(transform * glm::vec4(point, 1.0f));
+}
+
+bool matricesNearlyEqual(const glm::mat4& a, const glm::mat4& b, float epsilon = 1.0e-4f) {
+	for (int column = 0; column < 4; ++column) {
+		if (glm::length(a[column] - b[column]) > epsilon) {
+			return false;
+		}
+	}
+	return true;
+}
+
+struct Bounds3 {
+	glm::vec3 min   = glm::vec3(0.0f);
+	glm::vec3 max   = glm::vec3(0.0f);
+	bool      valid = false;
+};
+
+void expandBounds(Bounds3& bounds, const glm::vec3& point) {
+	if (!bounds.valid) {
+		bounds.min   = point;
+		bounds.max   = point;
+		bounds.valid = true;
+		return;
+	}
+
+	bounds.min = glm::min(bounds.min, point);
+	bounds.max = glm::max(bounds.max, point);
+}
+
+Bounds3 computeMeshWorldBounds(const Mesh& mesh) {
+	Bounds3 bounds{};
+	const glm::vec3 local_min = mesh.m_local_bounds_min;
+	const glm::vec3 local_max = mesh.m_local_bounds_max;
+
+	for (int mask = 0; mask < 8; ++mask) {
+		const glm::vec3 local_corner(
+		    (mask & 1) != 0 ? local_max.x : local_min.x,
+		    (mask & 2) != 0 ? local_max.y : local_min.y,
+		    (mask & 4) != 0 ? local_max.z : local_min.z);
+		expandBounds(bounds, transformPoint(mesh.m_transform.m_transform, local_corner));
+	}
+
+	return bounds;
+}
+
+Bounds3 computeSceneMeshRangeBounds(const Scene* scene, int start_mesh_index, int end_mesh_index) {
+	Bounds3 bounds{};
+	if (scene == nullptr) {
+		return bounds;
+	}
+
+	for (int mesh_index = start_mesh_index; mesh_index < end_mesh_index; ++mesh_index) {
+		if (mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+		    scene->m_meshes[mesh_index] == nullptr) {
+			continue;
+		}
+
+		const Bounds3 mesh_bounds = computeMeshWorldBounds(*scene->m_meshes[mesh_index]);
+		if (!mesh_bounds.valid) {
+			continue;
+		}
+		expandBounds(bounds, mesh_bounds.min);
+		expandBounds(bounds, mesh_bounds.max);
+	}
+
+	return bounds;
+}
+
+int addScaleOwner(std::string display_name) {
+	ScaleOwnerData owner{};
+	owner.display_name = std::move(display_name);
+	scale_owners.push_back(std::move(owner));
+	return static_cast<int>(scale_owners.size()) - 1;
+}
+
+void ensureMeshTransformMetadataSize(size_t mesh_count) {
+	mesh_pose_transforms.resize(mesh_count, glm::mat4(1.0f));
+	mesh_base_transforms.resize(mesh_count, glm::mat4(1.0f));
+	mesh_scale_owner.resize(mesh_count, -1);
+}
+
+void writeMeshTransformToSceneAndGpu(Scene* scene, int mesh_index) {
+	if (mesh_index < 0 || mesh_index >= static_cast<int>(mesh_pose_transforms.size()) ||
+	    mesh_index >= static_cast<int>(mesh_scale_owner.size())) {
+		return;
+	}
+
+	if (scene == nullptr || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	    scene->m_meshes[mesh_index] == nullptr) {
+		return;
+	}
+
+	const int owner_index = mesh_scale_owner[mesh_index];
+	if (owner_index < 0 || owner_index >= static_cast<int>(scale_owners.size())) {
+		return;
+	}
+
+	const float     owner_scale = std::max(scale_owners[owner_index].user_scale, 0.05f);
+	const glm::mat4 transform =
+	    mesh_pose_transforms[mesh_index] *
+	    glm::scale(glm::mat4(1.0f), glm::vec3(owner_scale)) * mesh_base_transforms[mesh_index];
+	const glm::mat4 inverse_transform = glm::inverse(transform);
+
+	auto& mesh                           = scene->m_meshes[mesh_index];
+	mesh->m_transform.m_transform     = transform;
+	mesh->m_transform.m_inverseTransform = inverse_transform;
+
+	if (scene_ctx.mesh_mapped != nullptr && mesh_index < static_cast<int>(scene_ctx.mesh_count)) {
+		auto* gpu_meshes                     = reinterpret_cast<GPUMesh*>(scene_ctx.mesh_mapped);
+		gpu_meshes[mesh_index].transform        = transform;
+		gpu_meshes[mesh_index].inverseTransform = inverse_transform;
+	}
+}
+
+void flushMeshTransforms(VmaAllocator allocator) {
+	if (scene_ctx.mesh_mapped == nullptr || scene_ctx.mesh_alloc == VK_NULL_HANDLE ||
+	    scene_ctx.mesh_count == 0) {
+		return;
+	}
+
+	vmaFlushAllocation(allocator, scene_ctx.mesh_alloc, 0,
+	                   sizeof(GPUMesh) * static_cast<VkDeviceSize>(scene_ctx.mesh_count));
+}
+
+void updateOwnerTransforms(Scene* scene, int owner_index, VmaAllocator allocator) {
+	if (owner_index < 0 || owner_index >= static_cast<int>(scale_owners.size())) {
+		return;
+	}
+
+	for (int mesh_index : scale_owners[owner_index].mesh_indices) {
+		writeMeshTransformToSceneAndGpu(scene, mesh_index);
+	}
+	flushMeshTransforms(allocator);
+	scene_mesh_transforms_dirty = true;
+	tlas_update_pending         = true;
+	water_surface_render_ctx    = buildWaterSurfacePlacement(scene);
+}
+
+glm::vec2 floatingAnchorForIndex(uint32_t index) {
+	static constexpr std::array<glm::vec2, simulation::kMaxFloatingObjects> kAnchors = {
+	    glm::vec2(-0.52f, -0.28f), glm::vec2(0.46f, -0.30f), glm::vec2(-0.18f, 0.10f),
+	    glm::vec2(0.28f, 0.16f),   glm::vec2(-0.46f, 0.32f), glm::vec2(0.06f, -0.46f),
+	    glm::vec2(0.54f, 0.34f),   glm::vec2(-0.08f, 0.46f),
+	};
+	return kAnchors[std::min<size_t>(index, kAnchors.size() - 1)];
+}
+
+float floatingYawForIndex(uint32_t index) {
+	static constexpr std::array<float, simulation::kMaxFloatingObjects> kYaws = {
+	    15.0f, -24.0f, 36.0f, -48.0f, 62.0f, -80.0f, 102.0f, -128.0f,
+	};
+	return glm::radians(kYaws[std::min<size_t>(index, kYaws.size() - 1)]);
+}
+
+float floatingTargetMajorWorldSize(const std::string& asset_name_lower) {
+	const float pool_span_world =
+	    2.0f * std::min(water_surface_render_ctx.half_extent_u, water_surface_render_ctx.half_extent_v);
+	if (asset_name_lower.find("duck") != std::string::npos) {
+		return pool_span_world * 0.12f;
+	}
+	if (asset_name_lower.find("teapot") != std::string::npos) {
+		return pool_span_world * 0.10f;
+	}
+	if (asset_name_lower.find("ring") != std::string::npos) {
+		return pool_span_world * 0.18f;
+	}
+	return pool_span_world * 0.14f;
+}
+
+float floatingDesiredDraftFraction(const std::string& asset_name_lower) {
+	if (asset_name_lower.find("ring") != std::string::npos) {
+		return 0.18f;
+	}
+	if (asset_name_lower.find("duck") != std::string::npos) {
+		return 0.30f;
+	}
+	if (asset_name_lower.find("teapot") != std::string::npos) {
+		return 0.56f;
+	}
+	return 0.28f;
+}
+
+simulation::FloatingObjectSettings makeFloatingObjectSettings(const std::string& asset_name,
+                                                              const glm::vec3&  asset_world_size,
+                                                              float default_scale,
+                                                              uint32_t simulation_index) {
+	const std::string asset_name_lower  = toLowerCopy(asset_name);
+	const bool        is_ring           = asset_name_lower.find("ring") != std::string::npos;
+	const bool        is_duck           = asset_name_lower.find("duck") != std::string::npos;
+	const bool        is_teapot         = asset_name_lower.find("teapot") != std::string::npos;
+	const glm::vec3   scaled_world_size = glm::max(asset_world_size * default_scale,
+	                                               glm::vec3(0.03f, 0.03f, 0.03f));
+	simulation::FloatingObjectSettings settings{};
+	settings.anchor            = floatingAnchorForIndex(simulation_index);
+	settings.base_height       = 0.02f + scaled_world_size.y * 0.10f;
+	settings.base_yaw_radians  = floatingYawForIndex(simulation_index);
+	settings.size.x            = scaled_world_size.x /
+	                  std::max(water_surface_render_ctx.half_extent_u, 1.0e-4f);
+	settings.size.z            = scaled_world_size.z /
+	                  std::max(water_surface_render_ctx.half_extent_v, 1.0e-4f);
+	settings.size.y            = scaled_world_size.y;
+	const float volume         = scaled_world_size.x * scaled_world_size.y * scaled_world_size.z;
+	settings.mass              = std::clamp(volume * 30.0f, 0.35f, 1.80f);
+	if (is_teapot) {
+		settings.mass = std::clamp(volume * 44.0f, 0.70f, 1.80f);
+	}
+	settings.color             = glm::vec3(0.86f, 0.58f, 0.28f);
+	const float desired_draft  = std::max(settings.size.y * floatingDesiredDraftFraction(asset_name_lower),
+	                                     settings.size.y * 0.12f);
+	settings.buoyancy_strength =
+	    std::clamp((4.5f * settings.mass) / std::max(desired_draft * 5.0f, 1.0e-4f), 16.0f, 46.0f);
+	settings.buoyancy_damping      = is_teapot ? 14.0f : 7.5f;
+	settings.linear_damping        = is_teapot ? 3.4f : 1.8f;
+	settings.angular_strength      = is_ring ? 9.5f : (is_teapot ? 8.0f : 12.0f);
+	settings.angular_damping       = is_teapot ? 7.5f : 5.5f;
+	settings.self_righting         = is_ring ? 4.5f : (is_teapot ? 4.0f : 6.5f);
+	settings.max_tilt_radians      = is_ring ? 0.42f : (is_teapot ? 0.24f : 0.34f);
+	settings.planar_drift_strength = is_teapot ? 1.6f : 2.4f;
+	settings.planar_damping        = is_teapot ? 1.9f : 1.4f;
+	settings.anchor_pull_strength  = 0.45f;
+	settings.drift_radius          = is_ring ? 0.56f : (is_teapot ? 0.28f : 0.42f);
+	settings.waterline_offset      = is_ring ? -settings.size.y * 0.08f :
+	                                     (is_teapot ? -settings.size.y * 0.18f :
+	                                                  settings.size.y * 0.02f);
+	settings.yaw_follow_strength   = is_teapot ? 1.4f : 2.2f;
+	return settings;
+}
+
+glm::mat4 makeFloatingWorldPose(const simulation::FloatingObjectSettings& settings) {
+	const glm::vec3 axis_y = water_surface_render_ctx.normal;
+	glm::vec3       axis_x = water_surface_render_ctx.axis_u;
+	glm::vec3       axis_z = water_surface_render_ctx.axis_v;
+	const float     c      = std::cos(settings.base_yaw_radians);
+	const float     s      = std::sin(settings.base_yaw_radians);
+	const glm::vec3 rot_x  = glm::normalize(axis_x * c + axis_z * s);
+	const glm::vec3 rot_z  = glm::normalize(-axis_x * s + axis_z * c);
+	const glm::vec3 center = water_surface_render_ctx.center +
+	                         water_surface_render_ctx.axis_u *
+	                             (settings.anchor.x * water_surface_render_ctx.half_extent_u) +
+	                         water_surface_render_ctx.axis_v *
+	                             (settings.anchor.y * water_surface_render_ctx.half_extent_v) +
+	                         water_surface_render_ctx.normal * settings.base_height;
+
+	glm::mat4 pose(1.0f);
+	pose[0] = glm::vec4(rot_x, 0.0f);
+	pose[1] = glm::vec4(axis_y, 0.0f);
+	pose[2] = glm::vec4(rot_z, 0.0f);
+	pose[3] = glm::vec4(center, 1.0f);
+	return pose;
+}
+
+glm::mat4 makeFloatingWorldPose(const simulation::FloatingObjectRenderData& render_data) {
+	const auto to_world_axis = [](const glm::vec3& axis) {
+		return glm::normalize(water_surface_render_ctx.axis_u * axis.x +
+		                      water_surface_render_ctx.normal * axis.y +
+		                      water_surface_render_ctx.axis_v * axis.z);
+	};
+
+	const glm::vec3 center = water_surface_render_ctx.center +
+	                         water_surface_render_ctx.axis_u *
+	                             (render_data.center.x * water_surface_render_ctx.half_extent_u) +
+	                         water_surface_render_ctx.axis_v *
+	                             (render_data.center.z * water_surface_render_ctx.half_extent_v) +
+	                         water_surface_render_ctx.normal * render_data.center.y;
+
+	glm::mat4 pose(1.0f);
+	pose[0] = glm::vec4(to_world_axis(glm::vec3(render_data.axis_x)), 0.0f);
+	pose[1] = glm::vec4(to_world_axis(glm::vec3(render_data.axis_y)), 0.0f);
+	pose[2] = glm::vec4(to_world_axis(glm::vec3(render_data.axis_z)), 0.0f);
+	pose[3] = glm::vec4(center, 1.0f);
+	return pose;
+}
+
+void syncFloatingSimulationSettings(simulation::WaterSurfaceSimulation* water_surface) {
+	if (water_surface == nullptr) {
+		return;
+	}
+	water_surface->setFloatingObjects(floating_simulation_settings);
+}
+
+void initializeStaticMeshTransformOwnership(const Scene* scene) {
+	mesh_pose_transforms.clear();
+	mesh_base_transforms.clear();
+	mesh_scale_owner.clear();
+	scale_owners.clear();
+	floating_simulation_settings.clear();
+	scene_mesh_transforms_dirty = false;
+	tlas_update_pending         = false;
+	floating_settings_dirty     = false;
+
+	if (scene == nullptr) {
+		return;
+	}
+
+	ensureMeshTransformMetadataSize(scene->m_meshes.size());
+	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
+		const auto& mesh = scene->m_meshes[mesh_index];
+		mesh_pose_transforms[mesh_index] =
+		    mesh != nullptr ? mesh->m_transform.m_transform : glm::mat4(1.0f);
+		mesh_base_transforms[mesh_index] = glm::mat4(1.0f);
+		const int owner_index            = addScaleOwner(meshDisplayName(scene, mesh_index));
+		scale_owners[owner_index].mesh_indices.push_back(mesh_index);
+		mesh_scale_owner[mesh_index] = owner_index;
+	}
+}
+
+void addFloatingMeshesFromResources(Scene* scene) {
+	if (scene == nullptr || !water_surface_render_ctx.enabled) {
+		return;
+	}
+
+	std::vector<fs::path> asset_paths;
+	for (const fs::directory_entry& entry : fs::directory_iterator("resources/meshes")) {
+		if (!entry.is_regular_file()) {
+			continue;
+		}
+
+		const std::string extension = toLowerCopy(entry.path().extension().string());
+		if (extension == ".glb" || extension == ".gltf") {
+			asset_paths.push_back(entry.path());
+		}
+	}
+
+	std::sort(asset_paths.begin(), asset_paths.end());
+	if (asset_paths.size() > simulation::kMaxFloatingObjects) {
+		asset_paths.resize(simulation::kMaxFloatingObjects);
+	}
+
+	for (const fs::path& asset_path : asset_paths) {
+		const int mesh_start = static_cast<int>(scene->m_meshes.size());
+		const std::string extension = toLowerCopy(asset_path.extension().string());
+
+		if (extension == ".glb" || extension == ".gltf") {
+			scene->append_gltf(asset_path.string());
+		}
+
+		const int mesh_end = static_cast<int>(scene->m_meshes.size());
+		if (mesh_end <= mesh_start) {
+			continue;
+		}
+
+		ensureMeshTransformMetadataSize(scene->m_meshes.size());
+		const Bounds3 bounds = computeSceneMeshRangeBounds(scene, mesh_start, mesh_end);
+		if (!bounds.valid) {
+			continue;
+		}
+
+		const glm::vec3 asset_center     = 0.5f * (bounds.min + bounds.max);
+		const glm::vec3 asset_world_size = glm::max(bounds.max - bounds.min, glm::vec3(0.01f));
+		const std::string asset_name     = asset_path.stem().string();
+		const float target_major_world   =
+		    std::max(floatingTargetMajorWorldSize(toLowerCopy(asset_name)), 0.08f);
+		const float source_major_world = std::max(asset_world_size.x, asset_world_size.z);
+		const float default_scale =
+		    target_major_world / std::max(source_major_world, 1.0e-4f);
+
+		const int owner_index = addScaleOwner(asset_name);
+		auto&     owner       = scale_owners[owner_index];
+		owner.is_floating     = true;
+		owner.simulation_index = static_cast<int>(floating_simulation_settings.size());
+		owner.floating_settings_base =
+		    makeFloatingObjectSettings(asset_name, asset_world_size, default_scale,
+		                              static_cast<uint32_t>(owner.simulation_index));
+		floating_simulation_settings.push_back(owner.floating_settings_base);
+
+		for (int mesh_index = mesh_start; mesh_index < mesh_end; ++mesh_index) {
+			auto& mesh = scene->m_meshes[mesh_index];
+			if (mesh == nullptr) {
+				continue;
+			}
+
+			const glm::mat4 centered_transform =
+			    glm::translate(glm::mat4(1.0f), -asset_center) * mesh->m_transform.m_transform;
+			mesh_base_transforms[mesh_index] =
+			    glm::scale(glm::mat4(1.0f), glm::vec3(default_scale)) * centered_transform;
+			mesh_pose_transforms[mesh_index] = makeFloatingWorldPose(owner.floating_settings_base);
+			mesh_scale_owner[mesh_index]     = owner_index;
+			owner.mesh_indices.push_back(mesh_index);
+		}
+
+		updateOwnerTransforms(scene, owner_index, render_target_ctx.allocator);
+	}
+}
+
+bool updateFloatingMeshTransformsFromSimulation(Scene* scene,
+                                                const simulation::WaterSurfaceSimulation* water_surface,
+                                                VmaAllocator allocator) {
+	if (scene == nullptr || water_surface == nullptr || floating_simulation_settings.empty()) {
+		return false;
+	}
+
+	const std::vector<simulation::FloatingObjectRenderData> render_data =
+	    water_surface->floatingObjectRenderData();
+	bool any_pose_changed = false;
+
+	for (const ScaleOwnerData& owner : scale_owners) {
+		if (!owner.is_floating || owner.simulation_index < 0 ||
+		    owner.simulation_index >= static_cast<int>(render_data.size())) {
+			continue;
+		}
+
+		const glm::mat4 pose = makeFloatingWorldPose(render_data[owner.simulation_index]);
+		for (int mesh_index : owner.mesh_indices) {
+			if (mesh_index < 0 || mesh_index >= static_cast<int>(mesh_pose_transforms.size())) {
+				continue;
+			}
+			if (matricesNearlyEqual(mesh_pose_transforms[mesh_index], pose)) {
+				continue;
+			}
+			mesh_pose_transforms[mesh_index] = pose;
+			writeMeshTransformToSceneAndGpu(scene, mesh_index);
+			any_pose_changed = true;
+		}
+	}
+
+	if (any_pose_changed) {
+		flushMeshTransforms(allocator);
+		scene_mesh_transforms_dirty = true;
+		tlas_update_pending         = true;
+	}
+
+	return any_pose_changed;
+}
+
 void rebuildObjectIdMap(const Scene* scene) {
 	selection_ctx.object_id_map.clear();
 	if (scene == nullptr) {
@@ -717,6 +1203,30 @@ std::string objectDisplayName(int object_id) {
 	return entry != nullptr ? entry->display_name : "None";
 }
 
+int scaleOwnerForObjectId(const Scene* scene, int object_id) {
+	if (scene == nullptr) {
+		return -1;
+	}
+
+	const ObjectIdEntry* entry = objectIdEntryForId(object_id);
+	if (entry == nullptr || entry->mesh_index < 0 ||
+	    entry->mesh_index >= static_cast<int>(mesh_scale_owner.size())) {
+		return -1;
+	}
+
+	return mesh_scale_owner[entry->mesh_index];
+}
+
+void refreshSelectedScaleEditor(const Scene* scene) {
+	const int owner_index = scaleOwnerForObjectId(scene, selection_ctx.selected_object_id);
+	if (owner_index < 0 || owner_index >= static_cast<int>(scale_owners.size())) {
+		selection_ctx.editor_scale = 1.0f;
+		return;
+	}
+
+	selection_ctx.editor_scale = scale_owners[owner_index].user_scale;
+}
+
 void refreshSelectedMaterialEditor(const Scene* scene) {
 	if (scene == nullptr || selection_ctx.selected_object_id < 0) {
 		selection_ctx.editor_material = Material{}.pack();
@@ -754,6 +1264,7 @@ bool selectObject(const Scene* scene, int object_id) {
 
 	selection_ctx.selected_object_id = resolved_object_id;
 	refreshSelectedMaterialEditor(scene);
+	refreshSelectedScaleEditor(scene);
 	return true;
 }
 
@@ -801,6 +1312,45 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator) {
 	                         selection_ctx.editor_material);
 }
 
+bool applyScaleOwnerValue(Scene* scene, int owner_index, float scale_value, VmaAllocator allocator) {
+	if (scene == nullptr || owner_index < 0 || owner_index >= static_cast<int>(scale_owners.size())) {
+		return false;
+	}
+
+	const float clamped_scale = std::clamp(scale_value, 0.10f, 3.00f);
+	if (std::abs(scale_owners[owner_index].user_scale - clamped_scale) <= 1.0e-4f) {
+		return false;
+	}
+
+	scale_owners[owner_index].user_scale = clamped_scale;
+	if (scale_owners[owner_index].is_floating) {
+		const int simulation_index = scale_owners[owner_index].simulation_index;
+		if (simulation_index >= 0 &&
+		    simulation_index < static_cast<int>(floating_simulation_settings.size())) {
+			simulation::FloatingObjectSettings scaled_settings =
+			    scale_owners[owner_index].floating_settings_base;
+			scaled_settings.size *= clamped_scale;
+			scaled_settings.mass *= clamped_scale * clamped_scale * clamped_scale;
+			scaled_settings.drift_radius *= std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
+			scaled_settings.waterline_offset *= clamped_scale;
+			floating_simulation_settings[simulation_index] = scaled_settings;
+			floating_settings_dirty                        = true;
+		}
+	}
+
+	updateOwnerTransforms(scene, owner_index, allocator);
+	return true;
+}
+
+bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
+	const int owner_index = scaleOwnerForObjectId(scene, selection_ctx.selected_object_id);
+	if (owner_index < 0) {
+		return false;
+	}
+
+	return applyScaleOwnerValue(scene, owner_index, selection_ctx.editor_scale, allocator);
+}
+
 glm::vec3 rainbowColorFromLoudness(float loudness) {
 	const float level = std::clamp(loudness, 0.0f, 1.0f);
 	float       r     = 0.0f;
@@ -825,6 +1375,8 @@ float voiceDrivenScalarValue(VoiceDrivenParameter parameter, float loudness) {
 			return 1.0f + level * (2.5f - 1.0f);
 		case VoiceDrivenParameter::EmissionIntensity:
 			return level * 20.0f;
+		case VoiceDrivenParameter::ObjectScale:
+			return 0.25f + level * (2.00f - 0.25f);
 		case VoiceDrivenParameter::BaseTint:
 		case VoiceDrivenParameter::EmissionColor:
 			return level;
@@ -849,6 +1401,8 @@ const char* voiceDrivenParameterLabel(VoiceDrivenParameter parameter) {
 			return "IOR";
 		case VoiceDrivenParameter::EmissionIntensity:
 			return "Emission intensity";
+		case VoiceDrivenParameter::ObjectScale:
+			return "Object scale";
 	}
 
 	return "Unknown";
@@ -859,10 +1413,11 @@ bool voiceParameterUsesRainbowColor(VoiceDrivenParameter parameter) {
 	       parameter == VoiceDrivenParameter::EmissionColor;
 }
 
-bool syncVoiceDrivenSelectionParameter(float loudness) {
+VoiceDrivenSyncResult syncVoiceDrivenSelectionParameter(float loudness) {
+	VoiceDrivenSyncResult result{};
 	if (selection_ctx.material_edit_mode != MaterialEditMode::Voice ||
 	    selection_ctx.selected_object_id < 0) {
-		return false;
+		return result;
 	}
 
 	switch (selection_ctx.voice_parameter) {
@@ -870,73 +1425,90 @@ bool syncVoiceDrivenSelectionParameter(float loudness) {
 			const glm::vec3 target_color = rainbowColorFromLoudness(loudness);
 			const glm::vec3 current      = glm::vec3(selection_ctx.editor_material.base_color);
 			if (glm::length(current - target_color) <= 1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.base_color =
 			    glm::vec4(target_color, selection_ctx.editor_material.base_color.a);
-			return true;
+			result.material_changed = true;
+			return result;
 		}
 		case VoiceDrivenParameter::EmissionColor: {
 			const glm::vec3 target_color = rainbowColorFromLoudness(loudness);
 			const glm::vec3 current      = glm::vec3(selection_ctx.editor_material.emission_color);
 			if (glm::length(current - target_color) <= 1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.emission_color =
 			    glm::vec4(target_color, selection_ctx.editor_material.emission_color.a);
-			return true;
+			result.material_changed = true;
+			return result;
 		}
 		case VoiceDrivenParameter::Metalness: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_material.base_metalness - target_value) <= 1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.base_metalness = target_value;
-			return true;
+			result.material_changed                      = true;
+			return result;
 		}
 		case VoiceDrivenParameter::Roughness: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_material.specular_roughness - target_value) <=
 			    1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.specular_roughness = target_value;
-			return true;
+			result.material_changed                          = true;
+			return result;
 		}
 		case VoiceDrivenParameter::Transmission: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_material.transmission_weight - target_value) <=
 			    1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.transmission_weight = target_value;
-			return true;
+			result.material_changed                           = true;
+			return result;
 		}
 		case VoiceDrivenParameter::Ior: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_material.specular_ior - target_value) <= 1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.specular_ior = target_value;
-			return true;
+			result.material_changed                    = true;
+			return result;
 		}
 		case VoiceDrivenParameter::EmissionIntensity: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_material.emission_luminance - target_value) <=
 			    1.0e-4f) {
-				return false;
+				return result;
 			}
 			selection_ctx.editor_material.emission_luminance = target_value;
-			return true;
+			result.material_changed                          = true;
+			return result;
+		}
+		case VoiceDrivenParameter::ObjectScale: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_scale - target_value) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_scale = target_value;
+			result.transform_changed   = true;
+			return result;
 		}
 	}
 
-	return false;
+	return result;
 }
 
 struct CpuRay {
@@ -1182,7 +1754,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 
 	int         edit_mode  = static_cast<int>(selection_ctx.material_edit_mode);
 	const char* edit_items = "GUI\0Voice\0";
-	if (ImGui::Combo("Material input", &edit_mode, edit_items)) {
+	if (ImGui::Combo("Inspector input", &edit_mode, edit_items)) {
 		selection_ctx.material_edit_mode = static_cast<MaterialEditMode>(edit_mode);
 	}
 
@@ -1190,7 +1762,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		int         voice_parameter = static_cast<int>(selection_ctx.voice_parameter);
 		const char* voice_items =
 		    "Base tint\0Emission color\0Metalness\0Roughness\0Transmission\0IOR\0Emission "
-		    "intensity\0";
+		    "intensity\0Object scale\0";
 		if (ImGui::Combo("Voice target", &voice_parameter, voice_items)) {
 			selection_ctx.voice_parameter = static_cast<VoiceDrivenParameter>(voice_parameter);
 		}
@@ -1210,6 +1782,10 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	ImGui::Text("Selected object: %s", objectDisplayName(selection_ctx.selected_object_id).c_str());
 
 	const bool has_selection = selected_entry != nullptr;
+	const int  scale_owner_index =
+	    has_selection ? scaleOwnerForObjectId(scene, selection_ctx.selected_object_id) : -1;
+	const bool has_scale_owner =
+	    scale_owner_index >= 0 && scale_owner_index < static_cast<int>(scale_owners.size());
 
 	if (has_selection) {
 		ImGui::Text("Object ID: %d", selected_entry != nullptr ? selected_entry->object_id : -1);
@@ -1263,6 +1839,13 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	}
 
 	ImGui::Separator();
+	ImGui::TextUnformatted("Transform");
+	if (has_scale_owner) {
+		ImGui::Text("Scale owner: %s", scale_owners[scale_owner_index].display_name.c_str());
+	} else {
+		ImGui::TextUnformatted("Scale owner: none");
+	}
+
 	ImGui::TextUnformatted("Material");
 	ImGui::TextWrapped(
 	    "Texture-backed meshes use these controls as live multipliers and overrides, and the "
@@ -1270,7 +1853,9 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 
 	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
 	if (!gui_mode_enabled) {
-		result.material_changed |= syncVoiceDrivenSelectionParameter(voice_loudness);
+		const VoiceDrivenSyncResult voice_sync = syncVoiceDrivenSelectionParameter(voice_loudness);
+		result.material_changed |= voice_sync.material_changed;
+		result.transform_changed |= voice_sync.transform_changed;
 		ImGui::Text("Voice target: %s", voiceDrivenParameterLabel(selection_ctx.voice_parameter));
 		ImGui::Text("Voice loudness: %.2f", voice_loudness);
 		if (voiceParameterUsesRainbowColor(selection_ctx.voice_parameter)) {
@@ -1282,6 +1867,16 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 			ImGui::Text("Mapped value: %.2f", voice_value);
 			ImGui::TextWrapped("Only the selected voice target changes with loudness.");
 		}
+	}
+
+	ImGui::BeginDisabled(!gui_mode_enabled || !has_scale_owner);
+	result.transform_changed |=
+	    ImGui::SliderFloat("Scale", &selection_ctx.editor_scale, 0.10f, 3.00f, "%.2f");
+	ImGui::EndDisabled();
+	if (!has_scale_owner) {
+		ImGui::TextWrapped(
+		    "The procedural water surface is still selectable for material editing, but it does "
+		    "not expose a mesh scale control.");
 	}
 
 	ImGui::BeginDisabled(!gui_mode_enabled);
@@ -1328,8 +1923,8 @@ void updateRenderDiagnostics(float delta_time_seconds) {
 	render.min_frame_time_ms              = frame_timing_history.min_frame_ms;
 	render.max_frame_time_ms              = frame_timing_history.max_frame_ms;
 	render.frame_sample_count    = static_cast<uint32_t>(frame_timing_history.sample_count);
-	render.render_width          = swapchain_ctx.extent.width;
-	render.render_height         = swapchain_ctx.extent.height;
+	render.render_width          = render_target_ctx.extent.width;
+	render.render_height         = render_target_ctx.extent.height;
 	render.swapchain_image_count = static_cast<uint32_t>(swapchain_ctx.images.size());
 
 	if (ImGui::GetCurrentContext() == nullptr) {
@@ -1388,6 +1983,11 @@ void App::createSwapchainResources() {
 	        .allocator     = render_target_ctx.allocator,
 	        .output_extent = swapchain_ctx.extent,
 	    });
+	if (!floating_simulation_settings.empty()) {
+		syncFloatingSimulationSettings(m_water_surface.get());
+		m_water_surface->requestObjectReset();
+		floating_settings_dirty = false;
+	}
 	std::cout << "[INFO] Created water surface simulation resources\n";
 }
 
@@ -1419,6 +2019,119 @@ static void transition_layout(VkCommandBuffer, VkImage, VkImageLayout, VkImageLa
 static VkCommandBuffer begin_one_time_cmd(VkDevice, VkCommandPool);
 static void            end_one_time_cmd(VkDevice, VkCommandPool, VkQueue, VkCommandBuffer);
 
+static void recreatePathTracerRenderTargets(VkExtent2D render_extent) {
+	VmaAllocator allocator = render_target_ctx.allocator;
+	render_target_ctx.extent = render_extent;
+
+	if (render_target_ctx.storage_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	}
+	if (render_target_ctx.storage_image != VK_NULL_HANDLE) {
+		vmaDestroyImage(allocator, render_target_ctx.storage_image,
+		                render_target_ctx.storage_image_alloc);
+	}
+	if (render_target_ctx.object_id_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	}
+	if (render_target_ctx.object_id_image != VK_NULL_HANDLE) {
+		vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+		                render_target_ctx.object_id_image_alloc);
+	}
+	if (render_target_ctx.accum_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	}
+	if (render_target_ctx.accum_image != VK_NULL_HANDLE) {
+		vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	}
+
+	const VkExtent3D ext = {render_extent.width, render_extent.height, 1};
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
+		VkImageCreateInfo ii{};
+		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ii.imageType     = VK_IMAGE_TYPE_2D;
+		ii.format        = format;
+		ii.extent        = ext;
+		ii.mipLevels     = 1;
+		ii.arrayLayers   = 1;
+		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+	};
+
+	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             kAccumulationImageFormat, 0);
+
+	render_target_ctx.storage_image_view = create_image_view(
+	    vulkan_ctx.device, render_target_ctx.storage_image, VK_FORMAT_R8G8B8A8_UNORM,
+	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.object_id_image_view = create_image_view(
+	    vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.accum_image_view = create_image_view(
+	    vulkan_ctx.device, render_target_ctx.accum_image, kAccumulationImageFormat,
+	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+
+	{
+		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                 cmd);
+	}
+
+	VkDescriptorImageInfo out_img{};
+	out_img.imageView   = render_target_ctx.storage_image_view;
+	out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	VkDescriptorImageInfo object_id_img{};
+	object_id_img.imageView   = render_target_ctx.object_id_image_view;
+	object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	VkDescriptorImageInfo accum_img{};
+	accum_img.imageView   = render_target_ctx.accum_image_view;
+	accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+	VkWriteDescriptorSet writes[3]{};
+	writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+	             nullptr,
+	             render_target_ctx.descriptor_set,
+	             0,
+	             0,
+	             1,
+	             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+	             &out_img};
+	writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+	             nullptr,
+	             render_target_ctx.descriptor_set,
+	             13,
+	             0,
+	             1,
+	             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+	             &object_id_img};
+	writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+	             nullptr,
+	             render_target_ctx.descriptor_set,
+	             1,
+	             0,
+	             1,
+	             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+	             &accum_img};
+	vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+
+	render_target_ctx.storage_image_initialized = false;
+}
+
 void App::recreateSwapchainResources() {
 	uint32_t framebuffer_width  = m_window->width();
 	uint32_t framebuffer_height = m_window->height();
@@ -1436,18 +2149,23 @@ void App::recreateSwapchainResources() {
 
 	// Recreate pathtracer storage/accum images at the new swapchain extent
 	VmaAllocator allocator = render_target_ctx.allocator;
+	render_target_ctx.extent = computePathTracerExtent(swapchain_ctx.extent);
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.storage_image,
 	                render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+	                render_target_ctx.object_id_image_alloc);
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
-	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkImageUsageFlags extra) {
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
 		VkImageCreateInfo ii{};
 		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 		ii.imageType     = VK_IMAGE_TYPE_2D;
-		ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
-		ii.extent        = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+		ii.format        = format;
+		ii.extent        = {render_target_ctx.extent.width, render_target_ctx.extent.height, 1};
 		ii.mipLevels     = 1;
 		ii.arrayLayers   = 1;
 		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -1459,19 +2177,28 @@ void App::recreateSwapchainResources() {
 		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
 	};
 	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc, 0);
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             kAccumulationImageFormat, 0);
 
 	render_target_ctx.storage_image_view = create_image_view(
 	    vulkan_ctx.device, render_target_ctx.storage_image, VK_FORMAT_R8G8B8A8_UNORM,
 	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.object_id_image_view = create_image_view(
+	    vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
 	render_target_ctx.accum_image_view = create_image_view(
-	    vulkan_ctx.device, render_target_ctx.accum_image, VK_FORMAT_R8G8B8A8_UNORM,
+	    vulkan_ctx.device, render_target_ctx.accum_image, kAccumulationImageFormat,
 	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
 
 	// Transition accum → GENERAL so the shader can read/write it
 	{
 		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -1479,11 +2206,15 @@ void App::recreateSwapchainResources() {
 		                 cmd);
 	}
 
-	// Update descriptor set bindings 0 (output), 1 (accum), and 14 (water height)
+	// Update descriptor set bindings 0 (output), 1 (accum), 13 (object ids),
+	// 14 (current water height), and 15 (previous water height)
 	{
 		VkDescriptorImageInfo out_img{};
 		out_img.imageView   = render_target_ctx.storage_image_view;
 		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 		VkDescriptorImageInfo accum_img{};
 		accum_img.imageView   = render_target_ctx.accum_image_view;
 		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -1491,7 +2222,12 @@ void App::recreateSwapchainResources() {
 		water_height_img.imageView =
 		    m_water_surface != nullptr ? m_water_surface->currentHeightImageView() : VK_NULL_HANDLE;
 		water_height_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		VkWriteDescriptorSet writes[3]{};
+		VkDescriptorImageInfo previous_water_height_img{};
+		previous_water_height_img.imageView =
+		    m_water_surface != nullptr ? m_water_surface->previousHeightImageView() :
+		                                VK_NULL_HANDLE;
+		previous_water_height_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkWriteDescriptorSet writes[5]{};
 		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
@@ -1503,12 +2239,20 @@ void App::recreateSwapchainResources() {
 		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
 		             1,
 		             0,
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &accum_img};
-		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
 		             14,
@@ -1516,7 +2260,15 @@ void App::recreateSwapchainResources() {
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &water_height_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+		writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             15,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &previous_water_height_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 5, writes, 0, nullptr);
 	}
 
 	render_target_ctx.storage_image_initialized = false;
@@ -1534,6 +2286,13 @@ struct AccelerationStructureContext {
 	VkBuffer                   tlas_buffer       = VK_NULL_HANDLE;
 	VmaAllocation              tlas_buffer_alloc = VK_NULL_HANDLE;
 	VkDeviceAddress            tlas_address      = 0;
+	VkBuffer                   instance_buffer       = VK_NULL_HANDLE;
+	VmaAllocation              instance_buffer_alloc = VK_NULL_HANDLE;
+	void*                      instance_mapped       = nullptr;
+	VkBuffer                   scratch_buffer        = VK_NULL_HANDLE;
+	VmaAllocation              scratch_buffer_alloc  = VK_NULL_HANDLE;
+	VkDeviceSize               scratch_size          = 0;
+	uint32_t                   instance_count        = 0;
 } as_ctx;
 
 // ============================================================
@@ -1782,10 +2541,11 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		return;
 	swapchain_ctx.image_views = views_ret.value();
 	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
+	render_target_ctx.extent = computePathTracerExtent(swapchain_ctx.extent);
 
 	// -- Recreate render-target images at new size --
 	// Use the actual swapchain extent (Vulkan may adjust from the requested size)
-	const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+	const VkExtent3D ext = {render_target_ctx.extent.width, render_target_ctx.extent.height, 1};
 
 	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
 	                        VkImageUsageFlags extra) {
@@ -1810,7 +2570,7 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
 	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	             VK_FORMAT_R8G8B8A8_UNORM, 0);
+	             kAccumulationImageFormat, 0);
 
 	render_target_ctx.storage_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
@@ -1820,7 +2580,7 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	                      VK_IMAGE_VIEW_TYPE_2D);
 	render_target_ctx.accum_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	                      kAccumulationImageFormat, VK_IMAGE_VIEW_TYPE_2D);
 
 	// Transition accum → GENERAL
 	{
@@ -2040,6 +2800,18 @@ static void upload_openpbr_luts(VmaAllocator alloc, VkDevice dev, VkCommandPool 
 	std::cout << "[INFO] Uploaded OpenPBR LUTs\n";
 }
 
+static VkExtent2D computePathTracerExtent(VkExtent2D presentation_extent) {
+	const float scale = std::clamp(overlay_ctx.controls.render_scale, kMinRenderScale, 1.0f);
+	return VkExtent2D{
+	    std::max(1u, static_cast<uint32_t>(
+	                     std::lround(static_cast<double>(presentation_extent.width) * scale))),
+	    std::max(1u, static_cast<uint32_t>(
+	                     std::lround(static_cast<double>(presentation_extent.height) * scale))),
+	};
+}
+
+static void recreatePathTracerRenderTargets(VkExtent2D render_extent);
+
 // ============================================================
 // === Material texture upload
 // ============================================================
@@ -2209,6 +2981,8 @@ static VkDescriptorSetLayoutBinding make_binding(uint32_t binding, VkDescriptorT
 // ============================================================
 static constexpr VkBuildAccelerationStructureFlagsKHR AS_BUILD_FLAGS =
     VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+static constexpr VkBuildAccelerationStructureFlagsKHR TLAS_BUILD_FLAGS =
+    AS_BUILD_FLAGS | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
 static constexpr VkBufferUsageFlags AS_BUFFER_USAGE =
     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -2305,88 +3079,185 @@ static VkTransformMatrixKHR glm_to_vk_transform(const glm::mat4& m) {
 	return out;
 }
 
-static void build_tlas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q,
-                       const std::vector<BLAS>&                  blases,
-                       const std::vector<std::unique_ptr<Mesh>>& meshes) {
-	if (blases.size() != meshes.size())
-		throw std::runtime_error("build_tlas: blases.size() != meshes.size()");
+static void destroy_tlas_resources(VmaAllocator alloc, VkDevice dev) {
+	if (as_ctx.tlas != VK_NULL_HANDLE) {
+		vkDestroyAccelerationStructureKHR(dev, as_ctx.tlas, nullptr);
+		as_ctx.tlas = VK_NULL_HANDLE;
+	}
+	if (as_ctx.tlas_buffer != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(alloc, as_ctx.tlas_buffer, as_ctx.tlas_buffer_alloc);
+		as_ctx.tlas_buffer       = VK_NULL_HANDLE;
+		as_ctx.tlas_buffer_alloc = VK_NULL_HANDLE;
+	}
+	if (as_ctx.instance_buffer != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(alloc, as_ctx.instance_buffer, as_ctx.instance_buffer_alloc);
+		as_ctx.instance_buffer       = VK_NULL_HANDLE;
+		as_ctx.instance_buffer_alloc = VK_NULL_HANDLE;
+		as_ctx.instance_mapped       = nullptr;
+	}
+	if (as_ctx.scratch_buffer != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(alloc, as_ctx.scratch_buffer, as_ctx.scratch_buffer_alloc);
+		as_ctx.scratch_buffer       = VK_NULL_HANDLE;
+		as_ctx.scratch_buffer_alloc = VK_NULL_HANDLE;
+		as_ctx.scratch_size         = 0;
+	}
+	as_ctx.tlas_address   = 0;
+	as_ctx.instance_count = 0;
+}
 
-	std::vector<VkAccelerationStructureInstanceKHR> insts;
-	insts.reserve(blases.size());
+static void fill_tlas_instances(const std::vector<BLAS>&                  blases,
+                                const std::vector<std::unique_ptr<Mesh>>& meshes,
+                                VkAccelerationStructureInstanceKHR*       instances) {
+	if (blases.size() != meshes.size()) {
+		throw std::runtime_error("fill_tlas_instances: blases.size() != meshes.size()");
+	}
 
-	for (uint32_t i = 0; i < (uint32_t) blases.size(); ++i) {
+	for (uint32_t i = 0; i < static_cast<uint32_t>(blases.size()); ++i) {
 		VkAccelerationStructureInstanceKHR inst{};
-		inst.transform           = glm_to_vk_transform(meshes[i]->m_transform.m_transform);
+		inst.transform = glm_to_vk_transform(meshes[i]->m_transform.m_transform);
 		inst.instanceCustomIndex = i;
 		inst.mask                = 0xFF;
 		inst.instanceShaderBindingTableRecordOffset = 0;
 		inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 		inst.accelerationStructureReference = blases[i].device_address;
-		insts.push_back(inst);
+		instances[i]                       = inst;
+	}
+}
+
+static void upload_tlas_instances(VmaAllocator alloc, const std::vector<BLAS>& blases,
+                                  const std::vector<std::unique_ptr<Mesh>>& meshes) {
+	if (as_ctx.instance_mapped == nullptr || blases.empty()) {
+		return;
 	}
 
-	VmaAllocation ia;
-	VkBuffer      ib =
-	    create_and_upload_buffer(alloc, sizeof(VkAccelerationStructureInstanceKHR) * insts.size(),
-	                             insts.data(), AS_INPUT_BUFFER_USAGE, ia);
+	fill_tlas_instances(blases, meshes,
+	                    reinterpret_cast<VkAccelerationStructureInstanceKHR*>(as_ctx.instance_mapped));
+	vmaFlushAllocation(alloc, as_ctx.instance_buffer_alloc, 0,
+	                   sizeof(VkAccelerationStructureInstanceKHR) *
+	                       static_cast<VkDeviceSize>(blases.size()));
+}
 
-	VkAccelerationStructureGeometryInstancesDataKHR id{};
-	id.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-	id.data.deviceAddress = get_bda(dev, ib);
+static void record_tlas_build(VkDevice dev, VkCommandBuffer cmd, bool update_mode) {
+	if (as_ctx.tlas == VK_NULL_HANDLE || as_ctx.instance_count == 0) {
+		return;
+	}
 
-	VkAccelerationStructureGeometryKHR geom{};
-	geom.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-	geom.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-	geom.geometry.instances = id;
+	VkAccelerationStructureGeometryInstancesDataKHR instances{};
+	instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+	instances.data.deviceAddress = get_bda(dev, as_ctx.instance_buffer);
+
+	VkAccelerationStructureGeometryKHR geometry{};
+	geometry.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+	geometry.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+	geometry.geometry.instances = instances;
 
 	VkAccelerationStructureBuildGeometryInfoKHR build{};
 	build.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
 	build.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-	build.flags         = AS_BUILD_FLAGS;
+	build.flags         = TLAS_BUILD_FLAGS;
+	build.mode          = update_mode ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR :
+                                      VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+	build.srcAccelerationStructure = update_mode ? as_ctx.tlas : VK_NULL_HANDLE;
+	build.dstAccelerationStructure = as_ctx.tlas;
+	build.geometryCount           = 1;
+	build.pGeometries             = &geometry;
+	build.scratchData.deviceAddress = get_bda(dev, as_ctx.scratch_buffer);
+
+	VkAccelerationStructureBuildRangeInfoKHR    range{};
+	range.primitiveCount                                   = as_ctx.instance_count;
+	const VkAccelerationStructureBuildRangeInfoKHR* ranges = &range;
+	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, &ranges);
+
+	VkMemoryBarrier barrier{};
+	barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+	barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+	                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0,
+	                     nullptr);
+}
+
+static void build_tlas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q,
+                       const std::vector<BLAS>&                  blases,
+                       const std::vector<std::unique_ptr<Mesh>>& meshes) {
+	if (blases.size() != meshes.size()) {
+		throw std::runtime_error("build_tlas: blases.size() != meshes.size()");
+	}
+	if (blases.empty()) {
+		destroy_tlas_resources(alloc, dev);
+		return;
+	}
+
+	const uint32_t instance_count = static_cast<uint32_t>(blases.size());
+	if (as_ctx.tlas != VK_NULL_HANDLE) {
+		destroy_tlas_resources(alloc, dev);
+	}
+
+	VkBufferCreateInfo instance_buffer_info{};
+	instance_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	instance_buffer_info.size  =
+	    sizeof(VkAccelerationStructureInstanceKHR) * static_cast<VkDeviceSize>(instance_count);
+	instance_buffer_info.usage = AS_INPUT_BUFFER_USAGE;
+	VmaAllocationCreateInfo instance_alloc_info{};
+	instance_alloc_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	instance_alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+	VmaAllocationInfo instance_info{};
+	if (vmaCreateBuffer(alloc, &instance_buffer_info, &instance_alloc_info, &as_ctx.instance_buffer,
+	                    &as_ctx.instance_buffer_alloc, &instance_info) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create TLAS instance buffer");
+	}
+	as_ctx.instance_mapped = instance_info.pMappedData;
+	as_ctx.instance_count  = instance_count;
+	upload_tlas_instances(alloc, blases, meshes);
+
+	VkAccelerationStructureGeometryInstancesDataKHR instances{};
+	instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+	instances.data.deviceAddress = get_bda(dev, as_ctx.instance_buffer);
+
+	VkAccelerationStructureGeometryKHR geometry{};
+	geometry.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+	geometry.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+	geometry.geometry.instances = instances;
+
+	VkAccelerationStructureBuildGeometryInfoKHR build{};
+	build.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+	build.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+	build.flags         = TLAS_BUILD_FLAGS;
 	build.geometryCount = 1;
-	build.pGeometries   = &geom;
+	build.pGeometries   = &geometry;
 
-	const uint32_t ic = (uint32_t) insts.size();
-
-	VkAccelerationStructureBuildSizesInfoKHR si{};
-	si.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+	VkAccelerationStructureBuildSizesInfoKHR sizes{};
+	sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
 	vkGetAccelerationStructureBuildSizesKHR(dev, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-	                                        &build, &ic, &si);
+	                                        &build, &instance_count, &sizes);
 
-	VmaAllocation sca;
-	as_ctx.tlas_buffer = create_gpu_buffer(alloc, si.accelerationStructureSize, AS_BUFFER_USAGE,
-	                                       as_ctx.tlas_buffer_alloc);
-	VkBuffer scb       = create_gpu_buffer(alloc, si.buildScratchSize, SCRATCH_BUFFER_USAGE, sca,
-	                                       vulkan_ctx.scratch_alignment);
+	as_ctx.tlas_buffer =
+	    create_gpu_buffer(alloc, sizes.accelerationStructureSize, AS_BUFFER_USAGE,
+	                      as_ctx.tlas_buffer_alloc);
+	as_ctx.scratch_size =
+	    std::max(sizes.buildScratchSize, sizes.updateScratchSize);
+	as_ctx.scratch_buffer =
+	    create_gpu_buffer(alloc, as_ctx.scratch_size, SCRATCH_BUFFER_USAGE,
+	                      as_ctx.scratch_buffer_alloc, vulkan_ctx.scratch_alignment);
 
-	VkAccelerationStructureCreateInfoKHR aci{};
-	aci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-	aci.buffer = as_ctx.tlas_buffer;
-	aci.size   = si.accelerationStructureSize;
-	aci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-
-	if (vkCreateAccelerationStructureKHR(dev, &aci, nullptr, &as_ctx.tlas) != VK_SUCCESS)
+	VkAccelerationStructureCreateInfoKHR create_info{};
+	create_info.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+	create_info.buffer = as_ctx.tlas_buffer;
+	create_info.size   = sizes.accelerationStructureSize;
+	create_info.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+	if (vkCreateAccelerationStructureKHR(dev, &create_info, nullptr, &as_ctx.tlas) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create TLAS");
-
-	build.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build.dstAccelerationStructure  = as_ctx.tlas;
-	build.scratchData.deviceAddress = get_bda(dev, scb);
-
-	VkAccelerationStructureBuildRangeInfoKHR ri{};
-	ri.primitiveCount                                   = ic;
-	const VkAccelerationStructureBuildRangeInfoKHR* pri = &ri;
+	}
 
 	VkCommandBuffer cmd = begin_one_time_cmd(dev, pool);
-	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, &pri);
+	record_tlas_build(dev, cmd, false);
 	end_one_time_cmd(dev, pool, q, cmd);
 
-	VkAccelerationStructureDeviceAddressInfoKHR dai{};
-	dai.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-	dai.accelerationStructure = as_ctx.tlas;
-	as_ctx.tlas_address       = vkGetAccelerationStructureDeviceAddressKHR(dev, &dai);
-
-	vmaDestroyBuffer(alloc, scb, sca);
-	vmaDestroyBuffer(alloc, ib, ia);
+	VkAccelerationStructureDeviceAddressInfoKHR address_info{};
+	address_info.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+	address_info.accelerationStructure = as_ctx.tlas;
+	as_ctx.tlas_address =
+	    vkGetAccelerationStructureDeviceAddressKHR(dev, &address_info);
 }
 
 // =======================
@@ -2401,6 +3272,8 @@ App::App() {
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
 	water_surface_render_ctx = buildWaterSurfacePlacement(m_scene.get());
+	initializeStaticMeshTransformOwnership(m_scene.get());
+	addFloatingMeshesFromResources(m_scene.get());
 	rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
@@ -2524,7 +3397,9 @@ App::App() {
 	// === VI. Render target images
 	// ========================================
 	{
-		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
+		render_target_ctx.extent =
+		    computePathTracerExtent({(uint32_t) m_window->width(), (uint32_t) m_window->height()});
+		VkExtent3D ext = {render_target_ctx.extent.width, render_target_ctx.extent.height, 1};
 		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
 		                                    VkImageUsageFlags extra) {
 			VkImageCreateInfo ii{};
@@ -2566,7 +3441,7 @@ App::App() {
 		                   render_target_ctx.object_id_image_alloc, VK_FORMAT_R32_SINT,
 		                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 		make_storage_image(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-		                   VK_FORMAT_R8G8B8A8_UNORM, 0);
+		                   kAccumulationImageFormat, 0);
 		render_target_ctx.storage_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
 		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
@@ -2575,7 +3450,7 @@ App::App() {
 		                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
 		render_target_ctx.accum_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+		                      kAccumulationImageFormat, VK_IMAGE_VIEW_TYPE_2D);
 		make_dummy(VK_IMAGE_TYPE_2D, {1, 1, 1}, render_target_ctx.dummy_image_2d,
 		           render_target_ctx.dummy_image_2d_alloc);
 		render_target_ctx.dummy_image_2d_view =
@@ -2687,6 +3562,7 @@ App::App() {
 	if (!as_ctx.blases.empty()) {
 		build_tlas(allocator, vulkan_ctx.device, command_ctx.command_pool,
 		           vulkan_ctx.graphics_queue, as_ctx.blases, m_scene->m_meshes);
+		tlas_update_pending = false;
 		std::cout << "[INFO] TLAS: " << as_ctx.blases.size() << " instances\n";
 	}
 	if (!gpu_meshes.empty()) {
@@ -2694,6 +3570,13 @@ App::App() {
 		scene_ctx.mesh_buffer =
 		    create_and_upload_buffer(allocator, sizeof(GPUMesh) * gpu_meshes.size(),
 		                             gpu_meshes.data(), SB, scene_ctx.mesh_alloc);
+		VmaAllocationInfo mesh_info{};
+		vmaGetAllocationInfo(allocator, scene_ctx.mesh_alloc, &mesh_info);
+		scene_ctx.mesh_mapped = mesh_info.pMappedData;
+		if (scene_ctx.mesh_mapped == nullptr &&
+		    vmaMapMemory(allocator, scene_ctx.mesh_alloc, &scene_ctx.mesh_mapped) != VK_SUCCESS) {
+			throw std::runtime_error("failed to map mesh buffer");
+		}
 		scene_ctx.vertex_buffer =
 		    create_and_upload_buffer(allocator, sizeof(GPUVertex) * all_verts.size(),
 		                             all_verts.data(), SB, scene_ctx.vertex_alloc);
@@ -2701,6 +3584,7 @@ App::App() {
 		    create_and_upload_buffer(allocator, sizeof(uint32_t) * all_idxs.size(), all_idxs.data(),
 		                             SB, scene_ctx.index_alloc);
 		scene_ctx.mesh_count = (uint32_t) gpu_meshes.size();
+		scene_mesh_transforms_dirty = false;
 		std::cout << "[INFO] Mesh buffers: " << gpu_meshes.size() << " meshes, " << all_verts.size()
 		          << " verts, " << all_idxs.size() << " idxs\n";
 	}
@@ -2745,6 +3629,7 @@ App::App() {
 		    make_binding(12, VK_DESCRIPTOR_TYPE_SAMPLER),
 		    make_binding(13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
 		    make_binding(14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+		    make_binding(15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -2759,7 +3644,7 @@ App::App() {
 	}
 	{
 		std::vector<VkDescriptorPoolSize> ps = {
-		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5},
 		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
 		    {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
 		    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * NUM_LUTS + MAX_MATERIAL_TEXTURES},
@@ -2839,9 +3724,17 @@ App::App() {
 		water_height_info.imageView =
 		    m_water_surface != nullptr ? m_water_surface->currentHeightImageView() : VK_NULL_HANDLE;
 		water_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo previous_water_height_info{};
+		previous_water_height_info.imageView =
+		    m_water_surface != nullptr ? m_water_surface->previousHeightImageView() :
+		                                VK_NULL_HANDLE;
+		previous_water_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 14, 0, 1,
 		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &water_height_info});
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 15, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &previous_water_height_info});
 		VkDescriptorBufferInfo cb{scene_ctx.camera_buffer, 0, VK_WHOLE_SIZE};
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 2, 0, 1,
@@ -3091,6 +3984,17 @@ App::~App() {
 	for (auto s : sync_ctx.image_available)
 		vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
 
+	destroy_tlas_resources(render_target_ctx.allocator, vulkan_ctx.device);
+	for (BLAS& blas : as_ctx.blases) {
+		if (blas.handle != VK_NULL_HANDLE) {
+			vkDestroyAccelerationStructureKHR(vulkan_ctx.device, blas.handle, nullptr);
+		}
+		if (blas.buffer != VK_NULL_HANDLE) {
+			vmaDestroyBuffer(render_target_ctx.allocator, blas.buffer, blas.buffer_alloc);
+		}
+	}
+	as_ctx.blases.clear();
+
 	if (command_ctx.command_pool != VK_NULL_HANDLE) {
 		vkDestroyCommandPool(vulkan_ctx.device, command_ctx.command_pool, nullptr);
 	}
@@ -3206,7 +4110,20 @@ void App::MainLoop() {
 			applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
 			frame_number = 0;
 		}
+		if (selection_panel_result.transform_changed) {
+			if (applySelectedScaleEditor(m_scene.get(), render_target_ctx.allocator)) {
+				frame_number = 0;
+			}
+		}
 		if (selection_panel_result.selection_changed) {
+			frame_number = 0;
+		}
+
+		const VkExtent2D desired_render_extent = computePathTracerExtent(swapchain_ctx.extent);
+		if (desired_render_extent.width != render_target_ctx.extent.width ||
+		    desired_render_extent.height != render_target_ctx.extent.height) {
+			vkDeviceWaitIdle(vulkan_ctx.device);
+			recreatePathTracerRenderTargets(desired_render_extent);
 			frame_number = 0;
 		}
 
@@ -3286,6 +4203,14 @@ void App::MainLoop() {
 
 		vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX);
 		vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight);
+		if (m_water_surface != nullptr) {
+			updateFloatingMeshTransformsFromSimulation(m_scene.get(), m_water_surface.get(),
+			                                          render_target_ctx.allocator);
+			if (floating_settings_dirty) {
+				syncFloatingSimulationSettings(m_water_surface.get());
+				floating_settings_dirty = false;
+			}
+		}
 
 		uint32_t image_index;
 		VkResult acquire_result = vkAcquireNextImageKHR(
@@ -3303,21 +4228,37 @@ void App::MainLoop() {
 		vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
 		VkCommandBuffer cmd = command_ctx.command_buffer;
 
+		if (tlas_update_pending && as_ctx.tlas != VK_NULL_HANDLE) {
+			upload_tlas_instances(render_target_ctx.allocator, as_ctx.blases, m_scene->m_meshes);
+			record_tlas_build(vulkan_ctx.device, cmd, true);
+			tlas_update_pending     = false;
+			scene_mesh_transforms_dirty = false;
+		}
+
 		if (m_water_surface != nullptr) {
 			m_water_surface->record(cmd);
 
 			VkDescriptorImageInfo water_height_info{};
 			water_height_info.imageView   = m_water_surface->currentHeightImageView();
 			water_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+			VkDescriptorImageInfo previous_water_height_info{};
+			previous_water_height_info.imageView   = m_water_surface->previousHeightImageView();
+			previous_water_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-			VkWriteDescriptorSet water_height_write{};
-			water_height_write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			water_height_write.dstSet          = render_target_ctx.descriptor_set;
-			water_height_write.dstBinding      = 14;
-			water_height_write.descriptorCount = 1;
-			water_height_write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-			water_height_write.pImageInfo      = &water_height_info;
-			vkUpdateDescriptorSets(vulkan_ctx.device, 1, &water_height_write, 0, nullptr);
+			VkWriteDescriptorSet water_height_writes[2]{};
+			water_height_writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			water_height_writes[0].dstSet          = render_target_ctx.descriptor_set;
+			water_height_writes[0].dstBinding      = 14;
+			water_height_writes[0].descriptorCount = 1;
+			water_height_writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			water_height_writes[0].pImageInfo      = &water_height_info;
+			water_height_writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			water_height_writes[1].dstSet          = render_target_ctx.descriptor_set;
+			water_height_writes[1].dstBinding      = 15;
+			water_height_writes[1].descriptorCount = 1;
+			water_height_writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			water_height_writes[1].pImageInfo      = &previous_water_height_info;
+			vkUpdateDescriptorSets(vulkan_ctx.device, 2, water_height_writes, 0, nullptr);
 		}
 
 		VkImageLayout storage_old = render_target_ctx.storage_image_initialized ?
@@ -3351,6 +4292,7 @@ void App::MainLoop() {
 		pc.water_material_index = waterSurfaceMaterialIndex(m_scene.get());
 		pc.water_height_to_world_scale =
 		    m_water_surface != nullptr ? m_water_surface->heightToWorldScale() : 1.0f;
+		pc.first_floating_object_id = firstFloatingObjectId();
 		pc.outline_color = selection_ctx.outline_color;
 		pc.water_center_trace_half_height =
 		    glm::vec4(water_surface_render_ctx.center, water_surface_render_ctx.trace_half_height);
@@ -3362,8 +4304,8 @@ void App::MainLoop() {
 		vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 		                   sizeof(pc), &pc);
 
-		vkCmdDispatch(cmd, (swapchain_ctx.extent.width + 15) / 16,
-		              (swapchain_ctx.extent.height + 15) / 16, 1);
+		vkCmdDispatch(cmd, (render_target_ctx.extent.width + 15) / 16,
+		              (render_target_ctx.extent.height + 15) / 16, 1);
 
 		render_target_ctx.storage_image_initialized  = true;
 		swapchain_ctx.image_initialized[image_index] = true;
@@ -3378,8 +4320,8 @@ void App::MainLoop() {
 		// Blit pathtracer output to swapchain image
 		VkImageBlit blit{};
 		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		blit.srcOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.extent.width),
-		                       static_cast<int32_t>(swapchain_ctx.extent.height), 1};
+		blit.srcOffsets[1]  = {static_cast<int32_t>(render_target_ctx.extent.width),
+		                       static_cast<int32_t>(render_target_ctx.extent.height), 1};
 		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		blit.dstOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.extent.width),
 		                       static_cast<int32_t>(swapchain_ctx.extent.height), 1};

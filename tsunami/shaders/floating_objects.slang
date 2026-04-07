@@ -173,7 +173,7 @@ HorizontalFootprintGpu computeHorizontalFootprint(FloatingObjectGpu object_data)
     return footprint;
 }
 
-float objectHullDisplacementAtXZ(float2 xz)
+float objectHullDisplacementAtXZ(float2 xz, uint ignored_object_index)
 {
     float displacement = 0.0f;
 
@@ -181,6 +181,9 @@ float objectHullDisplacementAtXZ(float2 xz)
     for (uint object_index = 0; object_index < MAX_FLOATING_OBJECTS; ++object_index) {
         if (object_index >= push.object_count) {
             break;
+        }
+        if (object_index == ignored_object_index) {
+            continue;
         }
 
         FloatingObjectGpu object_data = g_previous_objects[object_index];
@@ -224,7 +227,7 @@ float objectHullDisplacementAtXZ(float2 xz)
     return clamp(displacement, -0.18f, 0.18f);
 }
 
-float sampleWaterHeightAtXZ(float2 xz, int2 dims)
+float sampleWaterHeightAtXZ(float2 xz, int2 dims, uint ignored_object_index)
 {
     float2 uv = xz * 0.5f + 0.5f;
     if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
@@ -232,7 +235,8 @@ float sampleWaterHeightAtXZ(float2 xz, int2 dims)
     }
 
     float raw_height = sampleCurrentHeight(uv, dims) * push.height_to_world_scale;
-    float hull_displacement = objectHullDisplacementAtXZ(xz) * push.height_to_world_scale;
+    float hull_displacement =
+        objectHullDisplacementAtXZ(xz, ignored_object_index) * push.height_to_world_scale;
     return raw_height - hull_displacement;
 }
 
@@ -308,7 +312,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
         float3 rotated_point = axis_x_prev * local_point.x + axis_y_prev * local_point.y +
                                axis_z_prev * local_point.z;
         float3 world_point = previous_position + rotated_point;
-        float water_height = sampleWaterHeightAtXZ(world_point.xz, dims);
+        float water_height = sampleWaterHeightAtXZ(world_point.xz, dims, object_index);
         float submersion = water_height - world_point.y;
         if (submersion <= 0.0f) {
             continue;
@@ -326,10 +330,14 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
 
     float slope_sample_distance = max(size.x, size.z) * 0.55f;
     float2 center_xz = previous_position.xz;
-    float water_left = sampleWaterHeightAtXZ(center_xz + float2(-slope_sample_distance, 0.0f), dims);
-    float water_right = sampleWaterHeightAtXZ(center_xz + float2(slope_sample_distance, 0.0f), dims);
-    float water_down = sampleWaterHeightAtXZ(center_xz + float2(0.0f, -slope_sample_distance), dims);
-    float water_up = sampleWaterHeightAtXZ(center_xz + float2(0.0f, slope_sample_distance), dims);
+    float water_left =
+        sampleWaterHeightAtXZ(center_xz + float2(-slope_sample_distance, 0.0f), dims, object_index);
+    float water_right =
+        sampleWaterHeightAtXZ(center_xz + float2(slope_sample_distance, 0.0f), dims, object_index);
+    float water_down =
+        sampleWaterHeightAtXZ(center_xz + float2(0.0f, -slope_sample_distance), dims, object_index);
+    float water_up =
+        sampleWaterHeightAtXZ(center_xz + float2(0.0f, slope_sample_distance), dims, object_index);
     float2 water_gradient = float2(
         (water_right - water_left) / max(slope_sample_distance * 2.0f, 1.0e-4f),
         (water_up - water_down) / max(slope_sample_distance * 2.0f, 1.0e-4f));
@@ -396,11 +404,13 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     linear_velocity.x *= exp(-planar_damping * push.delta_time);
     linear_velocity.y *= exp(-linear_damping * push.delta_time);
     linear_velocity.z *= exp(-planar_damping * push.delta_time);
+    float max_upward_speed = max(0.20f, size.y * 2.0f + 0.12f);
+    float max_downward_speed = max(0.28f, size.y * 2.8f + 0.18f);
+    linear_velocity.y = clamp(linear_velocity.y, -max_downward_speed, max_upward_speed);
 
     float3 position = previous_position;
     position += linear_velocity * push.delta_time;
     position.x = clamp(position.x, -horizontal_bound, horizontal_bound);
-    position.y = clamp(position.y, -0.4f, 0.6f);
     position.z = clamp(position.z, -horizontal_bound, horizontal_bound);
 
     float2 position_correction = float2(0.0f, 0.0f);
@@ -461,15 +471,18 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     float3 axis_y = normalize(rotateByQuat(orientation_now, float3(0.0f, 1.0f, 0.0f)));
     float3 axis_z = normalize(rotateByQuat(orientation_now, float3(0.0f, 0.0f, 1.0f)));
 
-    float local_water_height = sampleWaterHeightAtXZ(position.xz, dims);
-    float previous_water_height = sampleWaterHeightAtXZ(previous_position.xz, dims);
+    float local_water_height = sampleWaterHeightAtXZ(position.xz, dims, object_index);
+    float previous_water_height = sampleWaterHeightAtXZ(previous_position.xz, dims, object_index);
     float equilibrium_draft =
         clamp((GRAVITY * mass) / max(buoyancy_strength * TOTAL_BUOYANCY_WEIGHT, 1.0e-4f),
               size.y * 0.12f, size.y * 0.58f);
     float target_center_y = local_water_height + half_extents.y - equilibrium_draft + waterline_offset;
     float float_height_error = target_center_y - position.y;
-    linear_velocity.y += float_height_error * buoyancy_strength * 0.45f * push.delta_time;
-    position.y = max(position.y, target_center_y - size.y * 0.05f);
+    float height_stabilization =
+        float_height_error * buoyancy_strength * 0.28f - linear_velocity.y * buoyancy_damping * 0.18f;
+    linear_velocity.y += height_stabilization * push.delta_time;
+    linear_velocity.y = clamp(linear_velocity.y, -max_downward_speed, max_upward_speed);
+    position.y = max(position.y, target_center_y - size.y * 0.035f);
 
     float vertical_correction = 0.0f;
     const float max_allowed_sample_submersion = equilibrium_draft + size.y * 0.08f;
@@ -480,17 +493,17 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
                                     pattern.z * half_extents.z);
         float3 rotated_point = axis_x * local_point.x + axis_y * local_point.y + axis_z * local_point.z;
         float3 world_point = position + rotated_point;
-        float water_height = sampleWaterHeightAtXZ(world_point.xz, dims);
+        float water_height = sampleWaterHeightAtXZ(world_point.xz, dims, object_index);
         vertical_correction = max(vertical_correction,
                                   water_height - world_point.y - max_allowed_sample_submersion);
     }
     if (vertical_correction > 0.0f) {
-        position.y += vertical_correction;
-        linear_velocity.y = max(linear_velocity.y,
-                                vertical_correction / max(push.delta_time, 1.0e-4f) * 0.25f);
+        float capped_vertical_correction = min(vertical_correction, size.y * 0.12f);
+        position.y += capped_vertical_correction;
+        linear_velocity.y = min(max(linear_velocity.y, 0.0f), max_upward_speed * 0.18f);
     }
 
-    local_water_height = sampleWaterHeightAtXZ(position.xz, dims);
+    local_water_height = sampleWaterHeightAtXZ(position.xz, dims, object_index);
     float keel_height = position.y - half_extents.y;
     float submersion_depth = max(local_water_height - keel_height, 0.0f);
     float previous_keel_height = previous_position.y - half_extents.y;

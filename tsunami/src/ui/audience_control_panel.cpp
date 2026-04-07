@@ -70,17 +70,17 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.004f, 0.12f, "%.3f");
 	changed |=
 	    ImGui::SliderFloat("Restoring force", &state.water.restoring_force, 0.0f, 0.35f, "%.3f");
-	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 32.0f, "%.1f");
+	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 40.0f, "%.1f");
 	changed |=
 	    ImGui::SliderFloat("Ripple radius", &state.water.ripple_radius, 0.005f, 0.20f, "%.3f");
-	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.006f, "%.4f");
+	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.015f, "%.4f");
 	changed |=
-	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.040f, "%.4f");
+	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f, "%.4f");
 	changed |= ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f,
 	                              "%.2f");
 	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
-	                              4.0f, "%.2f");
+	                              8.0f, "%.2f");
 	if (ImGui::Button("Reset water state")) {
 		state.reset_water_requested = true;
 	}
@@ -88,6 +88,10 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	if (ImGui::Button("Reset object positions")) {
 		state.reset_objects_requested = true;
 	}
+
+	ImGui::Separator();
+	ImGui::TextUnformatted("Performance");
+	changed |= ImGui::SliderFloat("Render scale", &state.render_scale, 0.50f, 1.0f, "%.2f");
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Bar / Slider");
@@ -142,6 +146,7 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	}
 	ImGui::Text("Render target: %u x %u", diagnostics.render.render_width,
 	            diagnostics.render.render_height);
+	ImGui::Text("Render scale: %.0f%%", state.render_scale * 100.0f);
 	ImGui::Text("Swapchain images: %u", diagnostics.render.swapchain_image_count);
 	ImGui::Text("Surface grid: %u x %u (%llu samples)", diagnostics.water.grid_width,
 	            diagnostics.water.grid_height,

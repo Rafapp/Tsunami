@@ -42,7 +42,7 @@ std::shared_ptr<Texture> Texture::load_from_file(const std::string& path, bool s
 }
 
 std::shared_ptr<Texture> Texture::load_from_assimp(const aiScene*     scene,
-                                                   const std::string& scene_dir,
+                                                   const std::string& scene_source_path,
                                                    const aiString& tex_path, bool srgb) {
 	if (!scene)
 		return nullptr;
@@ -74,7 +74,8 @@ std::shared_ptr<Texture> Texture::load_from_assimp(const aiScene*     scene,
 				return nullptr;
 			}
 
-			auto tex = make_texture_from_rgba8(data, w, h, c, path, srgb);
+			auto tex = make_texture_from_rgba8(
+			    data, w, h, c, scene_source_path + "|" + path, srgb);
 			stbi_image_free(data);
 			return tex;
 		}
@@ -85,7 +86,7 @@ std::shared_ptr<Texture> Texture::load_from_assimp(const aiScene*     scene,
 		tex->height      = static_cast<int>(ai_tex->mHeight);
 		tex->channels    = 4;
 		tex->is_srgb     = srgb;
-		tex->source_path = path;
+		tex->source_path = scene_source_path + "|" + path;
 		tex->pixels.resize(static_cast<size_t>(tex->width) * static_cast<size_t>(tex->height) * 4);
 
 		for (int y = 0; y < tex->height; ++y) {
@@ -102,7 +103,7 @@ std::shared_ptr<Texture> Texture::load_from_assimp(const aiScene*     scene,
 		return tex;
 	}
 
-	fs::path full_path = fs::path(scene_dir) / fs::path(path);
+	fs::path full_path = fs::path(scene_source_path).parent_path() / fs::path(path);
 	full_path          = full_path.lexically_normal();
 	return load_from_file(full_path.string(), srgb);
 }

@@ -33,8 +33,8 @@ struct PushConstants {
     uint   water_enabled;
     int    water_material_index;
     float  water_height_to_world_scale;
+    int    first_floating_object_id;
     float  _pad0;
-    float  _pad1;
     float4 outline_color;
     float4 water_center_trace_half_height;
     float4 water_axis_u_half_extent;
@@ -55,6 +55,7 @@ struct PushConstants {
 [[vk::binding(11, 0)]] Texture2D<float4>               material_textures[MAX_MAT_TEXTURES];
 [[vk::binding(13, 0)]] RWTexture2D<int>               object_id_image;
 [[vk::binding(14, 0)]] RWTexture2D<float>             water_height_image;
+[[vk::binding(15, 0)]] RWTexture2D<float>             water_prev_height_image;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -231,6 +232,10 @@ float readWaterHeightRaw(int2 coord, int2 dims) {
     return water_height_image[clamp(coord, int2(0, 0), dims - 1)];
 }
 
+float readPreviousWaterHeightRaw(int2 coord, int2 dims) {
+    return water_prev_height_image[clamp(coord, int2(0, 0), dims - 1)];
+}
+
 float sampleWaterHeightRaw(float2 uv, int2 dims) {
     uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
 
@@ -247,6 +252,22 @@ float sampleWaterHeightRaw(float2 uv, int2 dims) {
     return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
 }
 
+float samplePreviousWaterHeightRaw(float2 uv, int2 dims) {
+    uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
+
+    float2 texel = uv * float2(dims - 1);
+    int2 p0 = int2(floor(texel));
+    int2 p1 = min(p0 + int2(1, 1), dims - 1);
+    float2 f = texel - float2(p0);
+
+    float h00 = readPreviousWaterHeightRaw(p0, dims);
+    float h10 = readPreviousWaterHeightRaw(int2(p1.x, p0.y), dims);
+    float h01 = readPreviousWaterHeightRaw(int2(p0.x, p1.y), dims);
+    float h11 = readPreviousWaterHeightRaw(p1, dims);
+
+    return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+}
+
 float sampleWaterHeight(float2 water_xz, int2 dims) {
     float2 uv = water_xz * 0.5f + 0.5f;
     if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
@@ -254,6 +275,15 @@ float sampleWaterHeight(float2 water_xz, int2 dims) {
     }
 
     return sampleWaterHeightRaw(uv, dims) * push.water_height_to_world_scale;
+}
+
+float samplePreviousWaterHeight(float2 water_xz, int2 dims) {
+    float2 uv = water_xz * 0.5f + 0.5f;
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
+        return -1.0e6f;
+    }
+
+    return samplePreviousWaterHeightRaw(uv, dims) * push.water_height_to_world_scale;
 }
 
 float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
@@ -275,6 +305,54 @@ float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
         normal = -normal;
     }
     return normal;
+}
+
+float3 previousWaterSurfaceNormal(float2 water_xz, int2 dims) {
+    float dx = 2.0f / max(float(dims.x), 1.0f);
+    float dz = 2.0f / max(float(dims.y), 1.0f);
+
+    float hL = samplePreviousWaterHeight(water_xz - float2(dx, 0.0f), dims);
+    float hR = samplePreviousWaterHeight(water_xz + float2(dx, 0.0f), dims);
+    float hD = samplePreviousWaterHeight(water_xz - float2(0.0f, dz), dims);
+    float hU = samplePreviousWaterHeight(water_xz + float2(0.0f, dz), dims);
+
+    float3 pL = waterToWorld(float3(water_xz.x - dx, hL, water_xz.y));
+    float3 pR = waterToWorld(float3(water_xz.x + dx, hR, water_xz.y));
+    float3 pD = waterToWorld(float3(water_xz.x, hD, water_xz.y - dz));
+    float3 pU = waterToWorld(float3(water_xz.x, hU, water_xz.y + dz));
+
+    float3 normal = normalize(cross(pR - pL, pU - pD));
+    if (dot(normal, push.water_normal.xyz) < 0.0f) {
+        normal = -normal;
+    }
+    return normal;
+}
+
+void waterTemporalInfoForHit(Hit water_hit, out float motion, out float blend) {
+    uint width = 0;
+    uint height = 0;
+    water_height_image.GetDimensions(width, height);
+    int2 dims = int2(int(width), int(height));
+    if (dims.x <= 1 || dims.y <= 1) {
+        motion = 1.0f;
+        blend = 1.0f;
+        return;
+    }
+
+    float2 water_xz = water_hit.uv * 2.0f - 1.0f;
+    float current_height = sampleWaterHeight(water_xz, dims);
+    float previous_height = samplePreviousWaterHeight(water_xz, dims);
+    float height_delta = abs(current_height - previous_height);
+
+    float3 current_normal = water_hit.front_face ? water_hit.normal : -water_hit.normal;
+    float3 previous_normal = previousWaterSurfaceNormal(water_xz, dims);
+    float normal_delta = 1.0f - saturate(dot(current_normal, previous_normal));
+    float flatness = 1.0f - saturate(dot(current_normal, push.water_normal.xyz));
+
+    motion = saturate(height_delta * 14.0f + normal_delta * 5.5f + flatness * 2.2f);
+    float history_blend = lerp(0.055f, 0.28f, motion);
+    float startup_blend = 1.0f / float(min(push.accumulation_frame + 1u, 12u));
+    blend = max(history_blend, startup_blend);
 }
 
 GPUMaterial makeWaterMaterial() {
@@ -356,6 +434,8 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
     }
 
     t_min = max(t_min, T_MIN);
+    float grazing = 1.0f - saturate(abs(local_dir.y));
+    int coarse_steps = clamp(int(round(lerp(18.0f, 44.0f, grazing))), 18, 44);
 
     float prev_t = t_min;
     float3 prev_pos = ray.origin + ray.dir * prev_t;
@@ -363,8 +443,8 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
     float prev_delta = prev_local.y - sampleWaterHeight(prev_local.xz, dims);
 
     [loop]
-    for (int step = 1; step <= 80; ++step) {
-        float t = lerp(t_min, t_max, float(step) / 80.0f);
+    for (int step = 1; step <= coarse_steps; ++step) {
+        float t = lerp(t_min, t_max, float(step) / float(coarse_steps));
         float3 pos = ray.origin + ray.dir * t;
         float3 local = worldToWater(pos);
         float delta = local.y - sampleWaterHeight(local.xz, dims);
@@ -375,7 +455,7 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
             float lo_delta = prev_delta;
 
             [unroll]
-            for (int refine = 0; refine < 6; ++refine) {
+            for (int refine = 0; refine < 5; ++refine) {
                 float mid = 0.5f * (lo + hi);
                 float3 mid_local = worldToWater(ray.origin + ray.dir * mid);
                 float mid_delta = mid_local.y - sampleWaterHeight(mid_local.xz, dims);
@@ -481,7 +561,7 @@ bool traceVisibleMeshHit(Ray ray, out float hit_t, out int object_id) {
     return true;
 }
 
-int traceVisibleObjectId(Ray ray) {
+int traceVisibleObjectId(Ray ray, out bool visible_water, out Hit visible_water_hit) {
     float mesh_hit_t = 0.0f;
     int mesh_object_id = -1;
     bool hit_mesh = traceVisibleMeshHit(ray, mesh_hit_t, mesh_object_id);
@@ -490,11 +570,22 @@ int traceVisibleObjectId(Ray ray) {
     GPUMaterial water_mat;
     bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
 
+    visible_water = false;
+    visible_water_hit = (Hit)0;
+
     if (hit_water && (!hit_mesh || water_hit.t < mesh_hit_t)) {
+        visible_water = true;
+        visible_water_hit = water_hit;
         return water_hit.instanceID;
     }
 
     return hit_mesh ? mesh_object_id : -1;
+}
+
+int traceVisibleObjectId(Ray ray) {
+    bool visible_water;
+    Hit visible_water_hit;
+    return traceVisibleObjectId(ray, visible_water, visible_water_hit);
 }
 
 // ─── Scene intersection ───────────────────────────────────────────────────────
@@ -588,7 +679,7 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 
 // ─── Texture sampling ─────────────────────────────────────────────────────────
 float4 sample_tex(uint index, float2 uv, float4 fallback) {
-    if (index == NO_TEXTURE) return fallback;
+    if (index == NO_TEXTURE || index >= MAX_MAT_TEXTURES) return fallback;
     return material_textures[NonUniformResourceIndex(index)].SampleLevel(
         g_material_sampler, uv, 0.f);
 }
@@ -653,10 +744,9 @@ float3 skyColor(float3 dir) {
 }
 
 // ─── Path tracing ─────────────────────────────────────────────────────────────
-float3 tracePath(Ray ray, inout RNG rng, out bool primary_visible_water) {
+float3 tracePath(Ray ray, inout RNG rng) {
     float3 throughput = float3(1, 1, 1);
     float3 radiance   = float3(0, 0, 0);
-    primary_visible_water = false;
 
     for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce) {
         Hit         hit;
@@ -666,10 +756,6 @@ float3 tracePath(Ray ray, inout RNG rng, out bool primary_visible_water) {
             // Ray escaped to sky — treat sky as an environment light
             radiance += throughput * skyColor(ray.dir);
             break;
-        }
-
-        if (bounce == 0 && hit.instanceID == push.water_object_id) {
-            primary_visible_water = true;
         }
 
         // ── Emission ──
@@ -824,39 +910,230 @@ float3 debugColorForObjectId(int object_id) {
     return 0.15f + 0.85f * rgb;
 }
 
+static const uint WATER_FILTER_TILE_SIZE = 16u;
+static const float3 LUMA_WEIGHTS = float3(0.2126f, 0.7152f, 0.0722f);
+groupshared float4 g_water_tile_accum[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
+groupshared float  g_water_tile_motion[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
+groupshared uint   g_water_tile_mask[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
+groupshared int    g_tile_object_id[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
+
+uint waterTileIndex(uint2 group_thread_id) {
+    return group_thread_id.y * WATER_FILTER_TILE_SIZE + group_thread_id.x;
+}
+
+float luminance(float3 color) {
+    return dot(color, LUMA_WEIGHTS);
+}
+
+bool isFiniteColor(float3 color) {
+    return all(!isnan(color)) && all(!isinf(color));
+}
+
+float3 sanitizeColor(float3 color, float3 fallback) {
+    if (!isFiniteColor(color)) {
+        return max(fallback, 0.0f.xxx);
+    }
+    return max(color, 0.0f.xxx);
+}
+
+bool isDynamicObjectId(int object_id) {
+    return push.first_floating_object_id >= 0 &&
+           object_id >= push.first_floating_object_id;
+}
+
+float historyMismatch(float3 previous_color, float3 current_color) {
+    float previous_luma = luminance(previous_color);
+    float current_luma = luminance(current_color);
+    float luma_denom = max(max(previous_luma, current_luma), 0.12f);
+    float relative_luma_delta = abs(current_luma - previous_luma) / luma_denom;
+
+    float3 rgb_delta = abs(previous_color - current_color);
+    float rgb_denom = max(max(max(previous_color.r, previous_color.g),
+                              max(previous_color.b, max(current_color.r,
+                                                        max(current_color.g, current_color.b)))),
+                          0.12f);
+    float relative_rgb_delta = max(rgb_delta.r, max(rgb_delta.g, rgb_delta.b)) / rgb_denom;
+    float combined_delta = max(relative_luma_delta, relative_rgb_delta * 0.85f);
+    return smoothstep(0.22f, 0.90f, combined_delta);
+}
+
+float3 filterWaterTile(uint2 group_thread_id, float3 center_accum, float center_motion) {
+    const int2 offsets[8] = {
+        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
+        int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1)
+    };
+    const float base_weights[8] = {
+        2.0f, 2.0f, 2.0f, 2.0f,
+        1.0f, 1.0f, 1.0f, 1.0f
+    };
+
+    float3 sum = center_accum * 4.0f;
+    float total_weight = 4.0f;
+    float center_luma = luminance(center_accum);
+
+    [unroll]
+    for (int sample_index = 0; sample_index < 8; ++sample_index) {
+        int2 neighbor = int2(group_thread_id) + offsets[sample_index];
+        if (neighbor.x < 0 || neighbor.y < 0 ||
+            neighbor.x >= int(WATER_FILTER_TILE_SIZE) ||
+            neighbor.y >= int(WATER_FILTER_TILE_SIZE)) {
+            continue;
+        }
+
+        uint neighbor_index = uint(neighbor.y) * WATER_FILTER_TILE_SIZE + uint(neighbor.x);
+        if (g_water_tile_mask[neighbor_index] == 0u) {
+            continue;
+        }
+
+        float3 neighbor_accum = g_water_tile_accum[neighbor_index].rgb;
+        float neighbor_luma = luminance(neighbor_accum);
+        float luma_delta = abs(neighbor_luma - center_luma);
+        float similarity = rcp(1.0f + luma_delta * lerp(10.0f, 5.0f, center_motion));
+        float motion_similarity =
+            1.0f - saturate(abs(g_water_tile_motion[neighbor_index] - center_motion) * 1.5f);
+        float weight =
+            base_weights[sample_index] * similarity * lerp(0.65f, 1.0f, motion_similarity);
+
+        sum += neighbor_accum * weight;
+        total_weight += weight;
+    }
+
+    return sum / max(total_weight, 1.0e-4f);
+}
+
+float3 filterDynamicObjectTile(uint2 group_thread_id, float3 center_accum, int object_id) {
+    const int2 offsets[8] = {
+        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
+        int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1)
+    };
+    const float base_weights[8] = {
+        2.0f, 2.0f, 2.0f, 2.0f,
+        1.0f, 1.0f, 1.0f, 1.0f
+    };
+
+    float3 sum = center_accum * 5.0f;
+    float total_weight = 5.0f;
+    float center_luma = luminance(center_accum);
+
+    [unroll]
+    for (int sample_index = 0; sample_index < 8; ++sample_index) {
+        int2 neighbor = int2(group_thread_id) + offsets[sample_index];
+        if (neighbor.x < 0 || neighbor.y < 0 ||
+            neighbor.x >= int(WATER_FILTER_TILE_SIZE) ||
+            neighbor.y >= int(WATER_FILTER_TILE_SIZE)) {
+            continue;
+        }
+
+        uint neighbor_index = uint(neighbor.y) * WATER_FILTER_TILE_SIZE + uint(neighbor.x);
+        if (g_tile_object_id[neighbor_index] != object_id) {
+            continue;
+        }
+
+        float3 neighbor_accum = g_water_tile_accum[neighbor_index].rgb;
+        float neighbor_luma = luminance(neighbor_accum);
+        float luma_delta = abs(neighbor_luma - center_luma);
+        float similarity = rcp(1.0f + luma_delta * 8.0f);
+        float weight = base_weights[sample_index] * similarity;
+        sum += neighbor_accum * weight;
+        total_weight += weight;
+    }
+
+    return sum / max(total_weight, 1.0e-4f);
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void main(uint3 dispatch_id : SV_DispatchThreadID) {
+void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_GroupThreadID) {
     uint2 pixel = dispatch_id.xy;
     uint2 dims;
     output_image.GetDimensions(dims.x, dims.y);
-    if (any(pixel >= dims)) return;
+    bool valid_pixel = all(pixel < dims);
 
-    RNG rng = RNG::make(pixel, push.rng_seed);
-    int visible_object_id = traceVisibleObjectId(makeRay(pixel, dims, float2(0.5f, 0.5f)));
-    object_id_image[pixel] = visible_object_id;
+    float3 accum = float3(0.0f, 0.0f, 0.0f);
+    float3 current_color = float3(0.0f, 0.0f, 0.0f);
+    bool center_visible_water = false;
+    Hit center_water_hit = (Hit)0;
+    float center_water_motion = 0.0f;
+    float center_history_mismatch = 0.0f;
+    int visible_object_id = -1;
+    int previous_visible_object_id = -1;
+    bool dynamic_visible_object = false;
+    bool revealed_water_after_dynamic = false;
 
-    static const int SPP = 1;
-    float3 colorAccum = float3(0, 0, 0);
-    bool primary_visible_water = false;
-    for (int i = 0; i < SPP; ++i) {
-        float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
-        bool sample_hits_water = false;
-        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng, sample_hits_water);
-        primary_visible_water = primary_visible_water || sample_hits_water;
+    if (valid_pixel) {
+        RNG rng = RNG::make(pixel, push.rng_seed);
+        Ray center_ray = makeRay(pixel, dims, float2(0.5f, 0.5f));
+        visible_object_id = traceVisibleObjectId(center_ray, center_visible_water, center_water_hit);
+        dynamic_visible_object = isDynamicObjectId(visible_object_id);
+        if (push.accumulation_frame > 0u) {
+            previous_visible_object_id = object_id_image[pixel];
+        }
+        object_id_image[pixel] = visible_object_id;
+        revealed_water_after_dynamic =
+            center_visible_water && previous_visible_object_id != visible_object_id &&
+            isDynamicObjectId(previous_visible_object_id);
+
+        int SPP = (center_visible_water || dynamic_visible_object) ? 2 : 1;
+        float3 colorAccum = float3(0, 0, 0);
+        for (int i = 0; i < SPP; ++i) {
+            float2 jitter = dynamic_visible_object ?
+                ((i & 1) == 0 ? float2(0.375f, 0.375f) : float2(0.625f, 0.625f)) :
+                float2(rng.nextFloat(), rng.nextFloat());
+            colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
+        }
+        float3 color = sanitizeColor(colorAccum / float(SPP), float3(0.0f, 0.0f, 0.0f));
+        current_color = color;
+
+        // Temporal accumulation — blend current frame into running average
+        float3 prev  = sanitizeColor(accum_image[pixel].rgb, color);
+        float  blend = 1.f / float(push.accumulation_frame + 1u);
+        if (center_visible_water) {
+            waterTemporalInfoForHit(center_water_hit, center_water_motion, blend);
+        }
+        if (push.accumulation_frame > 0u && previous_visible_object_id != visible_object_id) {
+            blend = 1.0f;
+        }
+        if (push.accumulation_frame > 0u &&
+            (center_visible_water || dynamic_visible_object)) {
+            center_history_mismatch = historyMismatch(prev, color);
+        }
+        if (dynamic_visible_object) {
+            blend = max(blend, lerp(0.12f, 0.42f, center_history_mismatch));
+        } else if (push.accumulation_frame > 0u && center_visible_water) {
+            blend = max(blend, lerp(0.0f, 0.82f, center_history_mismatch));
+        }
+
+        accum = sanitizeColor(lerp(prev, color, blend), color);
+        accum_image[pixel] = float4(accum, 1.f);
     }
-    float3 color = colorAccum / float(SPP);
 
-    // Temporal accumulation — blend current frame into running average
-    float3 prev  = accum_image[pixel].rgb;
-    float  blend = primary_visible_water ? 1.f : 1.f / float(push.accumulation_frame + 1u);
-    float3 accum = lerp(prev, color, blend);
+    uint tile_index = waterTileIndex(group_thread_id.xy);
+    g_water_tile_accum[tile_index] = float4(accum, 1.0f);
+    g_water_tile_motion[tile_index] = (valid_pixel && center_visible_water) ? center_water_motion : 0.0f;
+    g_water_tile_mask[tile_index] = (valid_pixel && center_visible_water) ? 1u : 0u;
+    g_tile_object_id[tile_index] = valid_pixel ? visible_object_id : -1;
+    GroupMemoryBarrierWithGroupSync();
 
-    accum_image[pixel] = float4(accum, 1.f);
+    if (!valid_pixel) return;
 
     float3 display = (push.debug_view_mode == 1) ? debugColorForObjectId(visible_object_id) : accum;
+    if (push.debug_view_mode == 0 && dynamic_visible_object) {
+        float3 filtered = filterDynamicObjectTile(group_thread_id.xy, accum, visible_object_id);
+        float filter_strength = lerp(0.42f, 0.20f, center_history_mismatch);
+        float current_mix = lerp(0.08f, 0.24f, center_history_mismatch);
+        display = lerp(accum, filtered, filter_strength);
+        display = lerp(display, current_color, current_mix);
+    }
+    if (push.debug_view_mode == 0 && center_visible_water) {
+        float3 filtered = filterWaterTile(group_thread_id.xy, accum, center_water_motion);
+        float filter_strength = lerp(0.28f, 0.64f, center_water_motion);
+        if (revealed_water_after_dynamic) {
+            filter_strength = max(filter_strength, 0.82f);
+        }
+        display = lerp(accum, filtered, filter_strength);
+    }
     if (isSelectionOutline(pixel, dims, visible_object_id)) {
         display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
     }

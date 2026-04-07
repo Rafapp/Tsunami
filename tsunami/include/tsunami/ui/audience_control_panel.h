@@ -36,6 +36,7 @@ struct AudienceControlPanelState {
 	bool                             show_overlay            = true;
 	bool                             reset_water_requested   = false;
 	bool                             reset_objects_requested = false;
+	float                            render_scale            = 0.60f;
 	audio::ReactiveAudioSettings     audio{};
 	simulation::WaterSurfaceSettings water{};
 	AudienceOverlayState             overlay{};

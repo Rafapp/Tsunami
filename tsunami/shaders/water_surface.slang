@@ -42,9 +42,9 @@ struct FloatingObjectInteractionGpu
 
 static const float PI = 3.14159265358979323846f;
 static const float KELVIN_WAKE_HALF_ANGLE = 19.47f * (PI / 180.0f);
-static const float MAX_STABLE_WORLD_HEIGHT = 0.18f;
-static const float MAX_STABLE_WORLD_VELOCITY = 0.12f;
-static const float MAX_STABLE_WORLD_SLOPE = 1.75f;
+static const float MAX_STABLE_WORLD_HEIGHT = 0.24f;
+static const float MAX_STABLE_WORLD_VELOCITY = 0.18f;
+static const float MAX_STABLE_WORLD_SLOPE = 2.25f;
 static const float HULL_WATER_CLEARANCE = 0.008f;
 
 int2 clampCoord(int2 coord, int2 dims)
@@ -560,9 +560,9 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
                                        max(world_velocity / MAX_STABLE_WORLD_VELOCITY,
                                            length(world_gradient) / MAX_STABLE_WORLD_SLOPE)));
     solver_stress = max(solver_stress, saturate(world_curvature * 2.6f));
-    float adaptive_damping = saturate(push.damping + solver_stress * 0.12f);
+    float adaptive_damping = saturate(push.damping + solver_stress * 0.08f);
     float velocity = raw_velocity * (1.0f - adaptive_damping);
-    float collapse_smoothing = saturate(push.damping * 2.5f + solver_stress * 0.80f) * 0.06f;
+    float collapse_smoothing = saturate(push.damping * 2.0f + solver_stress * 0.55f) * 0.04f;
 
     float2 uv = (float2(pixel) + 0.5f) / float2(dims);
     float2 world_xz = uv * 2.0f - 1.0f;
@@ -570,11 +570,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float hull_mask = saturate(abs(hull_target) * 16.0f);
     float2 emitter = float2(push.emitter_u, push.emitter_v);
     float disturbance = impactKernel(uv - emitter, push.ripple_radius) * push.impulse_strength;
-    float max_sim_height = clamp(MAX_STABLE_WORLD_HEIGHT / world_height_scale, 0.08f, 0.32f);
+    float max_sim_height = clamp(MAX_STABLE_WORLD_HEIGHT / world_height_scale, 0.08f, 0.42f);
     float max_sim_velocity = max(max_sim_height * (0.42f - solver_stress * 0.14f),
                                  max_sim_height * 0.20f);
-    float max_disturbance = max(max_sim_height * (0.12f - solver_stress * 0.05f),
-                                max_sim_height * 0.04f);
+    float max_disturbance = max(max_sim_height * (0.22f - solver_stress * 0.08f),
+                                max_sim_height * 0.08f);
 
     float roughness = push.audio_level * push.audio_level * (1.0f - solver_stress * 0.70f);
     float splash_angle = push.time_seconds * (6.0f + push.audio_level * 8.0f);
@@ -589,11 +589,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
                                 push.ripple_radius * 0.46f) *
                    push.impulse_strength * 0.22f;
     disturbance += objectDisturbanceAtXZ(world_xz);
-    disturbance *= (1.0f - solver_stress * 0.82f);
+    disturbance *= (1.0f - solver_stress * 0.45f);
     disturbance = clamp(disturbance, -max_disturbance, max_disturbance);
 
     float acceleration = (push.propagation * laplacian) - (center * push.restoring_force);
-    acceleration *= lerp(1.0f, 0.45f, solver_stress);
+    acceleration *= lerp(1.0f, 0.65f, solver_stress);
     velocity += disturbance + acceleration;
     velocity += (hull_target - center) * (0.12f + hull_mask * 0.40f);
     velocity = clamp(velocity, -max_sim_velocity, max_sim_velocity);

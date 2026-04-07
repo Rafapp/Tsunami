@@ -35,6 +35,8 @@ class WaterSurfaceSimulation {
 	                                            float delta_time);
 	void                           requestReset();
 	void                           requestObjectReset();
+	void                           setFloatingObjects(std::span<const FloatingObjectSettings> objects);
+	std::vector<FloatingObjectRenderData> floatingObjectRenderData() const;
 	void                           record(VkCommandBuffer command_buffer);
 
 	VkImage outputImage() const {
@@ -45,6 +47,9 @@ class WaterSurfaceSimulation {
 	}
 	VkImageView currentHeightImageView() const {
 		return m_height_image_views[m_active_descriptor_set_index];
+	}
+	VkImageView previousHeightImageView() const {
+		return m_height_image_views[1u - m_active_descriptor_set_index];
 	}
 	float heightToWorldScale() const {
 		return m_height_to_world_scale;

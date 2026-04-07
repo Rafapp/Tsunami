@@ -103,6 +103,22 @@ FloatingObjectStateGpu makeInitialFloatingObjectState(const FloatingObjectSettin
 	return state;
 }
 
+FloatingObjectSettingsGpu packFloatingObjectSettings(const simulation::FloatingObjectSettings& settings) {
+	FloatingObjectSettingsGpu gpu{};
+	gpu.anchor_base_height_yaw =
+	    glm::vec4(settings.anchor.x, settings.anchor.y, settings.base_height,
+	              settings.base_yaw_radians);
+	gpu.size_mass               = glm::vec4(settings.size, settings.mass);
+	gpu.color_buoyancy          = glm::vec4(settings.color, settings.buoyancy_strength);
+	gpu.buoyancy_linear_angular = glm::vec4(settings.buoyancy_damping, settings.linear_damping,
+	                                        settings.angular_strength, settings.angular_damping);
+	gpu.motion_planar           = glm::vec4(settings.self_righting, settings.max_tilt_radians,
+	                              settings.planar_drift_strength, settings.planar_damping);
+	gpu.anchor_waterline_yaw    = glm::vec4(settings.anchor_pull_strength, settings.drift_radius,
+	                                     settings.waterline_offset, settings.yaw_follow_strength);
+	return gpu;
+}
+
 float clamp01(float value) {
 	return std::clamp(value, 0.0f, 1.0f);
 }
@@ -415,12 +431,14 @@ const WaterSurfaceDiagnostics&
 		const float attack         = std::max(gated_audio - m_previous_audio_level, 0.0f);
 		const float activity_decay = std::exp(-clamped_delta_time * 4.0f);
 		m_recent_activity          = std::max(gated_audio, m_recent_activity * activity_decay);
+		const float preview_speed_drive =
+		    clamp01(gated_audio * 0.55f + m_recent_activity * 0.75f);
 
 		float impulse_strength = 0.0f;
 		if (gated_audio > 0.0f) {
-			const float speed_drive = clamp01(gated_audio * 0.55f + m_recent_activity * 0.75f);
 			const float emission_rate =
-			    std::max(settings.impulse_frequency_hz, 0.0f) * (0.18f + speed_drive * 1.55f);
+			    std::max(settings.impulse_frequency_hz, 0.0f) *
+			    (0.18f + preview_speed_drive * 1.55f);
 			m_emission_accumulator += clamped_delta_time * emission_rate;
 
 			const bool cadence_pulse = m_emission_accumulator >= 1.0f;
@@ -430,19 +448,25 @@ const WaterSurfaceDiagnostics&
 			}
 
 			if (cadence_pulse || attack_pulse) {
-				const float energy = clamp01(speed_drive * 0.80f + attack * 2.00f);
+				const float energy = clamp01(preview_speed_drive * 0.80f + attack * 2.00f);
 				impulse_strength   = std::max(settings.base_impulse, 0.0f) +
 				                     energy * std::max(settings.audio_impulse_scale, 0.0f) *
-				                         (0.70f + speed_drive * 0.90f);
+				                         (0.70f + preview_speed_drive * 0.90f);
 			}
 		} else {
 			m_emission_accumulator = 0.0f;
 		}
 
 		const float preview_height_scale =
-		    std::clamp(settings.height_scale * (0.84f + m_recent_activity * 0.36f), 0.1f, 28.0f);
-		const float max_impulse =
-		    std::clamp(0.012f * (16.0f / std::max(preview_height_scale, 16.0f)), 0.0065f, 0.012f);
+		    std::clamp(settings.height_scale * (0.84f + m_recent_activity * 0.36f), 0.1f, 40.0f);
+		const float preview_world_height_scale =
+		    std::max(preview_height_scale * 0.055f, 1.0e-4f);
+		const float max_stable_sim_height =
+		    std::clamp(0.24f / preview_world_height_scale, 0.08f, 0.42f);
+		const float max_impulse = std::clamp(
+		    max_stable_sim_height *
+		        (0.12f + preview_speed_drive * 0.10f + m_recent_activity * 0.06f),
+		    0.010f, 0.036f);
 		m_pending_impulse      = std::min(impulse_strength, max_impulse);
 		m_previous_audio_level = gated_audio;
 		m_last_prepare_time    = time_seconds;
@@ -466,10 +490,10 @@ const WaterSurfaceDiagnostics&
 	const float ripple_radius =
 	    std::clamp(settings.ripple_radius * (0.80f + speed_drive * 0.90f), 0.001f, 0.35f);
 	const float height_scale =
-	    std::clamp(settings.height_scale * (0.84f + speed_drive * 0.36f), 0.1f, 28.0f);
+	    std::clamp(settings.height_scale * (0.84f + speed_drive * 0.36f), 0.1f, 40.0f);
 	const float clamped_emitter_u = std::clamp(emitter_u, 0.05f, 0.95f);
 	const float clamped_emitter_v = std::clamp(emitter_v, 0.05f, 0.95f);
-	m_height_to_world_scale       = height_scale * 0.045f;
+	m_height_to_world_scale       = height_scale * 0.055f;
 
 	m_diagnostics.audio_drive_level   = speed_drive;
 	m_diagnostics.impulse_strength    = m_pending_impulse;
@@ -526,6 +550,54 @@ void WaterSurfaceSimulation::requestObjectReset() {
 	if (m_object_push_constants != nullptr) {
 		m_object_push_constants->reset_requested = 1u;
 	}
+}
+
+void WaterSurfaceSimulation::setFloatingObjects(std::span<const FloatingObjectSettings> objects) {
+	const uint32_t clamped_count =
+	    std::min<uint32_t>(static_cast<uint32_t>(objects.size()), kMaxFloatingObjects);
+	std::array<FloatingObjectSettingsGpu, kMaxFloatingObjects> gpu_settings{};
+	for (uint32_t index = 0; index < clamped_count; ++index) {
+		gpu_settings[index] = packFloatingObjectSettings(objects[index]);
+	}
+
+	void* mapped_memory = nullptr;
+	if (vmaMapMemory(m_allocator, m_floating_object_settings_allocation, &mapped_memory) !=
+	    VK_SUCCESS) {
+		throw std::runtime_error("failed to map floating object settings buffer");
+	}
+	std::memcpy(mapped_memory, gpu_settings.data(), sizeof(gpu_settings));
+	vmaFlushAllocation(m_allocator, m_floating_object_settings_allocation, 0,
+	                   sizeof(gpu_settings));
+	vmaUnmapMemory(m_allocator, m_floating_object_settings_allocation);
+
+	m_floating_object_count             = clamped_count;
+	m_floating_object_interaction_count = clamped_count;
+	if (m_water_push_constants != nullptr) {
+		m_water_push_constants->floating_object_count             = clamped_count;
+		m_water_push_constants->floating_object_interaction_count = clamped_count;
+	}
+	if (m_object_push_constants != nullptr) {
+		m_object_push_constants->object_count = clamped_count;
+	}
+}
+
+std::vector<FloatingObjectRenderData> WaterSurfaceSimulation::floatingObjectRenderData() const {
+	if (m_floating_object_count == 0u || m_floating_objects_allocation == nullptr) {
+		return {};
+	}
+
+	void* mapped_memory = nullptr;
+	if (vmaMapMemory(m_allocator, m_floating_objects_allocation, &mapped_memory) != VK_SUCCESS) {
+		throw std::runtime_error("failed to map floating object render buffer");
+	}
+	vmaInvalidateAllocation(m_allocator, m_floating_objects_allocation, 0,
+	                        sizeof(FloatingObjectRenderData) * m_floating_object_count);
+
+	std::vector<FloatingObjectRenderData> render_data(m_floating_object_count);
+	std::memcpy(render_data.data(), mapped_memory,
+	            sizeof(FloatingObjectRenderData) * m_floating_object_count);
+	vmaUnmapMemory(m_allocator, m_floating_objects_allocation);
+	return render_data;
 }
 
 void WaterSurfaceSimulation::initializeFloatingObjects() {

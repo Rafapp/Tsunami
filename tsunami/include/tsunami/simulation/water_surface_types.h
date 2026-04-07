@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 namespace simulation {
@@ -35,6 +37,28 @@ struct WaterSurfaceDiagnostics {
 	uint64_t sample_count        = 0;
 	uint64_t cell_count          = 0;
 	uint64_t triangle_count      = 0;
+};
+
+struct FloatingObjectSettings {
+	glm::vec2 anchor                 = glm::vec2(0.0f);
+	float     base_height           = 0.0f;
+	float     base_yaw_radians      = 0.0f;
+	glm::vec3 size                  = glm::vec3(0.25f, 0.12f, 0.18f);
+	float     mass                  = 0.9f;
+	glm::vec3 color                 = glm::vec3(0.85f, 0.55f, 0.30f);
+	float     buoyancy_strength     = 30.0f;
+	float     buoyancy_damping      = 7.5f;
+	float     linear_damping        = 1.8f;
+	float     angular_strength      = 12.0f;
+	float     angular_damping       = 5.5f;
+	float     self_righting         = 6.5f;
+	float     max_tilt_radians      = 0.35f;
+	float     planar_drift_strength = 2.4f;
+	float     planar_damping        = 1.4f;
+	float     anchor_pull_strength  = 0.45f;
+	float     drift_radius          = 0.48f;
+	float     waterline_offset      = 0.01f;
+	float     yaw_follow_strength   = 2.2f;
 };
 
 struct alignas(16) FloatingObjectRenderData {
