@@ -287,6 +287,9 @@ struct ProbeContext {
     bool                  valid    = false;
     int                   last_selected = -2;
     uint32_t              background_cursor = 0; // round-robin background pass
+	bool 				  hipr_enabled = false; // 	set to true to enable HiPR tile probing and selective rendering based on probe results
+	bool                  pause_background    = false;
+	bool                  show_tile_debug   = false;
 } probe_ctx;
 // =======================================
 
@@ -931,8 +934,12 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	            }
 	        }
 	    }
+		if (ImGui::Checkbox("Enable HiPR", &probe_ctx.hipr_enabled)) {
+			probe_ctx.valid = false;
+		}
+		ImGui::Checkbox("Pause background fill", &probe_ctx.pause_background);
+		ImGui::Checkbox("Show tile flags", &probe_ctx.show_tile_debug);
 	}
-
 	ImGui::End();
 	return result;
 }
@@ -2632,7 +2639,7 @@ App::App() {
 	// === X. Compute Pipeline
 	// ============================================
 	{
-		auto spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/pathtracer.slang", "main",
+		auto spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/HiPR.slang", "main",
 		                                  {VENDORS_DIR});
 		std::cout << "[INFO] Shader: " << spirv.size() * 4 << " bytes SPIR-V\n";
 		VkShaderModuleCreateInfo mci{};
@@ -2891,7 +2898,35 @@ void App::MainLoop() {
                                     overlay_ctx.controls.overlay,
                                     overlay_ctx.controls.style);
         }
+        
+		// ── Tile debug overlay ───────────────────────────────────────────────
+        if (probe_ctx.show_tile_debug && render_target_ctx.tile_render_flags_mapped != nullptr) {
+            const auto* flags_ptr =
+                reinterpret_cast<const uint32_t*>(render_target_ctx.tile_render_flags_mapped);
+            const uint32_t tiles_x_dbg = (swapchain_ctx.extent.width  + 15u) / 16u;
+            const uint32_t tiles_y_dbg = (swapchain_ctx.extent.height + 15u) / 16u;
+            ImDrawList* dl       = ImGui::GetForegroundDrawList();
+            const float screen_w = static_cast<float>(swapchain_ctx.extent.width);
+            const float screen_h = static_cast<float>(swapchain_ctx.extent.height);
+            const float tile_pw  = screen_w / static_cast<float>(tiles_x_dbg);
+            const float tile_ph  = screen_h / static_cast<float>(tiles_y_dbg);
+            for (uint32_t ty = 0; ty < tiles_y_dbg; ++ty) {
+                for (uint32_t tx = 0; tx < tiles_x_dbg; ++tx) {
+                    const uint32_t idx    = ty * tiles_x_dbg + tx;
+                    const bool     flagged = flags_ptr[idx] != 0u;
+                    const ImVec2   p0 = { tx * tile_pw,       ty * tile_ph };
+                    const ImVec2   p1 = { (tx+1) * tile_pw,   (ty+1) * tile_ph };
+                    const ImU32    col = flagged
+                        ? IM_COL32(0, 255, 80, 50)
+                        : IM_COL32(255, 30, 30, 80);
+                    dl->AddRectFilled(p0, p1, col);
+                    dl->AddRect(p0, p1, IM_COL32(0, 0, 0, 40));
+                }
+            }
+        }
+
         ImGui::Render();
+
 
         glfwPollEvents();
 
@@ -2929,6 +2964,29 @@ void App::MainLoop() {
         if (fly_cam.update(m_window->handle(), dt)) {
             frame_number    = 0;
             probe_ctx.valid = false;  // camera moved — interaction map is stale
+			// Clear accumulation image immediately to avoid temporal smearing
+			if (render_target_ctx.accum_image != VK_NULL_HANDLE) {
+				VkCommandBuffer clear_cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+				// Transition accum -> TRANSFER_DST
+				transition_layout(clear_cmd, render_target_ctx.accum_image,
+								  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+								  VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+								  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+				VkClearColorValue clear_color{};
+				clear_color.float32[0] = 0.0f;
+				clear_color.float32[1] = 0.0f;
+				clear_color.float32[2] = 0.0f;
+				clear_color.float32[3] = 0.0f;
+				VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+				vkCmdClearColorImage(clear_cmd, render_target_ctx.accum_image,
+									 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
+				// Transition back to GENERAL for shader access
+				transition_layout(clear_cmd, render_target_ctx.accum_image,
+								  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+								  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+								  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+				end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue, clear_cmd);
+			}
         }
 
         const GPUCamera gpu_camera = fly_cam.pack();
@@ -3014,11 +3072,15 @@ void App::MainLoop() {
                    sizeof(TileData) * tile_count);
 
             // -- BFS: compute which tiles to prioritise -----------------------
-            std::vector<uint32_t> flags;
-            bfs_compute_tile_flags(
-                probe_ctx.tiles, tile_count,
-                selection_ctx.selected_mesh_index, flags);
-
+			std::vector<uint32_t> flags;
+			if (probe_ctx.hipr_enabled) {
+				bfs_compute_tile_flags(
+					probe_ctx.tiles, tile_count,
+					selection_ctx.selected_mesh_index, flags);
+			} else {
+				// Render everything — bypass HiPR entirely
+				flags.assign(tile_count, 1u);
+			}
             // -- Upload render flags (persistently mapped CPU→GPU) ------------
             memcpy(render_target_ctx.tile_render_flags_mapped,
                    flags.data(), sizeof(uint32_t) * tile_count);
@@ -3037,7 +3099,7 @@ void App::MainLoop() {
         // frontier, advancing a round-robin cursor through the full tile set.
         // This ensures the whole image converges without a hard cut-over.
         // =====================================================================
-        if (render_target_ctx.tile_render_flags_mapped != nullptr) {
+        if (probe_ctx.pause_background && render_target_ctx.tile_render_flags_mapped != nullptr) {
             auto* flags_ptr =
                 reinterpret_cast<uint32_t*>(render_target_ctx.tile_render_flags_mapped);
 
