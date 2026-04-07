@@ -111,8 +111,8 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	ImGui::Separator();
 	ImGui::TextUnformatted("Color Pipeline");
 	changed |= ImGui::Checkbox("Enable tonemapping", &state.render_post.enable_tonemapping);
-	changed |= ImGui::SliderFloat("Exposure bias", &state.render_post.exposure_bias, 0.1f, 8.0f,
-	                              "%.2f");
+	changed |=
+	    ImGui::SliderFloat("Exposure bias", &state.render_post.exposure_bias, 0.1f, 8.0f, "%.2f");
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Audio");
