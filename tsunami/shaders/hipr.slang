@@ -48,7 +48,12 @@ struct PushConstants {
     uint   hipr_update_period;
     float  hipr_score_blend;
     float  hipr_vis_tint_strength;
-    uint   _pad3;
+    uint   skybox_enabled;
+    uint   directional_light_enabled;
+    float  sun_dir_x;
+    float  sun_dir_y;
+    float  sun_dir_z;
+    float  sun_intensity;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
@@ -162,13 +167,9 @@ static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 
 // ─── Light: directional sun ───────────────────────────────────────────────────
-// A directional light has no distance falloff and shoots shadow rays to T_MAX,
-// so it passes cleanly through Sponza's open atrium top regardless of the
-// camera position.  Angle it slightly so surfaces at grazing incidence still
-// catch some light.
-static float3 g_sun_dir       = normalize(float3(0.1f, 1.0f, .1f));
-static const float3 g_sun_color     = float3(1.0f, 0.85f, 0.5f);
-static const float  g_sun_intensity = 10.0f;   // tweak for desired exposure
+// Direction and intensity come from push constants (UI-controlled).
+// g_sun_dir is the direction FROM the surface TO the light (positive Y = above).
+static const float3 g_sun_color = float3(1.0f, 0.85f, 0.5f);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 struct Ray { float3 origin; float3 dir; };
@@ -413,7 +414,8 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
 
         if (!intersectScene(ray, hit, mat)) {
             // Ray escaped to sky — treat sky as an environment light
-            radiance += throughput * skyColor(ray.dir);
+            if (push.skybox_enabled != 0u)
+                radiance += throughput * skyColor(ray.dir);
             break;
         }
 
@@ -446,7 +448,10 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
         // openpbr_eval() takes world-space directions and returns BSDF × |cos θ_i|.
         // Do NOT convert to local space; do NOT multiply by n_dot_l again.
         // For transmissive materials, also sample the back hemisphere (backlit glass).
-        {
+        if (push.directional_light_enabled != 0u) {
+            float3 g_sun_dir = normalize(float3(push.sun_dir_x, push.sun_dir_y, push.sun_dir_z));
+            float  g_sun_intensity = push.sun_intensity;
+
             bool sun_front = dot(hit.normal,  g_sun_dir) > 0.f;
             bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f && inputs.transmission_weight > 0.f;
 

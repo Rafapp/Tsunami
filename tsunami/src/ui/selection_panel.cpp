@@ -167,6 +167,19 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		ImGui::EndDisabled();
 	}
 
+	if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Skybox", &selection_ctx.lighting.skybox_enabled);
+		ImGui::Checkbox("Directional light", &selection_ctx.lighting.directional_light_enabled);
+		ImGui::BeginDisabled(!selection_ctx.lighting.directional_light_enabled);
+		ImGui::SliderFloat("Elevation", &selection_ctx.lighting.sun_elevation_deg, -90.0f, 90.0f,
+		                   "%.1f deg");
+		ImGui::SliderFloat("Azimuth", &selection_ctx.lighting.sun_azimuth_deg, -180.0f, 180.0f,
+		                   "%.1f deg");
+		ImGui::SliderFloat("Sun intensity", &selection_ctx.lighting.sun_intensity, 0.0f, 50.0f,
+		                   "%.1f");
+		ImGui::EndDisabled();
+	}
+
 	ImGui::Text("Scene objects: %d",
 	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
 	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));

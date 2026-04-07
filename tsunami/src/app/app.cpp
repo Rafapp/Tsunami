@@ -211,10 +211,15 @@ struct PathTracerPushConstants {
 	uint32_t  hipr_update_period     = HIPR_UPDATE_PERIOD;
 	float     hipr_score_blend       = 0.25f;
 	float     hipr_vis_tint_strength = 0.2f;
-	uint32_t  _pad3                  = 0;
+	uint32_t  skybox_enabled         = 1;
+	uint32_t  directional_light_enabled = 1;
+	float     sun_dir_x              = 0.0f;
+	float     sun_dir_y              = 1.0f;
+	float     sun_dir_z              = 0.0f;
+	float     sun_intensity          = 10.0f;
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 100);
+static_assert(sizeof(PathTracerPushConstants) == 120);
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -1705,7 +1710,9 @@ App::App() {
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	// m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
 	// ui::rebuildObjectIdMap(m_scene.get());
-	m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
+	// m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
+	// m_scene->load_gltf("resources/scenes/cornell/cornell.glb");
+	m_scene->load_gltf("resources/scenes/cornell/cornell_simple.glb");
 	ui::rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
@@ -2708,6 +2715,8 @@ void App::MainLoop() {
 	int prev_f11 = GLFW_RELEASE;
 	int prev_lmb = GLFW_RELEASE;
 
+	ui::LightingSettings last_lighting = ui::selection_ctx.lighting;
+
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
 
@@ -2813,6 +2822,18 @@ void App::MainLoop() {
 			needs_visibility_pass  = true;
 			material_edit_mode     = false;
 			hipr_force_clear_order = true;
+		}
+
+		{
+			const ui::LightingSettings& cur = ui::selection_ctx.lighting;
+			if (cur.skybox_enabled            != last_lighting.skybox_enabled            ||
+			    cur.directional_light_enabled  != last_lighting.directional_light_enabled  ||
+			    cur.sun_elevation_deg          != last_lighting.sun_elevation_deg          ||
+			    cur.sun_azimuth_deg            != last_lighting.sun_azimuth_deg            ||
+			    cur.sun_intensity              != last_lighting.sun_intensity) {
+				frame_number  = 0;
+				last_lighting = cur;
+			}
 		}
 
 		if (overlay_ctx.controls.reset_water_requested) {
@@ -2967,6 +2988,16 @@ void App::MainLoop() {
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
 		    std::clamp(ui::selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f);
+		pc.skybox_enabled            = ui::selection_ctx.lighting.skybox_enabled ? 1u : 0u;
+		pc.directional_light_enabled = ui::selection_ctx.lighting.directional_light_enabled ? 1u : 0u;
+		{
+			const float elev = ui::selection_ctx.lighting.sun_elevation_deg * (3.14159265f / 180.0f);
+			const float azim = ui::selection_ctx.lighting.sun_azimuth_deg * (3.14159265f / 180.0f);
+			pc.sun_dir_x = std::cos(elev) * std::sin(azim);
+			pc.sun_dir_y = std::sin(elev);
+			pc.sun_dir_z = std::cos(elev) * std::cos(azim);
+		}
+		pc.sun_intensity = ui::selection_ctx.lighting.sun_intensity;
 
 		const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
 		const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;

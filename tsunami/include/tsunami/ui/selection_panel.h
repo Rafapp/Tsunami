@@ -41,11 +41,20 @@ struct HiPRDebugSettings {
 	float    vis_tint_strength              = 0.20f;
 };
 
+struct LightingSettings {
+	bool  skybox_enabled             = true;
+	bool  directional_light_enabled  = true;
+	float sun_elevation_deg          = 90.0f;   // 90 = straight above → dir (0,1,0)
+	float sun_azimuth_deg            = 0.0f;
+	float sun_intensity              = 10.0f;
+};
+
 struct SelectionContext {
 	int                        selected_mesh_index = -1;
 	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
 	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::HiPR;
 	HiPRDebugSettings          hipr_debug{};
+	LightingSettings           lighting{};
 	GPUMaterial                editor_material{};
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;
