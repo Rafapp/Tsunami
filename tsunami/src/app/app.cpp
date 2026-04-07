@@ -3079,11 +3079,11 @@ void App::MainLoop() {
 		const bool hipr_full_scene_sampling =
 		    hipr_mode && hipr_active && hipr_object_sampling_done && !camera_moving_this_frame;
 
-		bool    run_stage1 = true;
-		bool    run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
-		bool    run_single_rank_stage4 = false;
-		bool    run_ranked_stage4_loop = false;
-		int32_t single_rank_stage4_id  = -1;
+		bool       run_stage1 = true;
+		bool       run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
+		bool       run_single_rank_stage4 = false;
+		bool       run_ranked_stage4_loop = false;
+		int32_t    single_rank_stage4_id  = -1;
 		const bool hipr_vis_reveal_complete =
 		    hipr_vis_mode && pc.hipr_top_k > 0u &&
 		    (frame_number / hipr_frames_per_object) >= (pc.hipr_top_k - 1u);
