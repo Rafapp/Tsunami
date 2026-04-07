@@ -42,11 +42,11 @@ struct HiPRDebugSettings {
 };
 
 struct LightingSettings {
-	bool  skybox_enabled             = true;
-	bool  directional_light_enabled  = true;
-	float sun_elevation_deg          = 90.0f;   // 90 = straight above → dir (0,1,0)
-	float sun_azimuth_deg            = 0.0f;
-	float sun_intensity              = 10.0f;
+	bool  skybox_enabled            = true;
+	bool  directional_light_enabled = true;
+	float sun_elevation_deg         = 90.0f;        // 90 = straight above → dir (0,1,0)
+	float sun_azimuth_deg           = 0.0f;
+	float sun_intensity             = 10.0f;
 };
 
 struct SelectionContext {

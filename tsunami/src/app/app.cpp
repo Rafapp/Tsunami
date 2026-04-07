@@ -204,19 +204,19 @@ struct PathTracerPushConstants {
 	uint32_t  hipr_object_count   = 0;
 	uint32_t  hipr_top_k          = HIPR_TOP_K;
 	int32_t   hipr_render_rank    = -1;
-	uint32_t  hipr_incremental_sort  = 1;
-	uint32_t  hipr_clear_order       = 1;
-	uint32_t  hipr_vis_enable_tint   = 1;
-	uint32_t  hipr_vis_rainbow_tint  = 1;
-	uint32_t  hipr_update_period     = HIPR_UPDATE_PERIOD;
-	float     hipr_score_blend       = 0.25f;
-	float     hipr_vis_tint_strength = 0.2f;
-	uint32_t  skybox_enabled         = 1;
+	uint32_t  hipr_incremental_sort     = 1;
+	uint32_t  hipr_clear_order          = 1;
+	uint32_t  hipr_vis_enable_tint      = 1;
+	uint32_t  hipr_vis_rainbow_tint     = 1;
+	uint32_t  hipr_update_period        = HIPR_UPDATE_PERIOD;
+	float     hipr_score_blend          = 0.25f;
+	float     hipr_vis_tint_strength    = 0.2f;
+	uint32_t  skybox_enabled            = 1;
 	uint32_t  directional_light_enabled = 1;
-	float     sun_dir_x              = 0.0f;
-	float     sun_dir_y              = 1.0f;
-	float     sun_dir_z              = 0.0f;
-	float     sun_intensity          = 10.0f;
+	float     sun_dir_x                 = 0.0f;
+	float     sun_dir_y                 = 1.0f;
+	float     sun_dir_z                 = 0.0f;
+	float     sun_intensity             = 10.0f;
 };
 
 static_assert(sizeof(PathTracerPushConstants) == 120);
@@ -2826,11 +2826,11 @@ void App::MainLoop() {
 
 		{
 			const ui::LightingSettings& cur = ui::selection_ctx.lighting;
-			if (cur.skybox_enabled            != last_lighting.skybox_enabled            ||
-			    cur.directional_light_enabled  != last_lighting.directional_light_enabled  ||
-			    cur.sun_elevation_deg          != last_lighting.sun_elevation_deg          ||
-			    cur.sun_azimuth_deg            != last_lighting.sun_azimuth_deg            ||
-			    cur.sun_intensity              != last_lighting.sun_intensity) {
+			if (cur.skybox_enabled != last_lighting.skybox_enabled ||
+			    cur.directional_light_enabled != last_lighting.directional_light_enabled ||
+			    cur.sun_elevation_deg != last_lighting.sun_elevation_deg ||
+			    cur.sun_azimuth_deg != last_lighting.sun_azimuth_deg ||
+			    cur.sun_intensity != last_lighting.sun_intensity) {
 				frame_number  = 0;
 				last_lighting = cur;
 			}
@@ -2988,14 +2988,16 @@ void App::MainLoop() {
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
 		    std::clamp(ui::selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f);
-		pc.skybox_enabled            = ui::selection_ctx.lighting.skybox_enabled ? 1u : 0u;
-		pc.directional_light_enabled = ui::selection_ctx.lighting.directional_light_enabled ? 1u : 0u;
+		pc.skybox_enabled = ui::selection_ctx.lighting.skybox_enabled ? 1u : 0u;
+		pc.directional_light_enabled =
+		    ui::selection_ctx.lighting.directional_light_enabled ? 1u : 0u;
 		{
-			const float elev = ui::selection_ctx.lighting.sun_elevation_deg * (3.14159265f / 180.0f);
+			const float elev =
+			    ui::selection_ctx.lighting.sun_elevation_deg * (3.14159265f / 180.0f);
 			const float azim = ui::selection_ctx.lighting.sun_azimuth_deg * (3.14159265f / 180.0f);
-			pc.sun_dir_x = std::cos(elev) * std::sin(azim);
-			pc.sun_dir_y = std::sin(elev);
-			pc.sun_dir_z = std::cos(elev) * std::cos(azim);
+			pc.sun_dir_x     = std::cos(elev) * std::sin(azim);
+			pc.sun_dir_y     = std::sin(elev);
+			pc.sun_dir_z     = std::cos(elev) * std::cos(azim);
 		}
 		pc.sun_intensity = ui::selection_ctx.lighting.sun_intensity;
 
