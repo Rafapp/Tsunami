@@ -153,11 +153,11 @@ struct RenderTargetContext {
 	// tile probe buffers
 	VkBuffer      tile_buffer       = VK_NULL_HANDLE;
 	VmaAllocation tile_buffer_alloc = VK_NULL_HANDLE;
-	void*         tile_buffer_mapped = nullptr;      // CPU pointer to read back tile data from GPU
-	VkBuffer      tile_render_flags_buffer       = VK_NULL_HANDLE;
+	void*    tile_buffer_mapped     = nullptr;        // CPU pointer to read back tile data from GPU
+	VkBuffer tile_render_flags_buffer            = VK_NULL_HANDLE;
 	VmaAllocation tile_render_flags_buffer_alloc = VK_NULL_HANDLE;
-	void*         tile_render_flags_mapped        = nullptr;
-	uint32_t      tile_count = 0;
+	void*         tile_render_flags_mapped       = nullptr;
+	uint32_t      tile_count                     = 0;
 } render_target_ctx;
 
 struct ComputePipelineContext {
@@ -195,15 +195,15 @@ enum class RenderDebugViewMode : int {
 };
 
 struct PathTracerPushConstants {
-    uint32_t  frame               = 0;
-    uint32_t  material_count      = 0;
-    int32_t   selected_mesh_index = -1;
-    uint32_t  outline_width       = 1;
-    int32_t   debug_view_mode     = 0;
-    uint32_t  stage               = 0;   // was _pad0
-    uint32_t  _pad1               = 0;
-    uint32_t  _pad2               = 0;
-    glm::vec4 outline_color       = glm::vec4(1.f, 0.65f, 0.15f, 1.f);
+	uint32_t  frame               = 0;
+	uint32_t  material_count      = 0;
+	int32_t   selected_mesh_index = -1;
+	uint32_t  outline_width       = 1;
+	int32_t   debug_view_mode     = 0;
+	uint32_t  stage               = 0;        // was _pad0
+	uint32_t  _pad1               = 0;
+	uint32_t  _pad2               = 0;
+	glm::vec4 outline_color       = glm::vec4(1.f, 0.65f, 0.15f, 1.f);
 };
 static_assert(sizeof(PathTracerPushConstants) == 48);
 
@@ -273,23 +273,24 @@ struct FrameTimingHistory {
 	}
 } frame_timing_history{};
 
-//Tile structs for HiPR ===================
+// Tile structs for HiPR ===================
 struct TileData {
-    int32_t primary_object  = -1;
-    int32_t next_objects[3] = { -1, -1, -1 };
+	int32_t primary_object  = -1;
+	int32_t next_objects[3] = {-1, -1, -1};
 };
 
-static constexpr int   BFS_MAX_DEPTH            = 2;
-static constexpr int   BACKGROUND_TILES_PER_FRAME = 8;  // tune to taste
+static constexpr int BFS_MAX_DEPTH              = 2;
+static constexpr int BACKGROUND_TILES_PER_FRAME = 8;        // tune to taste
 
 struct ProbeContext {
-    std::vector<TileData> tiles;          // CPU readback of tile_buffer
-    bool                  valid    = false;
-    int                   last_selected = -2;
-    uint32_t              background_cursor = 0; // round-robin background pass
-	bool 				  hipr_enabled = false; // 	set to true to enable HiPR tile probing and selective rendering based on probe results
-	bool                  pause_background    = false;
-	bool                  show_tile_debug   = false;
+	std::vector<TileData> tiles;        // CPU readback of tile_buffer
+	bool                  valid             = false;
+	int                   last_selected     = -2;
+	uint32_t              background_cursor = 0;        // round-robin background pass
+	bool hipr_enabled = false;        // 	set to true to enable HiPR tile probing and selective
+	                                  // rendering based on probe results
+	bool pause_background = false;
+	bool show_tile_debug  = false;
 } probe_ctx;
 // =======================================
 
@@ -586,7 +587,7 @@ CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
 	const glm::vec3 up     = glm::normalize(glm::vec3(camera.up));
 	const float     fov    = camera.fov_near_far.x;
 	const float     aspect = static_cast<float>(framebuffer_width) /
-	                     static_cast<float>(std::max(framebuffer_height, 1u));
+	                         static_cast<float>(std::max(framebuffer_height, 1u));
 
 	const float half_height = std::tan(glm::radians(fov) * 0.5f);
 	const float half_width  = aspect * half_height;
@@ -703,9 +704,9 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 
 		const glm::mat4& inverse_transform = mesh->m_transform.m_inverseTransform;
 		const CpuRay     local_ray{
-            glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
-            glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
-        };
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
+		};
 
 		if (glm::dot(local_ray.direction, local_ray.direction) < 1.0e-12f) {
 			continue;
@@ -735,47 +736,46 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 	return best_mesh_id;
 }
 
-
 // Given the CPU tile map and a frontier set, return the set of tiles whose
 // primary object is in the frontier, then extend the frontier to their neighbors.
-static void bfs_compute_tile_flags(
-    const std::vector<TileData>&        tiles,
-    uint32_t                            tile_count,
-    int                                 seed_object,   // -1 = render everything
-    std::vector<uint32_t>&              out_flags)     // sized to tile_count
+static void bfs_compute_tile_flags(const std::vector<TileData>& tiles, uint32_t tile_count,
+                                   int seed_object,        // -1 = render everything
+                                   std::vector<uint32_t>& out_flags)        // sized to tile_count
 {
-    out_flags.assign(tile_count, 0u);
-    if (seed_object < 0) {
-        // No selection: render everything
-        std::fill(out_flags.begin(), out_flags.end(), 1u);
-        return;
-    }
+	out_flags.assign(tile_count, 0u);
+	if (seed_object < 0) {
+		// No selection: render everything
+		std::fill(out_flags.begin(), out_flags.end(), 1u);
+		return;
+	}
 
-    std::unordered_set<int> frontier  = { seed_object };
-    std::unordered_set<int> visited;
+	std::unordered_set<int> frontier = {seed_object};
+	std::unordered_set<int> visited;
 
-    for (int depth = 0; depth < BFS_MAX_DEPTH && !frontier.empty(); ++depth) {
-        std::unordered_set<int> next_frontier;
+	for (int depth = 0; depth < BFS_MAX_DEPTH && !frontier.empty(); ++depth) {
+		std::unordered_set<int> next_frontier;
 
-        for (uint32_t ti = 0; ti < tile_count; ++ti) {
-            if (frontier.count(tiles[ti].primary_object)) {
-                out_flags[ti] = 1u;
-                for (int k = 0; k < 3; ++k) {
-                    int obj = tiles[ti].next_objects[k];
-                    if (obj >= 0 && !visited.count(obj))
-                        next_frontier.insert(obj);
-                }
-            }
-        }
+		for (uint32_t ti = 0; ti < tile_count; ++ti) {
+			if (frontier.count(tiles[ti].primary_object)) {
+				out_flags[ti] = 1u;
+				for (int k = 0; k < 3; ++k) {
+					int obj = tiles[ti].next_objects[k];
+					if (obj >= 0 && !visited.count(obj))
+						next_frontier.insert(obj);
+				}
+			}
+		}
 
-        visited.insert(frontier.begin(), frontier.end());
-        frontier = std::move(next_frontier);
-        // Remove already-visited from next
-        for (auto it = frontier.begin(); it != frontier.end(); ) {
-            if (visited.count(*it)) it = frontier.erase(it);
-            else                    ++it;
-        }
-    }
+		visited.insert(frontier.begin(), frontier.end());
+		frontier = std::move(next_frontier);
+		// Remove already-visited from next
+		for (auto it = frontier.begin(); it != frontier.end();) {
+			if (visited.count(*it))
+				it = frontier.erase(it);
+			else
+				++it;
+		}
+	}
 }
 
 SelectionPanelResult drawSelectionPanel(const Scene* scene) {
@@ -888,52 +888,52 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 
 	// ── HiPR probe debug ─────────────────────────────────────────────────────
 	if (ImGui::CollapsingHeader("HiPR Probe")) {
-	    ImGui::Text("Probe valid: %s", probe_ctx.valid ? "yes" : "no");
-	    ImGui::Text("Last selected: %d", probe_ctx.last_selected);
-	    ImGui::Text("Tile count: %u", render_target_ctx.tile_count);
-	    ImGui::Text("BG cursor: %u / %u",
-	                probe_ctx.background_cursor, render_target_ctx.tile_count);
+		ImGui::Text("Probe valid: %s", probe_ctx.valid ? "yes" : "no");
+		ImGui::Text("Last selected: %d", probe_ctx.last_selected);
+		ImGui::Text("Tile count: %u", render_target_ctx.tile_count);
+		ImGui::Text("BG cursor: %u / %u", probe_ctx.background_cursor,
+		            render_target_ctx.tile_count);
 
-	    if (probe_ctx.valid && !probe_ctx.tiles.empty()) {
-	        // Count how many tiles are currently flagged
-	        uint32_t flagged = 0;
-	        if (render_target_ctx.tile_render_flags_mapped != nullptr) {
-	            const auto* f = reinterpret_cast<const uint32_t*>(
-	                render_target_ctx.tile_render_flags_mapped);
-	            for (uint32_t i = 0; i < render_target_ctx.tile_count; ++i)
-	                if (f[i]) ++flagged;
-	        }
-	        ImGui::Text("Flagged tiles: %u / %u (%.1f%%)",
-	                    flagged, render_target_ctx.tile_count,
-	                    100.f * flagged / std::max(render_target_ctx.tile_count, 1u));
+		if (probe_ctx.valid && !probe_ctx.tiles.empty()) {
+			// Count how many tiles are currently flagged
+			uint32_t flagged = 0;
+			if (render_target_ctx.tile_render_flags_mapped != nullptr) {
+				const auto* f =
+				    reinterpret_cast<const uint32_t*>(render_target_ctx.tile_render_flags_mapped);
+				for (uint32_t i = 0; i < render_target_ctx.tile_count; ++i)
+					if (f[i])
+						++flagged;
+			}
+			ImGui::Text("Flagged tiles: %u / %u (%.1f%%)", flagged, render_target_ctx.tile_count,
+			            100.f * flagged / std::max(render_target_ctx.tile_count, 1u));
 
-	        // Show the selected object's tile and its neighbors
-	        if (selection_ctx.selected_mesh_index >= 0) {
-	            const uint32_t tiles_x = (swapchain_ctx.extent.width  + 15u) / 16u;
-	            uint32_t primary_tiles = 0, neighbor_tiles = 0;
-	            for (uint32_t ti = 0; ti < render_target_ctx.tile_count; ++ti) {
-	                const TileData& td = probe_ctx.tiles[ti];
-	                if (td.primary_object == selection_ctx.selected_mesh_index)
-	                    ++primary_tiles;
-	                for (int k = 0; k < 3; ++k)
-	                    if (td.next_objects[k] == selection_ctx.selected_mesh_index)
-	                        ++neighbor_tiles;
-	            }
-	            ImGui::Text("Primary tiles for selection: %u", primary_tiles);
-	            ImGui::Text("Neighbor tiles for selection: %u", neighbor_tiles);
+			// Show the selected object's tile and its neighbors
+			if (selection_ctx.selected_mesh_index >= 0) {
+				const uint32_t tiles_x       = (swapchain_ctx.extent.width + 15u) / 16u;
+				uint32_t       primary_tiles = 0, neighbor_tiles = 0;
+				for (uint32_t ti = 0; ti < render_target_ctx.tile_count; ++ti) {
+					const TileData& td = probe_ctx.tiles[ti];
+					if (td.primary_object == selection_ctx.selected_mesh_index)
+						++primary_tiles;
+					for (int k = 0; k < 3; ++k)
+						if (td.next_objects[k] == selection_ctx.selected_mesh_index)
+							++neighbor_tiles;
+				}
+				ImGui::Text("Primary tiles for selection: %u", primary_tiles);
+				ImGui::Text("Neighbor tiles for selection: %u", neighbor_tiles);
 
-	            // Show top nextObjects for the selected object's first primary tile
-	            for (uint32_t ti = 0; ti < render_target_ctx.tile_count; ++ti) {
-	                if (probe_ctx.tiles[ti].primary_object == selection_ctx.selected_mesh_index) {
-	                    ImGui::Text("First primary tile %u neighbors: [%d, %d, %d]", ti,
-	                                probe_ctx.tiles[ti].next_objects[0],
-	                                probe_ctx.tiles[ti].next_objects[1],
-	                                probe_ctx.tiles[ti].next_objects[2]);
-	                    break;
-	                }
-	            }
-	        }
-	    }
+				// Show top nextObjects for the selected object's first primary tile
+				for (uint32_t ti = 0; ti < render_target_ctx.tile_count; ++ti) {
+					if (probe_ctx.tiles[ti].primary_object == selection_ctx.selected_mesh_index) {
+						ImGui::Text("First primary tile %u neighbors: [%d, %d, %d]", ti,
+						            probe_ctx.tiles[ti].next_objects[0],
+						            probe_ctx.tiles[ti].next_objects[1],
+						            probe_ctx.tiles[ti].next_objects[2]);
+						break;
+					}
+				}
+			}
+		}
 		if (ImGui::Checkbox("Enable HiPR", &probe_ctx.hipr_enabled)) {
 			probe_ctx.valid = false;
 		}
@@ -1024,44 +1024,42 @@ void App::createSwapchainResources() {
 	std::cout << "[INFO] Created water surface simulation resources\n";
 }
 
-// Creates buffers for tile-based light culling and HiPR, sized according to the number of tiles 
+// Creates buffers for tile-based light culling and HiPR, sized according to the number of tiles
 static void create_tile_buffers(VmaAllocator alloc, uint32_t tiles_x, uint32_t tiles_y) {
-    const uint32_t tile_count   = tiles_x * tiles_y;
-    render_target_ctx.tile_count = tile_count;
+	const uint32_t tile_count    = tiles_x * tiles_y;
+	render_target_ctx.tile_count = tile_count;
 
-    // tile_buffer: GPU writes (shader storage), CPU reads (persistently mapped)
-    {
-        VkBufferCreateInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size  = sizeof(TileData) * tile_count;
-        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
-        ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VmaAllocationInfo info;
-        vmaCreateBuffer(alloc, &bi, &ai,
-                        &render_target_ctx.tile_buffer,
-                        &render_target_ctx.tile_buffer_alloc, &info);
-        render_target_ctx.tile_buffer_mapped = info.pMappedData;
-    }
+	// tile_buffer: GPU writes (shader storage), CPU reads (persistently mapped)
+	{
+		VkBufferCreateInfo bi{};
+		bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bi.size  = sizeof(TileData) * tile_count;
+		bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+		ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VmaAllocationInfo info;
+		vmaCreateBuffer(alloc, &bi, &ai, &render_target_ctx.tile_buffer,
+		                &render_target_ctx.tile_buffer_alloc, &info);
+		render_target_ctx.tile_buffer_mapped = info.pMappedData;
+	}
 
-    // tile_render_flags: CPU writes, GPU reads (persistently mapped CPU→GPU)
-    {
-        VkBufferCreateInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size  = sizeof(uint32_t) * tile_count;
-        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-        ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VmaAllocationInfo info;
-        vmaCreateBuffer(alloc, &bi, &ai,
-                        &render_target_ctx.tile_render_flags_buffer,
-                        &render_target_ctx.tile_render_flags_buffer_alloc, &info);
-        render_target_ctx.tile_render_flags_mapped = info.pMappedData;
-        // Start with everything enabled so the first frame renders fully
-        memset(info.pMappedData, 0xFF, sizeof(uint32_t) * tile_count);
-    }
+	// tile_render_flags: CPU writes, GPU reads (persistently mapped CPU→GPU)
+	{
+		VkBufferCreateInfo bi{};
+		bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bi.size  = sizeof(uint32_t) * tile_count;
+		bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VmaAllocationInfo info;
+		vmaCreateBuffer(alloc, &bi, &ai, &render_target_ctx.tile_render_flags_buffer,
+		                &render_target_ctx.tile_render_flags_buffer_alloc, &info);
+		render_target_ctx.tile_render_flags_mapped = info.pMappedData;
+		// Start with everything enabled so the first frame renders fully
+		memset(info.pMappedData, 0xFF, sizeof(uint32_t) * tile_count);
+	}
 }
 
 void App::destroySwapchainResources() {
@@ -1391,194 +1389,194 @@ static void upload_rgba32f_3d(VmaAllocator alloc, VkDevice dev, VkCommandPool po
 // =======================
 static uint32_t g_frame_number_ref = 0;
 static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb_h) {
-    vkDeviceWaitIdle(vulkan_ctx.device);
+	vkDeviceWaitIdle(vulkan_ctx.device);
 
-    uint32_t new_w = fb_w;
-    uint32_t new_h = fb_h;
-    if (new_w == 0 || new_h == 0)
-        return;        // minimised – skip
+	uint32_t new_w = fb_w;
+	uint32_t new_h = fb_h;
+	if (new_w == 0 || new_h == 0)
+		return;        // minimised – skip
 
-    VmaAllocator allocator = render_target_ctx.allocator;
+	VmaAllocator allocator = render_target_ctx.allocator;
 
-    // -- Destroy old swapchain image views --
-    for (auto v : swapchain_ctx.image_views)
-        vkDestroyImageView(vulkan_ctx.device, v, nullptr);
-    swapchain_ctx.image_views.clear();
+	// -- Destroy old swapchain image views --
+	for (auto v : swapchain_ctx.image_views)
+		vkDestroyImageView(vulkan_ctx.device, v, nullptr);
+	swapchain_ctx.image_views.clear();
 
-    // -- Destroy old render-target images --
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.storage_image,
-	                    render_target_ctx.storage_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.object_id_image,
-	                    render_target_ctx.object_id_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	// -- Destroy old render-target images --
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.storage_image,
+	                render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+	                render_target_ctx.object_id_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
-    // -- Rebuild swapchain --
-    vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
-    auto           swap_ret =
-        vkb::SwapchainBuilder{vulkan_ctx.log_device}
-            .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-            .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-            .set_desired_extent(new_w, new_h)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-            .set_old_swapchain(old_swapchain.swapchain)
-            .build();
-    vkb::destroy_swapchain(old_swapchain);
+	// -- Rebuild swapchain --
+	vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
+	auto           swap_ret =
+	    vkb::SwapchainBuilder{vulkan_ctx.log_device}
+	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+	        .set_desired_extent(new_w, new_h)
+	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+	        .set_old_swapchain(old_swapchain.swapchain)
+	        .build();
+	vkb::destroy_swapchain(old_swapchain);
 
-    if (!swap_ret) {
-        std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
-        return;
-    }
-    swapchain_ctx.swapchain    = swap_ret.value();
-    swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
-    swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
-    auto images_ret            = swapchain_ctx.swapchain.get_images();
-    if (!images_ret)
-        return;
-    swapchain_ctx.images = images_ret.value();
-    auto views_ret       = swapchain_ctx.swapchain.get_image_views();
-    if (!views_ret)
-        return;
-    swapchain_ctx.image_views = views_ret.value();
-    swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
+	if (!swap_ret) {
+		std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
+		return;
+	}
+	swapchain_ctx.swapchain    = swap_ret.value();
+	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
+	auto images_ret            = swapchain_ctx.swapchain.get_images();
+	if (!images_ret)
+		return;
+	swapchain_ctx.images = images_ret.value();
+	auto views_ret       = swapchain_ctx.swapchain.get_image_views();
+	if (!views_ret)
+		return;
+	swapchain_ctx.image_views = views_ret.value();
+	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
 
-    // -- Recreate render-target images at new size --
-    // Use the actual swapchain extent (Vulkan may adjust from the requested size)
-    const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+	// -- Recreate render-target images at new size --
+	// Use the actual swapchain extent (Vulkan may adjust from the requested size)
+	const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
 
-    auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
-                            VkImageUsageFlags extra) {
-        VkImageCreateInfo ii{};
-        ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ii.imageType     = VK_IMAGE_TYPE_2D;
-        ii.format        = format;
-        ii.extent        = ext;
-        ii.mipLevels     = 1;
-        ii.arrayLayers   = 1;
-        ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-        vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
-    };
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
+		VkImageCreateInfo ii{};
+		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ii.imageType     = VK_IMAGE_TYPE_2D;
+		ii.format        = format;
+		ii.extent        = ext;
+		ii.mipLevels     = 1;
+		ii.arrayLayers   = 1;
+		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+	};
 
-    make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
-	                 VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, 0);
+	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, 0);
 
-    render_target_ctx.storage_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.object_id_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
-	                          VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.accum_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.storage_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.object_id_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	                      VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.accum_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 
-    // Transition accum → GENERAL
-    {
-        VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
-        transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
-		                     cmd);
-    }
+	// Transition accum → GENERAL
+	{
+		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                 cmd);
+	}
 
-    // Update the two storage-image descriptors (bindings 0 and 1)
-    {
-        VkDescriptorImageInfo out_img{};
-        out_img.imageView   = render_target_ctx.storage_image_view;
-        out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo object_id_img{};
-        object_id_img.imageView   = render_target_ctx.object_id_image_view;
-        object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo accum_img{};
-        accum_img.imageView   = render_target_ctx.accum_image_view;
-        accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	// Update the two storage-image descriptors (bindings 0 and 1)
+	{
+		VkDescriptorImageInfo out_img{};
+		out_img.imageView   = render_target_ctx.storage_image_view;
+		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo accum_img{};
+		accum_img.imageView   = render_target_ctx.accum_image_view;
+		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkWriteDescriptorSet writes[3]{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 0,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &out_img};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 13,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &object_id_img};
-        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 1,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &accum_img};
-        vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
-    }
+		VkWriteDescriptorSet writes[3]{};
+		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             0,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &out_img};
+		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             1,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &accum_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+	}
 
-    // Reset sync semaphores if the swapchain image count changed
-    {
-        const uint32_t n = (uint32_t) swapchain_ctx.images.size();
-        if (n != (uint32_t) sync_ctx.image_available.size()) {
-            for (auto s : sync_ctx.image_available)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            for (auto s : sync_ctx.render_finished)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            sync_ctx.image_available.resize(n);
-            sync_ctx.render_finished.resize(n);
-            VkSemaphoreCreateInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            for (uint32_t i = 0; i < n; ++i) {
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
-            }
-        }
-    }
+	// Reset sync semaphores if the swapchain image count changed
+	{
+		const uint32_t n = (uint32_t) swapchain_ctx.images.size();
+		if (n != (uint32_t) sync_ctx.image_available.size()) {
+			for (auto s : sync_ctx.image_available)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			for (auto s : sync_ctx.render_finished)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			sync_ctx.image_available.resize(n);
+			sync_ctx.render_finished.resize(n);
+			VkSemaphoreCreateInfo si{};
+			si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+			for (uint32_t i = 0; i < n; ++i) {
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
+			}
+		}
+	}
 
-    // Recreate overlay framebuffers for the new swapchain image views / extent
-    for (VkFramebuffer fb : overlay_ctx.framebuffers)
-        vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
-    overlay_ctx.framebuffers.clear();
-    overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-    for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-        VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
-        VkFramebufferCreateInfo framebuffer_info{};
-        framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass      = overlay_ctx.render_pass;
-        framebuffer_info.attachmentCount = 1;
-        framebuffer_info.pAttachments    = attachments;
-        framebuffer_info.width           = swapchain_ctx.extent.width;
-        framebuffer_info.height          = swapchain_ctx.extent.height;
-        framebuffer_info.layers          = 1;
-        vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                        &overlay_ctx.framebuffers[i]);
-    }
+	// Recreate overlay framebuffers for the new swapchain image views / extent
+	for (VkFramebuffer fb : overlay_ctx.framebuffers)
+		vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
+	overlay_ctx.framebuffers.clear();
+	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
+	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
+		VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
+		VkFramebufferCreateInfo framebuffer_info{};
+		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.renderPass      = overlay_ctx.render_pass;
+		framebuffer_info.attachmentCount = 1;
+		framebuffer_info.pAttachments    = attachments;
+		framebuffer_info.width           = swapchain_ctx.extent.width;
+		framebuffer_info.height          = swapchain_ctx.extent.height;
+		framebuffer_info.layers          = 1;
+		vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
+		                    &overlay_ctx.framebuffers[i]);
+	}
 
-    render_target_ctx.storage_image_initialized = false;
-    frame_number                                = 0;        // reset temporal accumulation
+	render_target_ctx.storage_image_initialized = false;
+	frame_number                                = 0;        // reset temporal accumulation
 
-    std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
-              << "\n";
+	std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
+	          << "\n";
 }
 
 // ============================================================
@@ -2084,10 +2082,10 @@ App::App() {
 	{
 		vkb::InstanceBuilder b;
 		auto                 r = b.set_app_name("tsunami")
-		             .request_validation_layers()
-		             .use_default_debug_messenger()
-		             .require_api_version(1, 3, 0)
-		             .build();
+		                             .request_validation_layers()
+		                             .use_default_debug_messenger()
+		                             .require_api_version(1, 3, 0)
+		                             .build();
 		if (!r)
 			throw std::runtime_error("failed to create Vulkan instance");
 		vulkan_ctx.instance = r.value();
@@ -2102,10 +2100,10 @@ App::App() {
 		                                 VK_KHR_RAY_QUERY_EXTENSION_NAME,
 		                                 VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 		auto                     r    = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
-		             .set_surface(vulkan_ctx.surface)
-		             .set_minimum_version(1, 3)
-		             .add_required_extensions(exts)
-		             .select();
+		                                    .set_surface(vulkan_ctx.surface)
+		                                    .set_minimum_version(1, 3)
+		                                    .add_required_extensions(exts)
+		                                    .select();
 		if (!r)
 			throw std::runtime_error("failed to select physical device");
 		vulkan_ctx.phys_device = r.value();
@@ -2124,10 +2122,10 @@ App::App() {
 		bf.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 		bf.bufferDeviceAddress = VK_TRUE;
 		auto r                 = vkb::DeviceBuilder{vulkan_ctx.phys_device}
-		             .add_pNext(&af)
-		             .add_pNext(&rf)
-		             .add_pNext(&bf)
-		             .build();
+		                             .add_pNext(&af)
+		                             .add_pNext(&rf)
+		                             .add_pNext(&bf)
+		                             .build();
 		if (!r)
 			throw std::runtime_error("failed to create logical device");
 		vulkan_ctx.log_device = r.value();
@@ -2186,22 +2184,22 @@ App::App() {
 	{
 		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
 		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
-                                      VkImageUsageFlags extra) {
-            VkImageCreateInfo ii{};
-            ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ii.imageType     = VK_IMAGE_TYPE_2D;
-            ii.format        = format;
-            ii.extent        = ext;
-            ii.mipLevels     = 1;
-            ii.arrayLayers   = 1;
-            ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-            ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VmaAllocationCreateInfo ai{};
-            ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-            if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
-                throw std::runtime_error("failed to create storage image");
+		                                    VkImageUsageFlags extra) {
+			VkImageCreateInfo ii{};
+			ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+			ii.imageType     = VK_IMAGE_TYPE_2D;
+			ii.format        = format;
+			ii.extent        = ext;
+			ii.mipLevels     = 1;
+			ii.arrayLayers   = 1;
+			ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+			ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+			ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+			ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VmaAllocationCreateInfo ai{};
+			ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+			if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
+				throw std::runtime_error("failed to create storage image");
 		};
 		auto make_dummy = [&](VkImageType itype, VkExtent3D e, VkImage& img, VmaAllocation& a) {
 			VkImageCreateInfo ii{};
@@ -2369,15 +2367,15 @@ App::App() {
 	                    vulkan_ctx.graphics_queue);
 	upload_material_textures(allocator, vulkan_ctx.device, command_ctx.command_pool,
 	                         vulkan_ctx.graphics_queue, m_scene->m_textures);
-	
+
 	// ===================================================
 	// === VIII.6  Tile probe buffers
 	// ===================================================
 	{
-	    const uint32_t tiles_x = (m_window->width()  + 15u) / 16u;
-	    const uint32_t tiles_y = (m_window->height() + 15u) / 16u;
-	    create_tile_buffers(allocator, tiles_x, tiles_y);
-	    std::cout << "[INFO] Tile buffers: " << tiles_x * tiles_y << " tiles\n";
+		const uint32_t tiles_x = (m_window->width() + 15u) / 16u;
+		const uint32_t tiles_y = (m_window->height() + 15u) / 16u;
+		create_tile_buffers(allocator, tiles_x, tiles_y);
+		std::cout << "[INFO] Tile buffers: " << tiles_x * tiles_y << " tiles\n";
 	}
 
 	// ==============================================
@@ -2415,8 +2413,8 @@ App::App() {
 		    make_binding(11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MATERIAL_TEXTURES),
 		    make_binding(12, VK_DESCRIPTOR_TYPE_SAMPLER),
 		    make_binding(13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-			make_binding(14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-			make_binding(15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+		    make_binding(14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+		    make_binding(15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -2613,16 +2611,17 @@ App::App() {
 		}
 
 		// 14 — tile_buffer
-		VkDescriptorBufferInfo tile_buf_info{ render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE };
-		writes.push_back({ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-						render_target_ctx.descriptor_set, 14, 0, 1,
-						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info });
+		VkDescriptorBufferInfo tile_buf_info{render_target_ctx.tile_buffer, 0, VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 14, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_buf_info});
 
 		// 15 — tile_render_flags
-		VkDescriptorBufferInfo tile_flags_info{ render_target_ctx.tile_render_flags_buffer, 0, VK_WHOLE_SIZE };
-		writes.push_back({ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-						render_target_ctx.descriptor_set, 15, 0, 1,
-						VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info });
+		VkDescriptorBufferInfo tile_flags_info{render_target_ctx.tile_render_flags_buffer, 0,
+		                                       VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 15, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &tile_flags_info});
 
 		// 12 — sampler for material textures
 		VkDescriptorImageInfo material_sampler_info{};
@@ -2639,8 +2638,8 @@ App::App() {
 	// === X. Compute Pipeline
 	// ============================================
 	{
-		auto spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/HiPR.slang", "main",
-		                                  {VENDORS_DIR});
+		auto spirv =
+		    compile_slang_shader(std::string(SHADERS_DIR) + "/HiPR.slang", "main", {VENDORS_DIR});
 		std::cout << "[INFO] Shader: " << spirv.size() * 4 << " bytes SPIR-V\n";
 		VkShaderModuleCreateInfo mci{};
 		mci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -2792,186 +2791,186 @@ App::~App() {
 }
 
 void App::run() {
-    MainLoop();
+	MainLoop();
 }
 
-
 void App::MainLoop() {
-    float last_frame_time = static_cast<float>(glfwGetTime());
+	float last_frame_time = static_cast<float>(glfwGetTime());
 
-    FlyCamera fly_cam(m_scene->m_camera.m_position, m_scene->m_camera.m_target,
-                      m_scene->m_camera.m_fov, 0.1f);
+	FlyCamera fly_cam(m_scene->m_camera.m_position, m_scene->m_camera.m_target,
+	                  m_scene->m_camera.m_fov, 0.1f);
 
-    double   last_time = glfwGetTime();
-    uint32_t frame_number = 0;
+	double   last_time    = glfwGetTime();
+	uint32_t frame_number = 0;
 
-    int prev_f6  = GLFW_RELEASE;
-    int prev_f11 = GLFW_RELEASE;
-    int prev_lmb = GLFW_RELEASE;
+	int prev_f6  = GLFW_RELEASE;
+	int prev_f11 = GLFW_RELEASE;
+	int prev_lmb = GLFW_RELEASE;
 
-    while (!m_window->shouldClose()) {
-        m_window->pollEvents();
+	while (!m_window->shouldClose()) {
+		m_window->pollEvents();
 
-        const uint32_t framebuffer_width  = m_window->width();
-        const uint32_t framebuffer_height = m_window->height();
-        if (framebuffer_width == 0 || framebuffer_height == 0) {
-            m_window->waitEvents();
-            last_frame_time = static_cast<float>(glfwGetTime());
-            continue;
-        }
+		const uint32_t framebuffer_width  = m_window->width();
+		const uint32_t framebuffer_height = m_window->height();
+		if (framebuffer_width == 0 || framebuffer_height == 0) {
+			m_window->waitEvents();
+			last_frame_time = static_cast<float>(glfwGetTime());
+			continue;
+		}
 
-        if (swapchain_ctx.extent.width  != framebuffer_width ||
-            swapchain_ctx.extent.height != framebuffer_height) {
-            recreateSwapchainResources();
-            frame_number = 0;
-        }
+		if (swapchain_ctx.extent.width != framebuffer_width ||
+		    swapchain_ctx.extent.height != framebuffer_height) {
+			recreateSwapchainResources();
+			frame_number = 0;
+		}
 
-        const float time_seconds = static_cast<float>(glfwGetTime());
-        const float delta_time   = std::max(time_seconds - last_frame_time, 1.0f / 240.0f);
-        last_frame_time          = time_seconds;
+		const float time_seconds = static_cast<float>(glfwGetTime());
+		const float delta_time   = std::max(time_seconds - last_frame_time, 1.0f / 240.0f);
+		last_frame_time          = time_seconds;
 
-        updateRenderDiagnostics(delta_time);
+		updateRenderDiagnostics(delta_time);
 
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+		ImGui_ImplVulkan_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
 
-        const audio::ReactiveAudioInputFrame audio_input =
-            buildAudioInputFrame(m_microphone.get(), time_seconds);
+		const audio::ReactiveAudioInputFrame audio_input =
+		    buildAudioInputFrame(m_microphone.get(), time_seconds);
 
-        const auto update_water_and_floaters = [&](float water_audio_level) {
-            if (m_water_surface != nullptr) {
-                overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
-                    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
-            }
-        };
+		const auto update_water_and_floaters = [&](float water_audio_level) {
+			if (m_water_surface != nullptr) {
+				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
+				    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
+			}
+		};
 
-        float audio_level = 0.0f;
-        if (m_audio_controller != nullptr) {
-            audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
-            overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
-        }
-        const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
-        applyOverlayLevel(audio_level);
-        update_water_and_floaters(water_audio_level);
+		float audio_level = 0.0f;
+		if (m_audio_controller != nullptr) {
+			audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
+		}
+		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
+		applyOverlayLevel(audio_level);
+		update_water_and_floaters(water_audio_level);
 
-        if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
-            overlay_ctx.show_control_panel = !overlay_ctx.show_control_panel;
-        }
+		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
+			overlay_ctx.show_control_panel = !overlay_ctx.show_control_panel;
+		}
 
-        bool controls_changed = false;
-        if (overlay_ctx.show_control_panel) {
-            controls_changed = ui::drawAudienceControlPanel(
-                &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
-        }
+		bool controls_changed = false;
+		if (overlay_ctx.show_control_panel) {
+			controls_changed = ui::drawAudienceControlPanel(
+			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
+		}
 
-        const SelectionPanelResult selection_panel_result = drawSelectionPanel(m_scene.get());
+		const SelectionPanelResult selection_panel_result = drawSelectionPanel(m_scene.get());
 
-        if (controls_changed) {
-            if (m_audio_controller != nullptr) {
-                audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
-                overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
-            }
-            applyOverlayLevel(audio_level);
-            update_water_and_floaters(overlay_ctx.diagnostics.audio.normalized_level);
-        }
+		if (controls_changed) {
+			if (m_audio_controller != nullptr) {
+				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+				overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
+			}
+			applyOverlayLevel(audio_level);
+			update_water_and_floaters(overlay_ctx.diagnostics.audio.normalized_level);
+		}
 
-        if (selection_panel_result.material_changed) {
-            applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
-            frame_number = 0;
-        }
-        if (selection_panel_result.selection_changed) {
-            frame_number = 0;
-        }
+		if (selection_panel_result.material_changed) {
+			applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
+			frame_number = 0;
+		}
+		if (selection_panel_result.selection_changed) {
+			frame_number = 0;
+		}
 
-        if (overlay_ctx.controls.reset_water_requested) {
-            if (m_water_surface != nullptr) m_water_surface->requestReset();
-            overlay_ctx.controls.reset_water_requested = false;
-        }
-        if (overlay_ctx.controls.reset_objects_requested) {
-            if (m_water_surface != nullptr) m_water_surface->requestObjectReset();
-            overlay_ctx.controls.reset_objects_requested = false;
-        }
+		if (overlay_ctx.controls.reset_water_requested) {
+			if (m_water_surface != nullptr)
+				m_water_surface->requestReset();
+			overlay_ctx.controls.reset_water_requested = false;
+		}
+		if (overlay_ctx.controls.reset_objects_requested) {
+			if (m_water_surface != nullptr)
+				m_water_surface->requestObjectReset();
+			overlay_ctx.controls.reset_objects_requested = false;
+		}
 
-        if (overlay_ctx.controls.show_overlay) {
-            ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize,
-                                    overlay_ctx.controls.overlay,
-                                    overlay_ctx.controls.style);
-        }
-        
+		if (overlay_ctx.controls.show_overlay) {
+			ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_ctx.controls.overlay,
+			                        overlay_ctx.controls.style);
+		}
+
 		// ── Tile debug overlay ───────────────────────────────────────────────
-        if (probe_ctx.show_tile_debug && render_target_ctx.tile_render_flags_mapped != nullptr) {
-            const auto* flags_ptr =
-                reinterpret_cast<const uint32_t*>(render_target_ctx.tile_render_flags_mapped);
-            const uint32_t tiles_x_dbg = (swapchain_ctx.extent.width  + 15u) / 16u;
-            const uint32_t tiles_y_dbg = (swapchain_ctx.extent.height + 15u) / 16u;
-            ImDrawList* dl       = ImGui::GetForegroundDrawList();
-            const float screen_w = static_cast<float>(swapchain_ctx.extent.width);
-            const float screen_h = static_cast<float>(swapchain_ctx.extent.height);
-            const float tile_pw  = screen_w / static_cast<float>(tiles_x_dbg);
-            const float tile_ph  = screen_h / static_cast<float>(tiles_y_dbg);
-            for (uint32_t ty = 0; ty < tiles_y_dbg; ++ty) {
-                for (uint32_t tx = 0; tx < tiles_x_dbg; ++tx) {
-                    const uint32_t idx    = ty * tiles_x_dbg + tx;
-                    const bool     flagged = flags_ptr[idx] != 0u;
-                    const ImVec2   p0 = { tx * tile_pw,       ty * tile_ph };
-                    const ImVec2   p1 = { (tx+1) * tile_pw,   (ty+1) * tile_ph };
-                    const ImU32    col = flagged
-                        ? IM_COL32(0, 255, 80, 50)
-                        : IM_COL32(255, 30, 30, 80);
-                    dl->AddRectFilled(p0, p1, col);
-                    dl->AddRect(p0, p1, IM_COL32(0, 0, 0, 40));
-                }
-            }
-        }
+		if (probe_ctx.show_tile_debug && render_target_ctx.tile_render_flags_mapped != nullptr) {
+			const auto* flags_ptr =
+			    reinterpret_cast<const uint32_t*>(render_target_ctx.tile_render_flags_mapped);
+			const uint32_t tiles_x_dbg = (swapchain_ctx.extent.width + 15u) / 16u;
+			const uint32_t tiles_y_dbg = (swapchain_ctx.extent.height + 15u) / 16u;
+			ImDrawList*    dl          = ImGui::GetForegroundDrawList();
+			const float    screen_w    = static_cast<float>(swapchain_ctx.extent.width);
+			const float    screen_h    = static_cast<float>(swapchain_ctx.extent.height);
+			const float    tile_pw     = screen_w / static_cast<float>(tiles_x_dbg);
+			const float    tile_ph     = screen_h / static_cast<float>(tiles_y_dbg);
+			for (uint32_t ty = 0; ty < tiles_y_dbg; ++ty) {
+				for (uint32_t tx = 0; tx < tiles_x_dbg; ++tx) {
+					const uint32_t idx     = ty * tiles_x_dbg + tx;
+					const bool     flagged = flags_ptr[idx] != 0u;
+					const ImVec2   p0      = {tx * tile_pw, ty * tile_ph};
+					const ImVec2   p1      = {(tx + 1) * tile_pw, (ty + 1) * tile_ph};
+					const ImU32    col =
+					    flagged ? IM_COL32(0, 255, 80, 50) : IM_COL32(255, 30, 30, 80);
+					dl->AddRectFilled(p0, p1, col);
+					dl->AddRect(p0, p1, IM_COL32(0, 0, 0, 40));
+				}
+			}
+		}
 
-        ImGui::Render();
+		ImGui::Render();
 
+		glfwPollEvents();
 
-        glfwPollEvents();
+		double now = glfwGetTime();
+		float  dt  = std::clamp(static_cast<float>(now - last_time), 0.0001f, 0.1f);
+		last_time  = now;
 
-        double now = glfwGetTime();
-        float  dt  = std::clamp(static_cast<float>(now - last_time), 0.0001f, 0.1f);
-        last_time  = now;
+		// ── Resize check ─────────────────────────────────────────────────────
+		uint32_t fb_w = m_window->width();
+		uint32_t fb_h = m_window->height();
+		if (fb_w != swapchain_ctx.swapchain.extent.width ||
+		    fb_h != swapchain_ctx.swapchain.extent.height) {
+			handle_resize(frame_number, fb_w, fb_h);
+			probe_ctx.valid = false;        // tile buffer resized — probe stale
+		}
 
-        // ── Resize check ─────────────────────────────────────────────────────
-        uint32_t fb_w = m_window->width();
-        uint32_t fb_h = m_window->height();
-        if (fb_w != swapchain_ctx.swapchain.extent.width ||
-            fb_h != swapchain_ctx.swapchain.extent.height) {
-            handle_resize(frame_number, fb_w, fb_h);
-            probe_ctx.valid = false;  // tile buffer resized — probe stale
-        }
+		// ── F11: fullscreen toggle ────────────────────────────────────────────
+		int f11 = glfwGetKey(m_window->handle(), GLFW_KEY_F11);
+		if (f11 == GLFW_PRESS && prev_f11 == GLFW_RELEASE) {
+			m_window->toggle_fullscreen();
+		}
+		prev_f11 = f11;
 
-        // ── F11: fullscreen toggle ────────────────────────────────────────────
-        int f11 = glfwGetKey(m_window->handle(), GLFW_KEY_F11);
-        if (f11 == GLFW_PRESS && prev_f11 == GLFW_RELEASE) {
-            m_window->toggle_fullscreen();
-        }
-        prev_f11 = f11;
+		// ── F6: shader hot-reload ─────────────────────────────────────────────
+		int f6 = glfwGetKey(m_window->handle(), GLFW_KEY_F6);
+		if (f6 == GLFW_PRESS && prev_f6 == GLFW_RELEASE) {
+			if (rebuild_pipeline()) {
+				frame_number    = 0;
+				probe_ctx.valid = false;        // new shader may behave differently
+			}
+		}
+		prev_f6 = f6;
 
-        // ── F6: shader hot-reload ─────────────────────────────────────────────
-        int f6 = glfwGetKey(m_window->handle(), GLFW_KEY_F6);
-        if (f6 == GLFW_PRESS && prev_f6 == GLFW_RELEASE) {
-            if (rebuild_pipeline()) {
-                frame_number    = 0;
-                probe_ctx.valid = false;  // new shader may behave differently
-            }
-        }
-        prev_f6 = f6;
-
-        // ── Fly-camera update ─────────────────────────────────────────────────
-        if (fly_cam.update(m_window->handle(), dt)) {
-            frame_number    = 0;
-            probe_ctx.valid = false;  // camera moved — interaction map is stale
+		// ── Fly-camera update ─────────────────────────────────────────────────
+		if (fly_cam.update(m_window->handle(), dt)) {
+			frame_number    = 0;
+			probe_ctx.valid = false;        // camera moved — interaction map is stale
 			// Clear accumulation image immediately to avoid temporal smearing
 			if (render_target_ctx.accum_image != VK_NULL_HANDLE) {
-				VkCommandBuffer clear_cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+				VkCommandBuffer clear_cmd =
+				    begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
 				// Transition accum -> TRANSFER_DST
-				transition_layout(clear_cmd, render_target_ctx.accum_image,
-								  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-								  VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-								  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+				transition_layout(clear_cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_GENERAL,
+				                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+				                  VK_ACCESS_TRANSFER_WRITE_BIT,
+				                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				                  VK_PIPELINE_STAGE_TRANSFER_BIT);
 				VkClearColorValue clear_color{};
 				clear_color.float32[0] = 0.0f;
 				clear_color.float32[1] = 0.0f;
@@ -2979,293 +2978,283 @@ void App::MainLoop() {
 				clear_color.float32[3] = 0.0f;
 				VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 				vkCmdClearColorImage(clear_cmd, render_target_ctx.accum_image,
-									 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
+				                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
 				// Transition back to GENERAL for shader access
 				transition_layout(clear_cmd, render_target_ctx.accum_image,
-								  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-								  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-								  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-				end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue, clear_cmd);
+				                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+				                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+				                  VK_PIPELINE_STAGE_TRANSFER_BIT,
+				                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+				end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool,
+				                 vulkan_ctx.graphics_queue, clear_cmd);
 			}
-        }
+		}
 
-        const GPUCamera gpu_camera = fly_cam.pack();
-        memcpy(scene_ctx.camera_mapped, &gpu_camera, sizeof(GPUCamera));
+		const GPUCamera gpu_camera = fly_cam.pack();
+		memcpy(scene_ctx.camera_mapped, &gpu_camera, sizeof(GPUCamera));
 
-        // ── CPU pick on LMB ───────────────────────────────────────────────────
-        const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
-        if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE &&
-            !fly_cam.isMouseCaptured() && !ImGui::GetIO().WantCaptureMouse) {
-            if (selectMesh(m_scene.get(),
-                           pickMeshAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
-                                            framebuffer_width, framebuffer_height))) {
-                frame_number = 0;
-                // probe_ctx.valid stays true — the probe map is still good.
-                // The BFS just re-runs from the new seed, which is cheap CPU work.
-            }
-        }
-        prev_lmb = current_lmb;
+		// ── CPU pick on LMB ───────────────────────────────────────────────────
+		const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
+		if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE && !fly_cam.isMouseCaptured() &&
+		    !ImGui::GetIO().WantCaptureMouse) {
+			if (selectMesh(m_scene.get(),
+			               pickMeshAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
+			                                framebuffer_width, framebuffer_height))) {
+				frame_number = 0;
+				// probe_ctx.valid stays true — the probe map is still good.
+				// The BFS just re-runs from the new seed, which is cheap CPU work.
+			}
+		}
+		prev_lmb = current_lmb;
 
-        // =====================================================================
-        // === Probe pass (stage 0) — runs when stale ===
-        // Submits a separate one-shot command buffer, stalls until done, then
-        // reads back tile_buffer and recomputes tile_render_flags on the CPU.
-        // This only fires on scene changes, not every frame.
-        // =====================================================================
-        const uint32_t tiles_x    = (swapchain_ctx.extent.width  + 15u) / 16u;
-        const uint32_t tiles_y    = (swapchain_ctx.extent.height + 15u) / 16u;
-        const uint32_t tile_count = tiles_x * tiles_y;
+		// =====================================================================
+		// === Probe pass (stage 0) — runs when stale ===
+		// Submits a separate one-shot command buffer, stalls until done, then
+		// reads back tile_buffer and recomputes tile_render_flags on the CPU.
+		// This only fires on scene changes, not every frame.
+		// =====================================================================
+		const uint32_t tiles_x    = (swapchain_ctx.extent.width + 15u) / 16u;
+		const uint32_t tiles_y    = (swapchain_ctx.extent.height + 15u) / 16u;
+		const uint32_t tile_count = tiles_x * tiles_y;
 
-        const bool need_probe =
-            !probe_ctx.valid ||
-            frame_number == 0 ||
-            probe_ctx.last_selected != selection_ctx.selected_mesh_index;
+		const bool need_probe = !probe_ctx.valid || frame_number == 0 ||
+		                        probe_ctx.last_selected != selection_ctx.selected_mesh_index;
 
-        if (need_probe) {
-            // -- Submit stage 0 -----------------------------------------------
-            {
-                VkCommandBuffer probe_cmd =
-                    begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		if (need_probe) {
+			// -- Submit stage 0 -----------------------------------------------
+			{
+				VkCommandBuffer probe_cmd =
+				    begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
 
-                // Storage image must be in GENERAL for the compute shader to write
-                VkImageLayout storage_old =
-                    render_target_ctx.storage_image_initialized
-                        ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED;
-                transition_layout(
-                    probe_cmd, render_target_ctx.storage_image,
-                    storage_old, VK_IMAGE_LAYOUT_GENERAL,
-                    0, VK_ACCESS_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+				// Storage image must be in GENERAL for the compute shader to write
+				VkImageLayout storage_old = render_target_ctx.storage_image_initialized ?
+				                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
+				                                VK_IMAGE_LAYOUT_UNDEFINED;
+				transition_layout(probe_cmd, render_target_ctx.storage_image, storage_old,
+				                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+				                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-                vkCmdBindPipeline(probe_cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  compute_ctx.pipeline);
-                vkCmdBindDescriptorSets(probe_cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        compute_ctx.pipeline_layout, 0, 1,
-                                        &render_target_ctx.descriptor_set, 0, nullptr);
+				vkCmdBindPipeline(probe_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline);
+				vkCmdBindDescriptorSets(probe_cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+				                        compute_ctx.pipeline_layout, 0, 1,
+				                        &render_target_ctx.descriptor_set, 0, nullptr);
 
-                PathTracerPushConstants pc{};
-                pc.frame               = frame_number;
-                pc.material_count      = scene_ctx.material_count;
-                pc.selected_mesh_index = selection_ctx.selected_mesh_index;
-                pc.outline_width       = selection_ctx.outline_width;
-                pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
-                pc.stage               = 0u;
-                pc.outline_color       = selection_ctx.outline_color;
-                vkCmdPushConstants(probe_cmd, compute_ctx.pipeline_layout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+				PathTracerPushConstants pc{};
+				pc.frame               = frame_number;
+				pc.material_count      = scene_ctx.material_count;
+				pc.selected_mesh_index = selection_ctx.selected_mesh_index;
+				pc.outline_width       = selection_ctx.outline_width;
+				pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
+				pc.stage               = 0u;
+				pc.outline_color       = selection_ctx.outline_color;
+				vkCmdPushConstants(probe_cmd, compute_ctx.pipeline_layout,
+				                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
-                vkCmdDispatch(probe_cmd, tiles_x, tiles_y, 1);
+				vkCmdDispatch(probe_cmd, tiles_x, tiles_y, 1);
 
-                // end_one_time_cmd submits and calls vkQueueWaitIdle —
-                // that's the sync point before we read the mapped buffer below.
-                end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool,
-                                 vulkan_ctx.graphics_queue, probe_cmd);
+				// end_one_time_cmd submits and calls vkQueueWaitIdle —
+				// that's the sync point before we read the mapped buffer below.
+				end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool,
+				                 vulkan_ctx.graphics_queue, probe_cmd);
 
-                render_target_ctx.storage_image_initialized = true;
-            }
+				render_target_ctx.storage_image_initialized = true;
+			}
 
-            // -- Readback tile_buffer (persistently mapped, so just memcpy) ---
-            probe_ctx.tiles.resize(tile_count);
-            memcpy(probe_ctx.tiles.data(),
-                   render_target_ctx.tile_buffer_mapped,
-                   sizeof(TileData) * tile_count);
+			// -- Readback tile_buffer (persistently mapped, so just memcpy) ---
+			probe_ctx.tiles.resize(tile_count);
+			memcpy(probe_ctx.tiles.data(), render_target_ctx.tile_buffer_mapped,
+			       sizeof(TileData) * tile_count);
 
-            // -- BFS: compute which tiles to prioritise -----------------------
+			// -- BFS: compute which tiles to prioritise -----------------------
 			std::vector<uint32_t> flags;
 			if (probe_ctx.hipr_enabled) {
-				bfs_compute_tile_flags(
-					probe_ctx.tiles, tile_count,
-					selection_ctx.selected_mesh_index, flags);
+				bfs_compute_tile_flags(probe_ctx.tiles, tile_count,
+				                       selection_ctx.selected_mesh_index, flags);
 			} else {
 				// Render everything — bypass HiPR entirely
 				flags.assign(tile_count, 1u);
 			}
-            // -- Upload render flags (persistently mapped CPU→GPU) ------------
-            memcpy(render_target_ctx.tile_render_flags_mapped,
-                   flags.data(), sizeof(uint32_t) * tile_count);
-            vmaFlushAllocation(render_target_ctx.allocator,
-                               render_target_ctx.tile_render_flags_buffer_alloc,
-                               0, VK_WHOLE_SIZE);
+			// -- Upload render flags (persistently mapped CPU→GPU) ------------
+			memcpy(render_target_ctx.tile_render_flags_mapped, flags.data(),
+			       sizeof(uint32_t) * tile_count);
+			vmaFlushAllocation(render_target_ctx.allocator,
+			                   render_target_ctx.tile_render_flags_buffer_alloc, 0, VK_WHOLE_SIZE);
 
-            probe_ctx.valid           = true;
-            probe_ctx.last_selected   = selection_ctx.selected_mesh_index;
-            probe_ctx.background_cursor = 0u;
-        }
+			probe_ctx.valid             = true;
+			probe_ctx.last_selected     = selection_ctx.selected_mesh_index;
+			probe_ctx.background_cursor = 0u;
+		}
 
-        // =====================================================================
-        // === Background refinement — drip-feed non-BFS tiles ===
-        // Each frame we enable a small batch of tiles that weren't in the BFS
-        // frontier, advancing a round-robin cursor through the full tile set.
-        // This ensures the whole image converges without a hard cut-over.
-        // =====================================================================
-        if (probe_ctx.pause_background && render_target_ctx.tile_render_flags_mapped != nullptr) {
-            auto* flags_ptr =
-                reinterpret_cast<uint32_t*>(render_target_ctx.tile_render_flags_mapped);
+		// =====================================================================
+		// === Background refinement — drip-feed non-BFS tiles ===
+		// Each frame we enable a small batch of tiles that weren't in the BFS
+		// frontier, advancing a round-robin cursor through the full tile set.
+		// This ensures the whole image converges without a hard cut-over.
+		// =====================================================================
+		if (probe_ctx.pause_background && render_target_ctx.tile_render_flags_mapped != nullptr) {
+			auto* flags_ptr =
+			    reinterpret_cast<uint32_t*>(render_target_ctx.tile_render_flags_mapped);
 
-            int added = 0;
-            for (uint32_t i = 0; i < tile_count && added < BACKGROUND_TILES_PER_FRAME; ++i) {
-                const uint32_t idx = (probe_ctx.background_cursor + i) % tile_count;
-                if (flags_ptr[idx] == 0u) {
-                    flags_ptr[idx] = 1u;
-                    ++added;
-                }
-            }
-            probe_ctx.background_cursor =
-                (probe_ctx.background_cursor + BACKGROUND_TILES_PER_FRAME) % tile_count;
+			int added = 0;
+			for (uint32_t i = 0; i < tile_count && added < BACKGROUND_TILES_PER_FRAME; ++i) {
+				const uint32_t idx = (probe_ctx.background_cursor + i) % tile_count;
+				if (flags_ptr[idx] == 0u) {
+					flags_ptr[idx] = 1u;
+					++added;
+				}
+			}
+			probe_ctx.background_cursor =
+			    (probe_ctx.background_cursor + BACKGROUND_TILES_PER_FRAME) % tile_count;
 
-            if (added > 0) {
-                vmaFlushAllocation(render_target_ctx.allocator,
-                                   render_target_ctx.tile_render_flags_buffer_alloc,
-                                   0, VK_WHOLE_SIZE);
-            }
-        }
+			if (added > 0) {
+				vmaFlushAllocation(render_target_ctx.allocator,
+				                   render_target_ctx.tile_render_flags_buffer_alloc, 0,
+				                   VK_WHOLE_SIZE);
+			}
+		}
 
-        // =====================================================================
-        // === Per-frame render (stage 1 — path trace) ===
-        // =====================================================================
-        const uint32_t frame_idx = frame_number % static_cast<uint32_t>(swapchain_ctx.images.size());
+		// =====================================================================
+		// === Per-frame render (stage 1 — path trace) ===
+		// =====================================================================
+		const uint32_t frame_idx =
+		    frame_number % static_cast<uint32_t>(swapchain_ctx.images.size());
 
-        vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX);
-        vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight);
+		vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX);
+		vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight);
 
-        uint32_t image_index;
-        VkResult acquire_result = vkAcquireNextImageKHR(
-            vulkan_ctx.device, swapchain_ctx.swapchain.swapchain, UINT64_MAX,
-            sync_ctx.image_available[frame_idx], VK_NULL_HANDLE, &image_index);
-        if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR) {
-            handle_resize(frame_number, fb_w, fb_h);
-            probe_ctx.valid = false;
-            continue;
-        }
+		uint32_t image_index;
+		VkResult acquire_result = vkAcquireNextImageKHR(
+		    vulkan_ctx.device, swapchain_ctx.swapchain.swapchain, UINT64_MAX,
+		    sync_ctx.image_available[frame_idx], VK_NULL_HANDLE, &image_index);
+		if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR) {
+			handle_resize(frame_number, fb_w, fb_h);
+			probe_ctx.valid = false;
+			continue;
+		}
 
-        vkResetCommandBuffer(command_ctx.command_buffer, 0);
-        VkCommandBufferBeginInfo begin_info{};
-        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
-        VkCommandBuffer cmd = command_ctx.command_buffer;
+		vkResetCommandBuffer(command_ctx.command_buffer, 0);
+		VkCommandBufferBeginInfo begin_info{};
+		begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
+		VkCommandBuffer cmd = command_ctx.command_buffer;
 
-        // Storage image: probe already left it in TRANSFER_SRC (it writes then
-        // end_one_time_cmd flushes, but we never transitioned it out of GENERAL
-        // in the probe path). Transition from GENERAL on non-probe frames.
-        VkImageLayout storage_old = render_target_ctx.storage_image_initialized
-                                        ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                                        : VK_IMAGE_LAYOUT_UNDEFINED;
-        // On probe frames the image ended in GENERAL (one-shot cmd didn't
-        // transition it back), so we must always go from GENERAL if we just ran
-        // the probe.
-        if (need_probe) storage_old = VK_IMAGE_LAYOUT_GENERAL;
+		// Storage image: probe already left it in TRANSFER_SRC (it writes then
+		// end_one_time_cmd flushes, but we never transitioned it out of GENERAL
+		// in the probe path). Transition from GENERAL on non-probe frames.
+		VkImageLayout storage_old = render_target_ctx.storage_image_initialized ?
+		                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
+		                                VK_IMAGE_LAYOUT_UNDEFINED;
+		// On probe frames the image ended in GENERAL (one-shot cmd didn't
+		// transition it back), so we must always go from GENERAL if we just ran
+		// the probe.
+		if (need_probe)
+			storage_old = VK_IMAGE_LAYOUT_GENERAL;
 
-        transition_layout(cmd, render_target_ctx.storage_image,
-                          storage_old, VK_IMAGE_LAYOUT_GENERAL,
-                          0, VK_ACCESS_SHADER_WRITE_BIT,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.storage_image, storage_old,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-        VkImageLayout swap_old = swapchain_ctx.image_initialized[image_index]
-                                     ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-                                     : VK_IMAGE_LAYOUT_UNDEFINED;
-        transition_layout(cmd, swapchain_ctx.images[image_index],
-                          swap_old, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+		VkImageLayout swap_old = swapchain_ctx.image_initialized[image_index] ?
+		                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR :
+		                             VK_IMAGE_LAYOUT_UNDEFINED;
+		transition_layout(cmd, swapchain_ctx.images[image_index], swap_old,
+		                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                compute_ctx.pipeline_layout, 0, 1,
-                                &render_target_ctx.descriptor_set, 0, nullptr);
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline);
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout, 0,
+		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
 
-        PathTracerPushConstants pc{};
-        pc.frame               = frame_number;
-        pc.material_count      = scene_ctx.material_count;
-        pc.selected_mesh_index = selection_ctx.selected_mesh_index;
-        pc.outline_width       = selection_ctx.outline_width;
-        pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
-        pc.stage               = 1u;   // path trace pass
-        pc.outline_color       = selection_ctx.outline_color;
-        vkCmdPushConstants(cmd, compute_ctx.pipeline_layout,
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+		PathTracerPushConstants pc{};
+		pc.frame               = frame_number;
+		pc.material_count      = scene_ctx.material_count;
+		pc.selected_mesh_index = selection_ctx.selected_mesh_index;
+		pc.outline_width       = selection_ctx.outline_width;
+		pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
+		pc.stage               = 1u;        // path trace pass
+		pc.outline_color       = selection_ctx.outline_color;
+		vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+		                   sizeof(pc), &pc);
 
-        vkCmdDispatch(cmd, tiles_x, tiles_y, 1);
+		vkCmdDispatch(cmd, tiles_x, tiles_y, 1);
 
-        render_target_ctx.storage_image_initialized  = true;
-        swapchain_ctx.image_initialized[image_index] = true;
-        frame_number++;
+		render_target_ctx.storage_image_initialized  = true;
+		swapchain_ctx.image_initialized[image_index] = true;
+		frame_number++;
 
-        // ── Blit pathtracer output → swapchain ────────────────────────────────
-        transition_layout(cmd, render_target_ctx.storage_image,
-                          VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+		// ── Blit pathtracer output → swapchain ────────────────────────────────
+		transition_layout(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_GENERAL,
+		                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		                  VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-        VkImageBlit blit{};
-        blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        blit.srcOffsets[1]  = { static_cast<int32_t>(swapchain_ctx.extent.width),
-                                static_cast<int32_t>(swapchain_ctx.extent.height), 1 };
-        blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        blit.dstOffsets[1]  = { static_cast<int32_t>(swapchain_ctx.extent.width),
-                                static_cast<int32_t>(swapchain_ctx.extent.height), 1 };
-        vkCmdBlitImage(cmd,
-                       render_target_ctx.storage_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &blit, VK_FILTER_LINEAR);
+		VkImageBlit blit{};
+		blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+		blit.srcOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.extent.width),
+		                       static_cast<int32_t>(swapchain_ctx.extent.height), 1};
+		blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+		blit.dstOffsets[1]  = {static_cast<int32_t>(swapchain_ctx.extent.width),
+		                       static_cast<int32_t>(swapchain_ctx.extent.height), 1};
+		vkCmdBlitImage(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		               swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+		               &blit, VK_FILTER_LINEAR);
 
-        // ── ImGui overlay ─────────────────────────────────────────────────────
-        VkImageMemoryBarrier overlay_barrier{};
-        overlay_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        overlay_barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        overlay_barrier.newLayout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        overlay_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        overlay_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        overlay_barrier.image               = swapchain_ctx.images[image_index];
-        overlay_barrier.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-        overlay_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-        overlay_barrier.dstAccessMask =
-            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &overlay_barrier);
+		// ── ImGui overlay ─────────────────────────────────────────────────────
+		VkImageMemoryBarrier overlay_barrier{};
+		overlay_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		overlay_barrier.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		overlay_barrier.newLayout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		overlay_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		overlay_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		overlay_barrier.image               = swapchain_ctx.images[image_index];
+		overlay_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		overlay_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+		overlay_barrier.dstAccessMask =
+		    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0,
+		                     nullptr, 1, &overlay_barrier);
 
-        VkRenderPassBeginInfo render_pass_info{};
-        render_pass_info.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        render_pass_info.renderPass  = overlay_ctx.render_pass;
-        render_pass_info.framebuffer = overlay_ctx.framebuffers[image_index];
-        render_pass_info.renderArea  = { { 0, 0 }, swapchain_ctx.extent };
-        vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-        vkCmdEndRenderPass(cmd);
+		VkRenderPassBeginInfo render_pass_info{};
+		render_pass_info.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		render_pass_info.renderPass  = overlay_ctx.render_pass;
+		render_pass_info.framebuffer = overlay_ctx.framebuffers[image_index];
+		render_pass_info.renderArea  = {{0, 0}, swapchain_ctx.extent};
+		vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+		vkCmdEndRenderPass(cmd);
 
-        check_vk_result(vkEndCommandBuffer(cmd));
+		check_vk_result(vkEndCommandBuffer(cmd));
 
-        // ── Submit ────────────────────────────────────────────────────────────
-        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        VkSubmitInfo submit{};
-        submit.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit.waitSemaphoreCount   = 1;
-        submit.pWaitSemaphores      = &sync_ctx.image_available[frame_idx];
-        submit.pWaitDstStageMask    = &wait_stage;
-        submit.commandBufferCount   = 1;
-        submit.pCommandBuffers      = &cmd;
-        submit.signalSemaphoreCount = 1;
-        submit.pSignalSemaphores    = &sync_ctx.render_finished[image_index];
-        vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit, sync_ctx.in_flight);
+		// ── Submit ────────────────────────────────────────────────────────────
+		VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+		VkSubmitInfo         submit{};
+		submit.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submit.waitSemaphoreCount   = 1;
+		submit.pWaitSemaphores      = &sync_ctx.image_available[frame_idx];
+		submit.pWaitDstStageMask    = &wait_stage;
+		submit.commandBufferCount   = 1;
+		submit.pCommandBuffers      = &cmd;
+		submit.signalSemaphoreCount = 1;
+		submit.pSignalSemaphores    = &sync_ctx.render_finished[image_index];
+		vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit, sync_ctx.in_flight);
 
-        // ── Present ───────────────────────────────────────────────────────────
-        VkPresentInfoKHR present{};
-        present.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present.waitSemaphoreCount = 1;
-        present.pWaitSemaphores    = &sync_ctx.render_finished[image_index];
-        present.swapchainCount     = 1;
-        present.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
-        present.pImageIndices      = &image_index;
-        VkResult present_result = vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present);
-        if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
-            handle_resize(frame_number, fb_w, fb_h);
-            probe_ctx.valid = false;
-        }
-    }
+		// ── Present ───────────────────────────────────────────────────────────
+		VkPresentInfoKHR present{};
+		present.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+		present.waitSemaphoreCount = 1;
+		present.pWaitSemaphores    = &sync_ctx.render_finished[image_index];
+		present.swapchainCount     = 1;
+		present.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
+		present.pImageIndices      = &image_index;
+		VkResult present_result    = vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present);
+		if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
+			handle_resize(frame_number, fb_w, fb_h);
+			probe_ctx.valid = false;
+		}
+	}
 
-    vkDeviceWaitIdle(vulkan_ctx.device);
+	vkDeviceWaitIdle(vulkan_ctx.device);
 }
