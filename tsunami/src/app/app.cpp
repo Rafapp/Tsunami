@@ -2641,7 +2641,8 @@ void App::MainLoop() {
 			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
 		}
 
-		const ui::SelectionPanelResult selection_panel_result = ui::drawSelectionPanel(m_scene.get());
+		const ui::SelectionPanelResult selection_panel_result =
+		    ui::drawSelectionPanel(m_scene.get());
 
 		if (controls_changed) {
 			if (m_audio_controller != nullptr) {
