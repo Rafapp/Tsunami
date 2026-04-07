@@ -161,7 +161,7 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 32;
+static const int   MAX_BOUNCES = 4;
 static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
