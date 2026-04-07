@@ -44,9 +44,13 @@ struct HiPRDebugSettings {
 struct LightingSettings {
 	bool  skybox_enabled            = true;
 	bool  directional_light_enabled = true;
-	float sun_elevation_deg         = 90.0f;        // 90 = straight above → dir (0,1,0)
+	float sun_elevation_deg         = 90.0f;
 	float sun_azimuth_deg           = 0.0f;
 	float sun_intensity             = 10.0f;
+};
+
+struct CameraSettings {
+	float fov_deg = 60.0f;
 };
 
 struct SelectionContext {
@@ -55,6 +59,7 @@ struct SelectionContext {
 	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::HiPR;
 	HiPRDebugSettings          hipr_debug{};
 	LightingSettings           lighting{};
+	CameraSettings             camera{};
 	GPUMaterial                editor_material{};
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;

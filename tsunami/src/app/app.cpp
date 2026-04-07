@@ -2696,6 +2696,8 @@ void App::MainLoop() {
 	// Initialise fly camera from the scene camera
 	FlyCamera fly_cam(m_scene->m_camera.m_position, m_scene->m_camera.m_target,
 	                  m_scene->m_camera.m_fov, 0.5f);
+	ui::selection_ctx.camera.fov_deg = fly_cam.m_fov;
+	float last_camera_fov            = ui::selection_ctx.camera.fov_deg;
 
 	double   last_time    = glfwGetTime();
 	uint32_t frame_number = 0;
@@ -2833,6 +2835,19 @@ void App::MainLoop() {
 			    cur.sun_intensity != last_lighting.sun_intensity) {
 				frame_number  = 0;
 				last_lighting = cur;
+			}
+		}
+
+		{
+			float cur_camera_fov = std::clamp(ui::selection_ctx.camera.fov_deg, 20.0f, 120.0f);
+			ui::selection_ctx.camera.fov_deg = cur_camera_fov;
+			if (std::abs(cur_camera_fov - last_camera_fov) > 1.0e-4f) {
+				last_camera_fov      = cur_camera_fov;
+				fly_cam.m_fov        = cur_camera_fov;
+				m_scene->m_camera.m_fov = cur_camera_fov;
+				frame_number         = 0;
+				needs_visibility_pass = true;
+				hipr_force_clear_order = true;
 			}
 		}
 

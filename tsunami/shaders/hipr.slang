@@ -176,6 +176,7 @@ struct Ray { float3 origin; float3 dir; };
 struct Hit {
     float  t;
     float3 normal;
+    float3 geom_normal;
     float3 tangent;
     float3 bitangent;
     float2 uv;
@@ -227,7 +228,14 @@ struct RNG {
 };
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
-struct VertexAttribs { float3 normal; float2 uv; float4 tangent;};
+struct VertexAttribs {
+    float3 normal;
+    float2 uv;
+    float4 tangent;
+    float3 p0;
+    float3 p1;
+    float3 p2;
+};
 
 float3 safeNormalize(float3 v, float3 fallback) {
     float len2 = dot(v, v);
@@ -260,6 +268,9 @@ VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     a.uv = vertices_buf[voff+i0].uv*w0 +
            vertices_buf[voff+i1].uv*bary.x +
            vertices_buf[voff+i2].uv*bary.y;
+    a.p0 = vertices_buf[voff+i0].position;
+    a.p1 = vertices_buf[voff+i1].position;
+    a.p2 = vertices_buf[voff+i2].position;
     return a;
 }
 
@@ -339,12 +350,11 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     uint instID    = q.CommittedInstanceID();
     uint primID    = q.CommittedPrimitiveIndex();
     float2 bary    = q.CommittedTriangleBarycentrics();
-    bool frontFace = q.CommittedTriangleFrontFace();
+    bool queryFrontFace = q.CommittedTriangleFrontFace();
 
     VertexAttribs attr = fetchAttribs(instID, primID, bary);
 
     hit.uv         = attr.uv;
-    hit.front_face = frontFace;
     hit.instanceID = int(instID);
     hit.primID     = int(primID);
     hit.matIndex   = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
@@ -362,6 +372,23 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     float3 N = safeNormalize(mul(attr.normal, Minv), float3(0.0f, 1.0f, 0.0f)); // inverse-transpose
     float3 T = mul(attr.tangent.xyz, M); // forward transform
     float  handedness = (attr.tangent.w < 0.0f) ? -1.0f : 1.0f;
+    if (determinant(M) < 0.0f) {
+        handedness = -handedness;
+    }
+
+    float3 Ng_local = cross(attr.p1 - attr.p0, attr.p2 - attr.p0);
+    float3 Ng_a = safeNormalize(mul(Ng_local, Minv), N);
+    float3 Ng_b = safeNormalize(mul(Ng_local, M), N);
+    bool   a_front = dot(ray.dir, Ng_a) < 0.0f;
+    bool   b_front = dot(ray.dir, Ng_b) < 0.0f;
+    float3 Ng_world = Ng_a;
+    if (a_front != queryFrontFace && b_front == queryFrontFace) {
+        Ng_world = Ng_b;
+    } else if (!(a_front == queryFrontFace && b_front != queryFrontFace)) {
+        // Tie-breaker: prefer the geometric normal most aligned with the
+        // transformed shading normal.
+        Ng_world = (abs(dot(Ng_b, N)) > abs(dot(Ng_a, N))) ? Ng_b : Ng_a;
+    }
 
     // Re-orthogonalize T against the (now world-space) N.
     T = T - N * dot(N, T);
@@ -386,7 +413,22 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
             N);
     }
 
-    hit.normal    = frontFace ? N_world : -N_world;
+    bool frontFace = dot(ray.dir, Ng_world) < 0.0f;
+    if (!frontFace) {
+        Ng_world = -Ng_world;
+    }
+    hit.front_face = frontFace;
+
+    // Keep shading and geometric normals in the same hemisphere to avoid
+    // mirrored-looking response on rotated or negatively-scaled instances.
+    if (dot(N_world, Ng_world) < 0.0f) {
+        N_world = -N_world;
+        T = -T;
+        B = -B;
+    }
+
+    hit.normal      = N_world;
+    hit.geom_normal = Ng_world;
     hit.tangent   = T;
     hit.bitangent = B;
     return true;
@@ -487,10 +529,14 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
         float3 hitPos   = ray.origin + hit.t * ray.dir;
         float3 view_dir = -ray.dir;
 
-        // Pass the unflipped geometric normal to OpenPBR so it can detect back-face
-        // hits via dot(view_dir, shading_normal) < 0 and swap IORs for refraction.
-        // hit.normal is face-forwarded (always toward the ray origin), so we undo that.
-        float3 openpbr_normal = hit.front_face ? hit.normal : -hit.normal;
+        // For opaque surfaces, keep the face-forwarded shading normal to avoid
+        // winding-dependent mirrored seams across triangles.
+        // For transmissive/partially-opaque materials, preserve side information
+        // so OpenPBR can swap IORs correctly on back-face hits.
+        float3 openpbr_normal = hit.normal;
+        if (mat.transmission_weight > 0.0f || mat.geometry_opacity < 0.999f) {
+            openpbr_normal = hit.front_face ? hit.normal : -hit.normal;
+        }
         OpenPBR_ResolvedInputs inputs = material_to_openpbr(
             mat, hit.uv, openpbr_normal, hit.tangent, hit.bitangent);
 
@@ -508,7 +554,8 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
             float  g_sun_intensity = push.sun_intensity;
 
             bool sun_front = dot(hit.normal,  g_sun_dir) > 0.f;
-            bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f && inputs.transmission_weight > 0.f;
+            bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f &&
+                             inputs.transmission_weight > 0.f;
 
             int occluder_front = traceOccluderInstance(hitPos, hit.normal, g_sun_dir, T_MAX);
             if (collect_influence && occluder_front >= 0 &&
@@ -551,11 +598,12 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
             throughput /= p;
         }
 
-        // Offset origin to the same side as the outgoing ray to avoid self-intersection.
-        // offset_n always points toward light_dir — correct for both reflection
-        // (same hemisphere as hit.normal) and transmission (opposite hemisphere).
-        float3 offset_n = dot(light_dir, hit.normal) >= 0.f ? hit.normal : -hit.normal;
-        ray.origin = hitPos + offset_n * T_MIN;
+        // Adaptive ray epsilon reduces self-intersection on large scenes while
+        // keeping close-up precision.
+        float  ray_eps  = max(T_MIN, hit.t * 1.0e-4f);
+        float3 offset_n =
+            dot(light_dir, hit.geom_normal) >= 0.0f ? hit.geom_normal : -hit.geom_normal;
+        ray.origin = hitPos + offset_n * ray_eps;
         ray.dir    = light_dir;
     }
 

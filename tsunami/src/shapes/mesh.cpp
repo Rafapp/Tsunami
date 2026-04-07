@@ -75,6 +75,9 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
                                     const aiMatrix4x4&                  parent_transform,
                                     std::vector<std::unique_ptr<Mesh>>& result) {
 	aiMatrix4x4 world = parent_transform * node->mTransformation;
+	const glm::mat4 glm_transform = ai_to_glm(world);
+	const glm::mat3 linear_transform(glm_transform);
+	const glm::mat3 normal_matrix = glm::transpose(glm::inverse(linear_transform));
 
 	for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
 		const unsigned int mesh_idx = node->mMeshes[i];
@@ -94,12 +97,15 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		verts.reserve(ai_mesh->mNumVertices);
 		for (unsigned int v = 0; v < ai_mesh->mNumVertices; ++v) {
 			GPUVertex gv{};
-			gv.position = {ai_mesh->mVertices[v].x, ai_mesh->mVertices[v].y,
-			               ai_mesh->mVertices[v].z};
+			const glm::vec3 local_pos(ai_mesh->mVertices[v].x, ai_mesh->mVertices[v].y,
+			                          ai_mesh->mVertices[v].z);
+			const glm::vec4 world_pos = glm_transform * glm::vec4(local_pos, 1.0f);
+			gv.position               = glm::vec3(world_pos);
 
 			if (has_normals) {
-				gv.normal = safe_normalize(glm::vec3(ai_mesh->mNormals[v].x, ai_mesh->mNormals[v].y,
-				                                     ai_mesh->mNormals[v].z),
+				gv.normal = safe_normalize(normal_matrix *
+				                               glm::vec3(ai_mesh->mNormals[v].x, ai_mesh->mNormals[v].y,
+				                                         ai_mesh->mNormals[v].z),
 				                           glm::vec3(0.0f, 1.0f, 0.0f));
 			} else {
 				gv.normal = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -115,9 +121,11 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 				const auto& b = ai_mesh->mBitangents[v];
 
 				glm::vec3 tangent =
-				    safe_normalize(glm::vec3(t.x, t.y, t.z), build_orthonormal_tangent(gv.normal));
+				    safe_normalize(linear_transform * glm::vec3(t.x, t.y, t.z),
+				                   build_orthonormal_tangent(gv.normal));
 				glm::vec3 bitangent =
-				    safe_normalize(glm::vec3(b.x, b.y, b.z), glm::cross(gv.normal, tangent));
+				    safe_normalize(linear_transform * glm::vec3(b.x, b.y, b.z),
+				                   glm::cross(gv.normal, tangent));
 				glm::vec3 normal = gv.normal;
 				tangent          = safe_normalize(tangent - normal * glm::dot(normal, tangent),
 				                                  build_orthonormal_tangent(normal));
@@ -184,24 +192,24 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		    .ior(ior)
 		    .transmission(transmission);
 
-		// Transmission stuff
-		material->m_gpu.transmission_depth = 0.f;
-		material->m_gpu.transmission_color =
-		    glm::vec4(albedo, 1.f);        // default to albedo if no transmission color provided
-		glm::mat4 glm_transform = ai_to_glm(world);
+			// Transmission stuff
+			material->m_gpu.transmission_depth = 0.f;
+			material->m_gpu.transmission_color =
+			    glm::vec4(albedo, 1.f);        // default to albedo if no transmission color provided
 
-		Transform transform{};
-		transform.m_transform        = glm_transform;
-		transform.m_inverseTransform = glm::inverse(glm_transform);
+			Transform transform{};
+			// World transform is baked into vertices for glTF meshes.
+			// Using identity here avoids TLAS/shader transform convention mismatches.
+			transform.m_transform        = glm::mat4(1.0f);
+			transform.m_inverseTransform = glm::mat4(1.0f);
 
 		result.push_back(std::make_unique<Mesh>(std::move(verts), std::move(indices), transform,
 		                                        std::move(material),
 		                                        build_gltf_mesh_name(node, ai_mesh, mesh_idx)));
 
-		std::cout << "[Mesh::load_gltf] node=" << node->mName.C_Str() << " mesh_idx=" << mesh_idx
-		          << " pos=(" << glm_transform[3][0] << ", " << glm_transform[3][1] << ", "
-		          << glm_transform[3][2] << ")\n";
-	}
+			std::cout << "[Mesh::load_gltf] node=" << node->mName.C_Str() << " mesh_idx=" << mesh_idx
+			          << " (transform baked)\n";
+		}
 
 	for (unsigned int c = 0; c < node->mNumChildren; ++c) {
 		append_gltf_node_meshes(scene, node->mChildren[c], world, result);

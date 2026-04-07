@@ -180,6 +180,10 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		ImGui::EndDisabled();
 	}
 
+	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::SliderFloat("FOV", &selection_ctx.camera.fov_deg, 20.0f, 120.0f, "%.1f deg");
+	}
+
 	ImGui::Text("Scene objects: %d",
 	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
 	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
