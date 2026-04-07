@@ -2842,12 +2842,12 @@ void App::MainLoop() {
 			float cur_camera_fov = std::clamp(ui::selection_ctx.camera.fov_deg, 20.0f, 120.0f);
 			ui::selection_ctx.camera.fov_deg = cur_camera_fov;
 			if (std::abs(cur_camera_fov - last_camera_fov) > 1.0e-4f) {
-				last_camera_fov      = cur_camera_fov;
-				fly_cam.m_fov        = cur_camera_fov;
+				last_camera_fov         = cur_camera_fov;
+				fly_cam.m_fov           = cur_camera_fov;
 				m_scene->m_camera.m_fov = cur_camera_fov;
-				frame_number         = 0;
-				needs_visibility_pass = true;
-				hipr_force_clear_order = true;
+				frame_number            = 0;
+				needs_visibility_pass   = true;
+				hipr_force_clear_order  = true;
 			}
 		}
 
