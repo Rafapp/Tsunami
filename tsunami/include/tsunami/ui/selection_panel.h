@@ -32,7 +32,7 @@ struct ObjectIdEntry {
 
 struct HiPRDebugSettings {
 	uint32_t rank_count                     = 8;
-	uint32_t frames_per_object             = 300;
+	uint32_t frames_per_object              = 300;
 	uint32_t update_period_frames           = 8;
 	bool     incremental_sorting            = true;
 	bool     full_resort_on_material_change = false;

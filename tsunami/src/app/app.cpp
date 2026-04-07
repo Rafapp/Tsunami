@@ -2718,7 +2718,7 @@ void App::MainLoop() {
 	int prev_f11 = GLFW_RELEASE;
 	int prev_lmb = GLFW_RELEASE;
 
-	ui::LightingSettings last_lighting = ui::selection_ctx.lighting;
+	ui::LightingSettings last_lighting               = ui::selection_ctx.lighting;
 	bool                 hipr_object_sampling_active = false;
 	bool                 hipr_object_sampling_done   = false;
 	uint32_t             hipr_object_sampling_rank   = 0;
@@ -3071,11 +3071,11 @@ void App::MainLoop() {
 		const bool hipr_full_scene_sampling =
 		    hipr_mode && hipr_active && hipr_object_sampling_done && !camera_moving_this_frame;
 
-		bool run_stage1 = true;
-		bool run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
-		bool run_single_rank_stage4   = false;
-		bool run_ranked_stage4_loop   = false;
-		int32_t single_rank_stage4_id = -1;
+		bool    run_stage1 = true;
+		bool    run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
+		bool    run_single_rank_stage4 = false;
+		bool    run_ranked_stage4_loop = false;
+		int32_t single_rank_stage4_id  = -1;
 		if (obj_id_mode) {
 			run_stage1 = false;
 			run_stage2 = true;
@@ -3119,10 +3119,10 @@ void App::MainLoop() {
 		if (hipr_object_sampling_enabled) {
 			// Keep ranking responsive while sampling the selected object (rank 0), then
 			// freeze it while we march through the remaining ranks.
-			hipr_refresh = use_hipr_ranked &&
-			               (needs_visibility_pass || frame_number == 0 ||
-			                (hipr_object_sampling_rank == 0u &&
-			                 (frame_number % hipr_update_period) == 0));
+			hipr_refresh =
+			    use_hipr_ranked &&
+			    (needs_visibility_pass || frame_number == 0 ||
+			     (hipr_object_sampling_rank == 0u && (frame_number % hipr_update_period) == 0));
 		} else if (hipr_full_scene_sampling) {
 			hipr_refresh = false;
 		}
@@ -3165,11 +3165,11 @@ void App::MainLoop() {
 
 		// Stage 1: trace selected object pixels and gather influence.
 		if (run_stage1) {
-			pc.stage = 1;
+			pc.stage            = 1;
 			pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
-			pc.frame = hipr_object_sampling_enabled ?
-			               hipr_object_sampling_frame :
-			               (hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number);
+			pc.frame            = hipr_object_sampling_enabled ?
+			                          hipr_object_sampling_frame :
+			                          (hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number);
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
@@ -3237,7 +3237,7 @@ void App::MainLoop() {
 			// - Obj ID mode: flat object-id visualization.
 			// - HiPR Vis mode: reveal/composite pass.
 			// - Fallback: full-scene path tracing when no ranked HiPR pass is active.
-			pc.stage = 2;
+			pc.stage            = 2;
 			pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
 			pc.frame            = hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number;
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
