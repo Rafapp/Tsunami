@@ -132,7 +132,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	}
 
 	int         debug_view_mode  = static_cast<int>(selection_ctx.debug_view_mode);
-	const char* debug_view_items = "Beauty\0Object IDs\0";
+	const char* debug_view_items = "HiPR\0Obj ID\0HiPR Vis\0Naive\0";
 	if (ImGui::Combo("Renderer view", &debug_view_mode, debug_view_items)) {
 		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
 	}

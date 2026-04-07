@@ -17,8 +17,10 @@ enum class MaterialEditMode : int {
 };
 
 enum class RenderDebugViewMode : int {
-	Beauty    = 0,
+	HiPR    = 0,
 	ObjectIds = 1,
+	HiPRVis = 2,
+	Naive   = 3,
 };
 
 struct ObjectIdEntry {
@@ -31,7 +33,7 @@ struct ObjectIdEntry {
 struct SelectionContext {
 	int                        selected_mesh_index = -1;
 	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
-	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::Beauty;
+	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::HiPR;
 	GPUMaterial                editor_material{};
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;

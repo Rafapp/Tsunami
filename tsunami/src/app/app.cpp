@@ -71,6 +71,8 @@ struct LutTexture3D {
 };
 static constexpr uint32_t NUM_LUTS              = 8;
 static constexpr uint32_t MAX_MATERIAL_TEXTURES = 256;
+static constexpr uint32_t HIPR_TOP_K            = 16;
+static constexpr uint32_t HIPR_UPDATE_PERIOD    = 8;
 
 // =======================
 // === Context structs ===
@@ -90,6 +92,17 @@ struct SceneContext {
 	VkBuffer      index_buffer    = VK_NULL_HANDLE;
 	VmaAllocation index_alloc     = VK_NULL_HANDLE;
 	uint32_t      mesh_count      = 0;
+	uint32_t      hipr_top_k      = HIPR_TOP_K;
+	VkBuffer      hipr_visible_count_buffer   = VK_NULL_HANDLE;
+	VmaAllocation hipr_visible_count_alloc    = VK_NULL_HANDLE;
+	VkBuffer      hipr_secondary_count_buffer = VK_NULL_HANDLE;
+	VmaAllocation hipr_secondary_count_alloc  = VK_NULL_HANDLE;
+	VkBuffer      hipr_shadow_count_buffer    = VK_NULL_HANDLE;
+	VmaAllocation hipr_shadow_count_alloc     = VK_NULL_HANDLE;
+	VkBuffer      hipr_score_buffer           = VK_NULL_HANDLE;
+	VmaAllocation hipr_score_alloc            = VK_NULL_HANDLE;
+	VkBuffer      hipr_order_buffer           = VK_NULL_HANDLE;
+	VmaAllocation hipr_order_alloc            = VK_NULL_HANDLE;
 } scene_ctx;
 #include "tsunami/audio/microphone_input.h"
 #include "tsunami/audio/reactive_audio_controller.h"
@@ -181,16 +194,20 @@ struct PathTracerPushConstants {
 	uint32_t  material_count      = 0;
 	int32_t   selected_mesh_index = -1;
 	uint32_t  outline_width       = 1;
-	int32_t   debug_view_mode     = static_cast<int32_t>(ui::RenderDebugViewMode::Beauty);
+	int32_t   debug_view_mode     = static_cast<int32_t>(ui::RenderDebugViewMode::HiPR);
 	uint32_t  stage               = 0;        // 0 = visibility pass, 1 = path trace selected object
 	uint32_t  _pad1               = 0;
 	uint32_t  _pad2               = 0;
 	glm::vec4 outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t  enable_tonemapping  = 1;
 	float     exposure_bias       = 2.0f;
+	uint32_t  hipr_object_count   = 0;
+	uint32_t  hipr_top_k          = HIPR_TOP_K;
+	int32_t   hipr_render_rank    = -1;
+	uint32_t  _pad3               = 0;
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 56);
+static_assert(sizeof(PathTracerPushConstants) == 72);
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -1980,6 +1997,34 @@ App::App() {
 		          << " verts, " << all_idxs.size() << " idxs\n";
 	}
 
+	// ======================================================
+	// === VIII.6  HiPR buffers (per-object influence stats)
+	// ======================================================
+	{
+		constexpr VkBufferUsageFlags SB = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		const uint32_t object_count     = std::max(scene_ctx.mesh_count, 1u);
+		scene_ctx.hipr_top_k            = std::min(HIPR_TOP_K, object_count);
+
+		std::vector<uint32_t> zero_counts(object_count, 0u);
+		std::vector<float>    zero_scores(object_count, 0.0f);
+		std::vector<int32_t>  empty_order(scene_ctx.hipr_top_k, -1);
+
+		scene_ctx.hipr_visible_count_buffer = create_and_upload_buffer(
+		    allocator, sizeof(uint32_t) * object_count, zero_counts.data(), SB,
+		    scene_ctx.hipr_visible_count_alloc);
+		scene_ctx.hipr_secondary_count_buffer = create_and_upload_buffer(
+		    allocator, sizeof(uint32_t) * object_count, zero_counts.data(), SB,
+		    scene_ctx.hipr_secondary_count_alloc);
+		scene_ctx.hipr_shadow_count_buffer = create_and_upload_buffer(
+		    allocator, sizeof(uint32_t) * object_count, zero_counts.data(), SB,
+		    scene_ctx.hipr_shadow_count_alloc);
+		scene_ctx.hipr_score_buffer = create_and_upload_buffer(
+		    allocator, sizeof(float) * object_count, zero_scores.data(), SB, scene_ctx.hipr_score_alloc);
+		scene_ctx.hipr_order_buffer = create_and_upload_buffer(
+		    allocator, sizeof(int32_t) * scene_ctx.hipr_top_k, empty_order.data(), SB,
+		    scene_ctx.hipr_order_alloc);
+	}
+
 	// ===================================================
 	// === VIII.5  Upload OpenPBR LUTs + scene textures
 	// ===================================================
@@ -2004,6 +2049,11 @@ App::App() {
 	//   9  = lut_textures_2d[8]      SAMPLED_IMAGE × NUM_LUTS
 	//  10  = lut_textures_3d[8]      SAMPLED_IMAGE × NUM_LUTS
 	//  11  = material_textures[256]  SAMPLED_IMAGE × MAX_MATERIAL_TEXTURES
+	//  14  = hipr visible counts     STORAGE_BUFFER
+	//  15  = hipr secondary counts   STORAGE_BUFFER
+	//  16  = hipr shadow counts      STORAGE_BUFFER
+	//  17  = hipr scores             STORAGE_BUFFER
+	//  18  = hipr order              STORAGE_BUFFER
 	{
 		std::vector<VkDescriptorSetLayoutBinding> bindings = {
 		    make_binding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
@@ -2019,6 +2069,11 @@ App::App() {
 		    make_binding(11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MATERIAL_TEXTURES),
 		    make_binding(12, VK_DESCRIPTOR_TYPE_SAMPLER),
 		    make_binding(13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+		    make_binding(14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+		    make_binding(15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+		    make_binding(16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+		    make_binding(17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+		    make_binding(18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -2034,7 +2089,7 @@ App::App() {
 	{
 		std::vector<VkDescriptorPoolSize> ps = {
 		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3},
-		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10},
 		    {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
 		    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * NUM_LUTS + MAX_MATERIAL_TEXTURES},
 		};
@@ -2155,6 +2210,28 @@ App::App() {
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 8, 0, 1,
 		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &ib});
+		// 14-18 — HiPR buffers
+		VkDescriptorBufferInfo hipr_visible{scene_ctx.hipr_visible_count_buffer, 0, VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 14, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &hipr_visible});
+		VkDescriptorBufferInfo hipr_secondary{scene_ctx.hipr_secondary_count_buffer, 0,
+		                                      VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 15, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &hipr_secondary});
+		VkDescriptorBufferInfo hipr_shadow{scene_ctx.hipr_shadow_count_buffer, 0, VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 16, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &hipr_shadow});
+		VkDescriptorBufferInfo hipr_scores{scene_ctx.hipr_score_buffer, 0, VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 17, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &hipr_scores});
+		VkDescriptorBufferInfo hipr_order{scene_ctx.hipr_order_buffer, 0, VK_WHOLE_SIZE};
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 18, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &hipr_order});
 		// 9 — LUT 2D (real or dummy fallback per slot)
 		std::vector<VkDescriptorImageInfo> lut2(NUM_LUTS);
 		for (uint32_t i = 0; i < NUM_LUTS; ++i) {
@@ -2504,6 +2581,39 @@ App::~App() {
 		scene_ctx.index_buffer = VK_NULL_HANDLE;
 		scene_ctx.index_alloc  = VK_NULL_HANDLE;
 	}
+	if (scene_ctx.hipr_visible_count_buffer != VK_NULL_HANDLE &&
+	    scene_ctx.hipr_visible_count_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_visible_count_buffer,
+		                 scene_ctx.hipr_visible_count_alloc);
+		scene_ctx.hipr_visible_count_buffer = VK_NULL_HANDLE;
+		scene_ctx.hipr_visible_count_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.hipr_secondary_count_buffer != VK_NULL_HANDLE &&
+	    scene_ctx.hipr_secondary_count_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_secondary_count_buffer,
+		                 scene_ctx.hipr_secondary_count_alloc);
+		scene_ctx.hipr_secondary_count_buffer = VK_NULL_HANDLE;
+		scene_ctx.hipr_secondary_count_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.hipr_shadow_count_buffer != VK_NULL_HANDLE &&
+	    scene_ctx.hipr_shadow_count_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_shadow_count_buffer,
+		                 scene_ctx.hipr_shadow_count_alloc);
+		scene_ctx.hipr_shadow_count_buffer = VK_NULL_HANDLE;
+		scene_ctx.hipr_shadow_count_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.hipr_score_buffer != VK_NULL_HANDLE && scene_ctx.hipr_score_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_score_buffer,
+		                 scene_ctx.hipr_score_alloc);
+		scene_ctx.hipr_score_buffer = VK_NULL_HANDLE;
+		scene_ctx.hipr_score_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.hipr_order_buffer != VK_NULL_HANDLE && scene_ctx.hipr_order_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_order_buffer,
+		                 scene_ctx.hipr_order_alloc);
+		scene_ctx.hipr_order_buffer = VK_NULL_HANDLE;
+		scene_ctx.hipr_order_alloc  = VK_NULL_HANDLE;
+	}
 
 	if (as_ctx.tlas != VK_NULL_HANDLE) {
 		vkDestroyAccelerationStructureKHR(vulkan_ctx.device, as_ctx.tlas, nullptr);
@@ -2577,9 +2687,10 @@ void App::MainLoop() {
 	// whenever the camera moves, resizes, or a new object is selected.
 	bool needs_visibility_pass = true;
 
-	// While the user is actively editing a material, only stage 1 runs.
-	// Once editing ends, stage 2 resumes automatically.
+	// Tracks active material drag/edit interactions from the selection panel.
 	bool material_edit_mode = false;
+	bool camera_was_moving  = false;
+	ui::RenderDebugViewMode last_render_mode = ui::selection_ctx.debug_view_mode;
 
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
@@ -2646,6 +2757,12 @@ void App::MainLoop() {
 		const ui::SelectionPanelResult selection_panel_result =
 		    ui::drawSelectionPanel(m_scene.get());
 
+		if (ui::selection_ctx.debug_view_mode != last_render_mode) {
+			frame_number          = 0;
+			needs_visibility_pass = true;
+			last_render_mode      = ui::selection_ctx.debug_view_mode;
+		}
+
 		if (controls_changed) {
 			if (m_audio_controller != nullptr) {
 				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
@@ -2657,7 +2774,7 @@ void App::MainLoop() {
 		}
 
 		if (selection_panel_result.material_edit_active && !material_edit_mode) {
-			// Entering edit mode: restart accumulation for selected-object-only updates.
+			// Entering edit mode: restart accumulation at the edited value.
 			material_edit_mode = true;
 			frame_number       = 0;
 		}
@@ -2736,10 +2853,16 @@ void App::MainLoop() {
 		prev_f6 = f6;
 
 		// ---- Fly-camera update ----------------------------------------------
-		if (fly_cam.update(m_window->handle(), dt)) {
+		const bool camera_moving_this_frame = fly_cam.update(m_window->handle(), dt);
+		if (camera_moving_this_frame) {
 			frame_number          = 0;
 			needs_visibility_pass = true;
 		}
+		if (!camera_moving_this_frame && camera_was_moving) {
+			// Start a fresh accumulation the first frame after camera motion stops.
+			frame_number = 0;
+		}
+		camera_was_moving = camera_moving_this_frame;
 
 		// Upload camera to GPU (persistent mapping – no staging needed)
 		const GPUCamera gpu_camera = fly_cam.pack();
@@ -2815,11 +2938,51 @@ void App::MainLoop() {
 		pc.outline_color       = ui::selection_ctx.outline_color;
 		pc.enable_tonemapping  = overlay_ctx.controls.render_post.enable_tonemapping ? 1u : 0u;
 		pc.exposure_bias       = overlay_ctx.controls.render_post.exposure_bias;
+		pc.hipr_object_count   = scene_ctx.mesh_count;
+		pc.hipr_top_k          = scene_ctx.hipr_top_k;
+		pc.hipr_render_rank    = -1;
 
 		const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
 		const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;
 
-		// ── Stage 0: visibility pass ─────────────────────────────────────────
+		const auto render_mode = ui::selection_ctx.debug_view_mode;
+		const bool hipr_mode   = render_mode == ui::RenderDebugViewMode::HiPR;
+		const bool obj_id_mode = render_mode == ui::RenderDebugViewMode::ObjectIds;
+		const bool hipr_vis_mode = render_mode == ui::RenderDebugViewMode::HiPRVis;
+		const bool naive_mode    = render_mode == ui::RenderDebugViewMode::Naive;
+
+		const bool hipr_active = ui::selection_ctx.selected_mesh_index >= 0;
+		const bool use_hipr_ranked =
+		    (hipr_mode || hipr_vis_mode) && hipr_active && !camera_moving_this_frame;
+
+		bool run_stage1 = true;
+		bool run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
+		if (obj_id_mode) {
+			run_stage1 = false;
+			run_stage2 = true;
+		} else if (naive_mode) {
+			run_stage1 = false;
+			run_stage2 = true;
+		} else if (hipr_vis_mode) {
+			run_stage1 = hipr_active;
+			run_stage2 = true;        // Composite pass for reveal visualization.
+		}
+
+		const bool hipr_refresh = use_hipr_ranked &&
+		                          (needs_visibility_pass || frame_number == 0 ||
+		                           (frame_number % HIPR_UPDATE_PERIOD) == 0);
+
+		// Stage 10: clear per-object HiPR stats and ordering slots.
+		if (use_hipr_ranked && hipr_refresh) {
+			pc.stage = 10;
+			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			                   sizeof(pc), &pc);
+			const uint32_t clear_count =
+			    std::max(pc.hipr_object_count, std::max(pc.hipr_top_k, 1u));
+			vkCmdDispatch(cmd, (clear_count + 15) / 16, 1, 1);
+		}
+
+		// Stage 0: visibility pass.
 		if (needs_visibility_pass) {
 			pc.stage = 0;
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -2844,10 +3007,7 @@ void App::MainLoop() {
 			needs_visibility_pass = false;
 		}
 
-		const bool run_stage1 = true;
-		const bool run_stage2 = !material_edit_mode;
-
-		// ── Stage 1: selected object only ────────────────────────────────────
+		// Stage 1: trace selected object pixels and gather influence.
 		if (run_stage1) {
 			pc.stage = 1;
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -2855,7 +3015,23 @@ void App::MainLoop() {
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
 		}
 
-		if (run_stage1 && run_stage2) {
+		if (use_hipr_ranked && hipr_refresh) {
+			VkMemoryBarrier stats_barrier{};
+			stats_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+			stats_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			stats_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &stats_barrier, 0,
+			                     nullptr, 0, nullptr);
+
+			// Stage 3: build top-K HiPR ordering (selected object is rank 0).
+			pc.stage = 3;
+			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			                   sizeof(pc), &pc);
+			vkCmdDispatch(cmd, 1, 1, 1);
+		}
+
+		if (run_stage1 && (run_stage2 || use_hipr_ranked)) {
 			VkMemoryBarrier stage_barrier{};
 			stage_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
 			stage_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -2866,8 +3042,30 @@ void App::MainLoop() {
 			                     nullptr, 0, nullptr);
 		}
 
-		// ── Stage 2: everything except selected object ───────────────────────
+		if (use_hipr_ranked && run_stage2) {
+			// Stage 4: render by HiPR-ranked object order (skip rank 0; already handled by stage 1).
+			uint32_t stage4_end_rank = pc.hipr_top_k;
+			if (hipr_vis_mode) {
+				const uint32_t reveal_rank_count =
+				    std::min(pc.hipr_top_k, 1u + (frame_number / HIPR_UPDATE_PERIOD));
+				stage4_end_rank = reveal_rank_count;
+			}
+
+			for (uint32_t rank = 1; rank < stage4_end_rank; ++rank) {
+				pc.stage            = 4;
+				pc.hipr_render_rank = static_cast<int32_t>(rank);
+				vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+				                   sizeof(pc), &pc);
+				vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+			}
+		}
+
 		if (run_stage2) {
+			// Stage 2:
+			// - Naive mode: full-frame un-ordered path tracing.
+			// - Obj ID mode: flat object-id visualization.
+			// - HiPR Vis mode: reveal/composite pass.
+			// - Fallback: full-scene path tracing when no ranked HiPR pass is active.
 			pc.stage = 2;
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
@@ -2967,3 +3165,4 @@ void App::MainLoop() {
 		++frame_number;
 	}
 }
+

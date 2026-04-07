@@ -4,6 +4,10 @@
 
 static const uint NUM_LUTS         = 8;
 static const uint MAX_MAT_TEXTURES = 256;
+static const int  VIEW_MODE_HIPR      = 0;
+static const int  VIEW_MODE_OBJ_ID    = 1;
+static const int  VIEW_MODE_HIPR_VIS  = 2;
+static const int  VIEW_MODE_NAIVE     = 3;
 
 [[vk::binding(3, 0)]] SamplerState g_lut_sampler;
 [[vk::binding(9,  0)]] Texture2D<float4> openpbr_luts_2d[NUM_LUTS];
@@ -34,6 +38,10 @@ struct PushConstants {
     float4 outline_color;
     uint   enable_tonemapping;
     float  exposure_bias;
+    uint   hipr_object_count;
+    uint   hipr_top_k;
+    int    hipr_render_rank;
+    uint   _pad3;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
@@ -48,6 +56,11 @@ struct PushConstants {
 [[vk::binding(8,  0)]] StructuredBuffer<uint>          indices_buf;
 [[vk::binding(11, 0)]] Texture2D<float4>               material_textures[MAX_MAT_TEXTURES];
 [[vk::binding(13, 0)]] RWTexture2D<int>               object_id_image;
+[[vk::binding(14, 0)]] RWStructuredBuffer<uint>       hipr_visible_counts;
+[[vk::binding(15, 0)]] RWStructuredBuffer<uint>       hipr_secondary_counts;
+[[vk::binding(16, 0)]] RWStructuredBuffer<uint>       hipr_shadow_counts;
+[[vk::binding(17, 0)]] RWStructuredBuffer<float>      hipr_scores;
+[[vk::binding(18, 0)]] RWStructuredBuffer<int>        hipr_order;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -218,6 +231,23 @@ bool is_occluded(float3 origin, float3 normal, float3 dir, float tmax) {
     return q.CommittedStatus() != COMMITTED_NOTHING;
 }
 
+int traceOccluderInstance(float3 origin, float3 normal, float3 dir, float tmax) {
+    RayDesc sd;
+    sd.Origin    = origin + normal * 1e-3f;
+    sd.Direction = dir;
+    sd.TMin      = 0.f;
+    sd.TMax      = tmax;
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_NON_OPAQUE> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, sd);
+    while (q.Proceed()) {}
+
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+        return int(q.CommittedInstanceID());
+    }
+    return -1;
+}
+
 int traceVisibleInstance(Ray ray) {
     RayDesc rd;
     rd.Origin    = ray.origin;
@@ -366,7 +396,7 @@ float3 skyColor(float3 dir) {
 }
 
 // ─── Path tracing ─────────────────────────────────────────────────────────────
-float3 tracePath(Ray ray, inout RNG rng) {
+float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
     float3 throughput = float3(1, 1, 1);
     float3 radiance   = float3(0, 0, 0);
 
@@ -378,6 +408,11 @@ float3 tracePath(Ray ray, inout RNG rng) {
             // Ray escaped to sky — treat sky as an environment light
             radiance += throughput * skyColor(ray.dir);
             break;
+        }
+
+        if (collect_influence && bounce > 0 && hit.instanceID >= 0 &&
+            uint(hit.instanceID) < push.hipr_object_count) {
+            InterlockedAdd(hipr_secondary_counts[uint(hit.instanceID)], 1);
         }
 
         // ── Emission ──
@@ -408,13 +443,23 @@ float3 tracePath(Ray ray, inout RNG rng) {
             bool sun_front = dot(hit.normal,  g_sun_dir) > 0.f;
             bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f && inputs.transmission_weight > 0.f;
 
-            if (sun_front && !is_occluded(hitPos, hit.normal, g_sun_dir, T_MAX)) {
+            int occluder_front = traceOccluderInstance(hitPos, hit.normal, g_sun_dir, T_MAX);
+            if (collect_influence && occluder_front >= 0 &&
+                uint(occluder_front) < push.hipr_object_count) {
+                InterlockedAdd(hipr_shadow_counts[uint(occluder_front)], 1);
+            }
+            if (sun_front && occluder_front < 0) {
                 float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, g_sun_dir));
                 radiance += throughput * f * g_sun_color * g_sun_intensity;
             }
             // For back-hemisphere shadow rays, offset the origin toward the sun side
             // so the ray doesn't self-intersect with the surface it just hit.
-            if (sun_back && !is_occluded(hitPos, -hit.normal, -g_sun_dir, T_MAX)) {
+            int occluder_back = traceOccluderInstance(hitPos, -hit.normal, -g_sun_dir, T_MAX);
+            if (collect_influence && occluder_back >= 0 &&
+                uint(occluder_back) < push.hipr_object_count) {
+                InterlockedAdd(hipr_shadow_counts[uint(occluder_back)], 1);
+            }
+            if (sun_back && occluder_back < 0) {
                 float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, -g_sun_dir));
                 radiance += throughput * f * g_sun_color * g_sun_intensity;
             }
@@ -532,6 +577,18 @@ float3 debugColorForObjectId(int object_id) {
     return 0.15f + 0.85f * rgb;
 }
 
+int hiprRankForObject(int object_id) {
+    if (object_id < 0) return -1;
+    if (push.hipr_top_k == 0) return -1;
+    [loop]
+    for (uint rank = 0; rank < push.hipr_top_k; ++rank) {
+        if (hipr_order[rank] == object_id) {
+            return int(rank);
+        }
+    }
+    return -1;
+}
+
 float3 srgbToLinear(float3 color) {
     float3 cutoff = step(float3(0.04045f, 0.04045f, 0.04045f), color);
     float3 low    = color / 12.92f;
@@ -560,23 +617,88 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     uint2 pixel = dispatch_id.xy;
     uint2 dims;
     output_image.GetDimensions(dims.x, dims.y);
+
+    if (push.stage == 10) {
+        if (pixel.y != 0) return;
+        uint index = pixel.x;
+        if (index < push.hipr_object_count) {
+            hipr_visible_counts[index]   = 0u;
+            hipr_secondary_counts[index] = 0u;
+            hipr_shadow_counts[index]    = 0u;
+            hipr_scores[index]           = 0.0f;
+        }
+        if (index < push.hipr_top_k) {
+            hipr_order[index] = -1;
+        }
+        return;
+    }
+
     if (any(pixel >= dims)) return;
+
+    if (push.stage == 3) {
+        if (pixel.x != 0 || pixel.y != 0) return;
+        if (push.selected_mesh_index < 0 || push.hipr_object_count == 0 || push.hipr_top_k == 0)
+            return;
+
+        for (uint i = 0; i < push.hipr_top_k; ++i) {
+            hipr_order[i] = -1;
+        }
+
+        for (uint i = 0; i < push.hipr_object_count; ++i) {
+            float visible = float(max(hipr_visible_counts[i], 1u));
+            float score   = (float(hipr_secondary_counts[i]) + 0.5f * float(hipr_shadow_counts[i])) /
+                          visible;
+            hipr_scores[i] = score;
+        }
+
+        hipr_order[0] = push.selected_mesh_index;
+        for (uint rank = 1; rank < push.hipr_top_k; ++rank) {
+            float best_score = -1.0f;
+            int   best_id    = -1;
+            for (uint obj = 0; obj < push.hipr_object_count; ++obj) {
+                if (int(obj) == push.selected_mesh_index) continue;
+
+                bool already_chosen = false;
+                for (uint prev = 0; prev < rank; ++prev) {
+                    if (hipr_order[prev] == int(obj)) {
+                        already_chosen = true;
+                        break;
+                    }
+                }
+                if (already_chosen) continue;
+
+                float s = hipr_scores[obj];
+                if (s > best_score) {
+                    best_score = s;
+                    best_id    = int(obj);
+                }
+            }
+
+            if (best_id < 0 || best_score <= 0.0f) break;
+            hipr_order[rank] = best_id;
+        }
+        return;
+    }
 
     // ── Stage 0: visibility pass ─────────────────────────────────────────────
     // Fire a primary ray for every pixel and record which object it hit.
     // This pass only runs when the camera changes; results are cached in
     // object_id_image for use by subsequent stage-1 dispatches.
     if (push.stage == 0) {
-        object_id_image[pixel] = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
+        int visible_id = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
+        object_id_image[pixel] = visible_id;
+        if (push.selected_mesh_index >= 0 && visible_id >= 0 && uint(visible_id) < push.hipr_object_count) {
+            InterlockedAdd(hipr_visible_counts[uint(visible_id)], 1);
+        }
         return;
     }
 
     // ── Stages 1 & 2: path trace ────────────────────────────────────────────
     int visible_object_id = object_id_image[pixel];
 
-    // Debug view (stage 2 only): show object-ID colors for all pixels.
+    // Obj ID view (stage 2 only): show object-ID colors for all pixels.
     // Stage 1 is a no-op in this mode so the full screen is written once.
-    if (push.debug_view_mode == 1) {
+    if (push.debug_view_mode == VIEW_MODE_OBJ_ID) {
         if (push.stage == 1) return;
         float3 display = debugColorForObjectId(visible_object_id);
         if (isSelectionOutline(pixel, dims, visible_object_id)) {
@@ -590,10 +712,42 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     bool is_selected_pixel = (push.selected_mesh_index >= 0) &&
                               (visible_object_id == push.selected_mesh_index);
 
+    // HiPR visualization mode:
+    // Stage 2 is used as a compositing pass that reveals objects in ranked order over time.
+    if (push.debug_view_mode == VIEW_MODE_HIPR_VIS && push.stage == 2) {
+        float3 display = float3(0.0f, 0.0f, 0.0f);
+        bool   revealed = false;
+
+        if (push.selected_mesh_index >= 0 && visible_object_id >= 0 && push.hipr_top_k > 0) {
+            int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
+                       hiprRankForObject(visible_object_id);
+            uint reveal_rank = min(push.hipr_top_k - 1u, push.frame / 8u);
+            revealed = (rank >= 0) && (uint(rank) <= reveal_rank);
+            if (revealed) {
+                display = accum_image[pixel].rgb;
+            }
+        }
+
+        if (!revealed) {
+            accum_image[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        }
+        if (isSelectionOutline(pixel, dims, visible_object_id)) {
+            display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
+        }
+        output_image[pixel] = float4(display, 1.0f);
+        return;
+    }
+
     // Stage 1 handles only the selected object's pixels.
-    // Stage 2 handles everything else (the rest of the scene).
+    // Stage 2 handles everything else unless we are in Naive mode.
     if (push.stage == 1 && !is_selected_pixel) return;
-    if (push.stage == 2 &&  is_selected_pixel) return;
+    if (push.stage == 2 && is_selected_pixel && push.debug_view_mode != VIEW_MODE_NAIVE) return;
+    if (push.stage == 4) {
+        if (push.hipr_render_rank < 0) return;
+        uint rank = min(uint(push.hipr_render_rank), push.hipr_top_k - 1u);
+        int target_object_id = hipr_order[rank];
+        if (target_object_id < 0 || visible_object_id != target_object_id) return;
+    }
 
     // Path trace this pixel and accumulate into the running average.
     RNG rng = RNG::make(pixel, push.frame);
@@ -601,7 +755,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     static const int SPP = 1;
     for (int i = 0; i < SPP; ++i) {
         float2 jitter = float2(rng.nextFloat(), rng.nextFloat());
-        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
+        bool collect_influence = (push.stage == 1) && is_selected_pixel && (push.selected_mesh_index >= 0);
+        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng, collect_influence);
     }
     float3 color = colorAccum / float(SPP);
 
@@ -610,8 +765,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     float3 accum = lerp(prev, color, blend);
     accum_image[pixel] = float4(accum, 1.f);
 
-    float3 display = (push.debug_view_mode == 1) ? debugColorForObjectId(visible_object_id) : accum;
-    if (push.debug_view_mode == 0) {
+    float3 display = (push.debug_view_mode == VIEW_MODE_OBJ_ID) ? debugColorForObjectId(visible_object_id) : accum;
+    if (push.debug_view_mode == VIEW_MODE_HIPR || push.debug_view_mode == VIEW_MODE_NAIVE) {
         if (push.enable_tonemapping != 0u) {
             display = unchartedTonemapFilmic(display, push.exposure_bias);
         }
