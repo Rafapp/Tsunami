@@ -1325,7 +1325,7 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
             .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
             .set_desired_extent(new_w, new_h)
             .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+	                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
             .set_old_swapchain(old_swapchain.swapchain)
             .build();
     vkb::destroy_swapchain(old_swapchain);
@@ -2760,7 +2760,8 @@ App::~App() {
 	}
 
 	if (scene_ctx.camera_buffer != VK_NULL_HANDLE && scene_ctx.camera_alloc != VK_NULL_HANDLE) {
-		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.camera_buffer, scene_ctx.camera_alloc);
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.camera_buffer,
+		                 scene_ctx.camera_alloc);
 		scene_ctx.camera_buffer = VK_NULL_HANDLE;
 		scene_ctx.camera_alloc  = VK_NULL_HANDLE;
 	}
@@ -2776,12 +2777,14 @@ App::~App() {
 		scene_ctx.mesh_alloc  = VK_NULL_HANDLE;
 	}
 	if (scene_ctx.vertex_buffer != VK_NULL_HANDLE && scene_ctx.vertex_alloc != VK_NULL_HANDLE) {
-		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.vertex_buffer, scene_ctx.vertex_alloc);
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.vertex_buffer,
+		                 scene_ctx.vertex_alloc);
 		scene_ctx.vertex_buffer = VK_NULL_HANDLE;
 		scene_ctx.vertex_alloc  = VK_NULL_HANDLE;
 	}
 	if (scene_ctx.index_buffer != VK_NULL_HANDLE && scene_ctx.index_alloc != VK_NULL_HANDLE) {
-		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.index_buffer, scene_ctx.index_alloc);
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.index_buffer,
+		                 scene_ctx.index_alloc);
 		scene_ctx.index_buffer = VK_NULL_HANDLE;
 		scene_ctx.index_alloc  = VK_NULL_HANDLE;
 	}
@@ -3189,9 +3192,8 @@ void App::MainLoop() {
 		// ---- ImGui render pass ----------------------------------------------
 		transition_layout(cmd, swapchain_ctx.images[image_index],
 		                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-		                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-		                  VK_PIPELINE_STAGE_TRANSFER_BIT,
+		                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+		                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
 		                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
 		VkRenderPassBeginInfo rp_begin{};

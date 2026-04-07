@@ -24,8 +24,8 @@ FlyCamera::FlyCamera(glm::vec3 position, glm::vec3 target, float fov_deg, float 
 	} else {
 		dir = glm::normalize(dir);
 	}
-	m_pitch       = std::asin(dir.y);
-	m_yaw         = std::atan2(dir.x, dir.z);
+	m_pitch = std::asin(dir.y);
+	m_yaw   = std::atan2(dir.x, dir.z);
 }
 
 glm::vec3 FlyCamera::forward() const {
@@ -136,6 +136,6 @@ bool FlyCamera::update(GLFWwindow* window, float dt) {
 
 GPUCamera FlyCamera::pack() const {
 	glm::vec3 target = m_position + forward();
-	return GPUCamera{glm::vec4(m_position, 0.f), glm::vec4(target, 0.f),
-	                 glm::vec4(m_up, 0.f), glm::vec4(m_fov, m_near_clip, m_far_clip, 0.f)};
+	return GPUCamera{glm::vec4(m_position, 0.f), glm::vec4(target, 0.f), glm::vec4(m_up, 0.f),
+	                 glm::vec4(m_fov, m_near_clip, m_far_clip, 0.f)};
 }
