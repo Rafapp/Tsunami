@@ -40,7 +40,6 @@
 #define OPENPBR_ENERGY_TABLES_USE_UINT16 0        // uint32 for broadest platform compat
 #include "openpbr.h"
 #include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 // Raw data headers — these define the C arrays we will upload.
 // HOW TO USE:
 //   1. Open openpbr_data_constants.h     → table resolution constants
@@ -97,6 +96,7 @@ struct SceneContext {
 #include "tsunami/simulation/water_surface_simulation.h"
 #include "tsunami/ui/audience_control_panel.h"
 #include "tsunami/ui/audience_overlay.h"
+#include "tsunami/ui/selection_panel.h"
 
 struct VulkanContext {
 	vkb::Instance       instance{};
@@ -176,22 +176,12 @@ struct OverlayContext {
 	bool                          show_control_panel = true;
 } overlay_ctx{};
 
-enum class MaterialEditMode : int {
-	Gui   = 0,
-	Voice = 1,
-};
-
-enum class RenderDebugViewMode : int {
-	Beauty    = 0,
-	ObjectIds = 1,
-};
-
 struct PathTracerPushConstants {
 	uint32_t  frame               = 0;
 	uint32_t  material_count      = 0;
 	int32_t   selected_mesh_index = -1;
 	uint32_t  outline_width       = 1;
-	int32_t   debug_view_mode     = static_cast<int32_t>(RenderDebugViewMode::Beauty);
+	int32_t   debug_view_mode     = static_cast<int32_t>(ui::RenderDebugViewMode::Beauty);
 	uint32_t  stage               = 0;        // 0 = visibility pass, 1 = path trace selected object
 	uint32_t  _pad1               = 0;
 	uint32_t  _pad2               = 0;
@@ -199,34 +189,6 @@ struct PathTracerPushConstants {
 };
 
 static_assert(sizeof(PathTracerPushConstants) == 48);
-
-struct ObjectIdEntry {
-	int         object_id = -1;
-	std::string display_name;
-	int         mesh_index     = -1;
-	int         material_index = -1;
-};
-
-struct SelectionContext {
-	int                        selected_mesh_index = -1;
-	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
-	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::Beauty;
-	GPUMaterial                editor_material{};
-	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
-	uint32_t                   outline_width = 1;
-	std::vector<ObjectIdEntry> object_id_map;
-
-	SelectionContext() {
-		editor_material = Material{}.pack();
-	}
-} selection_ctx{};
-
-struct SelectionPanelResult {
-	bool material_changed            = false;
-	bool material_edit_active        = false;
-	bool material_edit_just_finished = false;
-	bool selection_changed           = false;
-};
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -430,104 +392,6 @@ void applyOverlayLevel(float value) {
 	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
 }
 
-std::string meshDisplayName(const Scene* scene, int mesh_index) {
-	if (scene == nullptr || mesh_index < 0 ||
-	    mesh_index >= static_cast<int>(scene->m_meshes.size())) {
-		return "None";
-	}
-
-	const Mesh* mesh = scene->m_meshes[mesh_index].get();
-	if (mesh == nullptr || mesh->m_name.empty()) {
-		return "Mesh " + std::to_string(mesh_index);
-	}
-
-	return mesh->m_name;
-}
-
-void rebuildObjectIdMap(const Scene* scene) {
-	selection_ctx.object_id_map.clear();
-	if (scene == nullptr) {
-		return;
-	}
-
-	selection_ctx.object_id_map.reserve(scene->m_meshes.size());
-	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
-		const auto&   mesh = scene->m_meshes[mesh_index];
-		ObjectIdEntry entry{};
-		entry.object_id      = mesh_index;
-		entry.mesh_index     = mesh_index;
-		entry.material_index = mesh_index;
-		entry.display_name   = meshDisplayName(scene, mesh_index);
-		if (mesh == nullptr || mesh->m_material == nullptr) {
-			entry.material_index = -1;
-		}
-		selection_ctx.object_id_map.push_back(std::move(entry));
-	}
-}
-
-const ObjectIdEntry* objectIdEntryForId(int object_id) {
-	if (object_id < 0 || object_id >= static_cast<int>(selection_ctx.object_id_map.size())) {
-		return nullptr;
-	}
-	return &selection_ctx.object_id_map[object_id];
-}
-
-void refreshSelectedMaterialEditor(const Scene* scene) {
-	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
-	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
-		selection_ctx.editor_material = Material{}.pack();
-		return;
-	}
-
-	const auto& mesh              = scene->m_meshes[selection_ctx.selected_mesh_index];
-	selection_ctx.editor_material = (mesh != nullptr && mesh->m_material != nullptr) ?
-	                                    mesh->m_material->pack() :
-	                                    Material{}.pack();
-}
-
-bool selectMesh(const Scene* scene, int mesh_index) {
-	const int max_mesh_index =
-	    (scene != nullptr) ? static_cast<int>(scene->m_meshes.size()) - 1 : -1;
-	const int clamped_index = (mesh_index >= 0 && mesh_index <= max_mesh_index) ? mesh_index : -1;
-	if (selection_ctx.selected_mesh_index == clamped_index) {
-		return false;
-	}
-
-	selection_ctx.selected_mesh_index = clamped_index;
-	refreshSelectedMaterialEditor(scene);
-	return true;
-}
-
-void updateMaterialBufferSlot(VmaAllocator allocator, int material_index,
-                              const GPUMaterial& material) {
-	if (scene_ctx.material_mapped == nullptr || material_index < 0 ||
-	    material_index >= static_cast<int>(scene_ctx.material_count)) {
-		return;
-	}
-
-	auto* gpu_materials           = reinterpret_cast<GPUMaterial*>(scene_ctx.material_mapped);
-	gpu_materials[material_index] = material;
-	vmaFlushAllocation(allocator, scene_ctx.material_alloc,
-	                   static_cast<VkDeviceSize>(material_index) * sizeof(GPUMaterial),
-	                   sizeof(GPUMaterial));
-}
-
-void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator) {
-	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
-	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
-		return;
-	}
-
-	auto& mesh = scene->m_meshes[selection_ctx.selected_mesh_index];
-	if (mesh == nullptr || mesh->m_material == nullptr) {
-		return;
-	}
-
-	mesh->m_material->m_gpu = selection_ctx.editor_material;
-	updateMaterialBufferSlot(allocator, selection_ctx.selected_mesh_index,
-	                         selection_ctx.editor_material);
-}
-
 struct CpuRay {
 	glm::vec3 origin{};
 	glm::vec3 direction{};
@@ -708,156 +572,6 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 	}
 
 	return best_mesh_id;
-}
-
-SelectionPanelResult drawSelectionPanel(const Scene* scene) {
-	SelectionPanelResult result{};
-
-	ImGui::SetNextWindowPos(ImVec2(470.0f, 24.0f), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(360.0f, 320.0f), ImGuiCond_FirstUseEver);
-	if (!ImGui::Begin("Object Inspector")) {
-		ImGui::End();
-		return result;
-	}
-
-	ImGui::TextUnformatted("Click the render view to select a mesh.");
-
-	int         edit_mode  = static_cast<int>(selection_ctx.material_edit_mode);
-	const char* edit_items = "GUI\0Voice\0";
-	if (ImGui::Combo("Material input", &edit_mode, edit_items)) {
-		selection_ctx.material_edit_mode = static_cast<MaterialEditMode>(edit_mode);
-	}
-
-	int         debug_view_mode  = static_cast<int>(selection_ctx.debug_view_mode);
-	const char* debug_view_items = "Beauty\0Object IDs\0";
-	if (ImGui::Combo("Renderer view", &debug_view_mode, debug_view_items)) {
-		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
-	}
-
-	ImGui::Text("Scene objects: %d",
-	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
-	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
-	ImGui::Text("Selected mesh: %s",
-	            meshDisplayName(scene, selection_ctx.selected_mesh_index).c_str());
-
-	const bool has_selection =
-	    scene != nullptr && selection_ctx.selected_mesh_index >= 0 &&
-	    selection_ctx.selected_mesh_index < static_cast<int>(scene->m_meshes.size());
-
-	if (has_selection) {
-		const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_mesh_index);
-		ImGui::Text("Object ID: %d", selected_entry != nullptr ? selected_entry->object_id : -1);
-		ImGui::Text("Mesh index: %d", selection_ctx.selected_mesh_index);
-		if (ImGui::Button("Clear selection")) {
-			result.selection_changed = selectMesh(scene, -1);
-		}
-	} else {
-		ImGui::TextUnformatted("No mesh selected.");
-	}
-
-	ImGui::Separator();
-	ImGui::TextUnformatted("Selection outline");
-	int outline_width = static_cast<int>(selection_ctx.outline_width);
-	if (ImGui::SliderInt("Outline width", &outline_width, 1, 4)) {
-		selection_ctx.outline_width = static_cast<uint32_t>(outline_width);
-	}
-	ImGui::ColorEdit4("Outline color", glm::value_ptr(selection_ctx.outline_color),
-	                  ImGuiColorEditFlags_AlphaBar);
-
-	if (ImGui::CollapsingHeader("Object ID Map")) {
-		for (const ObjectIdEntry& entry : selection_ctx.object_id_map) {
-			ImGui::Text("ID %d -> %s", entry.object_id, entry.display_name.c_str());
-		}
-	}
-
-	if (!has_selection) {
-		if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
-			ImGui::Separator();
-			ImGui::TextWrapped(
-			    "Voice mode is selected, but there is not yet a speech-to-text command layer for "
-			    "material edits in this project.");
-		}
-		ImGui::End();
-		return result;
-	}
-
-	ImGui::Separator();
-	ImGui::TextUnformatted("Material");
-	ImGui::TextWrapped(
-	    "Texture-backed meshes use these controls as live multipliers and overrides.");
-
-	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
-	ImGui::BeginDisabled(!gui_mode_enabled);
-
-	auto record_item_edit_state = [&result]() {
-		result.material_edit_active |= ImGui::IsItemActive();
-		result.material_edit_just_finished |= ImGui::IsItemDeactivatedAfterEdit();
-	};
-
-	if (ImGui::ColorEdit3("Base tint", glm::value_ptr(selection_ctx.editor_material.base_color))) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::SliderFloat("Opacity", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f,
-	                       "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::SliderFloat("Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f,
-	                       "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::SliderFloat("Roughness", &selection_ctx.editor_material.specular_roughness, 0.02f,
-	                       1.0f, "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::SliderFloat("Transmission", &selection_ctx.editor_material.transmission_weight, 0.0f,
-	                       1.0f, "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::SliderFloat("IOR", &selection_ctx.editor_material.specular_ior, 1.0f, 2.5f,
-	                       "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::ColorEdit3("Emission color",
-	                      glm::value_ptr(selection_ctx.editor_material.emission_color))) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	if (ImGui::SliderFloat("Emission intensity", &selection_ctx.editor_material.emission_luminance,
-	                       0.0f, 20.0f, "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
-
-	bool thin_walled = selection_ctx.editor_material.geometry_thin_walled > 0.5f;
-	if (ImGui::Checkbox("Thin walled", &thin_walled)) {
-		selection_ctx.editor_material.geometry_thin_walled = thin_walled ? 1.0f : 0.0f;
-		result.material_changed                            = true;
-	}
-	record_item_edit_state();
-
-	ImGui::EndDisabled();
-
-	if (!gui_mode_enabled) {
-		ImGui::TextWrapped(
-		    "Voice mode is selected, but there is not yet a speech-to-text command layer for "
-		    "material edits in this project.");
-	}
-
-	ImGui::End();
-	return result;
 }
 
 bool isSwapchainRecreationResult(VkResult result) {
@@ -1964,9 +1678,9 @@ App::App() {
 	m_scene->m_camera = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	// m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
-	// rebuildObjectIdMap(m_scene.get());
+	// ui::rebuildObjectIdMap(m_scene.get());
 	m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
-	rebuildObjectIdMap(m_scene.get());
+	ui::rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
@@ -2927,7 +2641,7 @@ void App::MainLoop() {
 			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
 		}
 
-		const SelectionPanelResult selection_panel_result = drawSelectionPanel(m_scene.get());
+		const ui::SelectionPanelResult selection_panel_result = ui::drawSelectionPanel(m_scene.get());
 
 		if (controls_changed) {
 			if (m_audio_controller != nullptr) {
@@ -2946,7 +2660,9 @@ void App::MainLoop() {
 		}
 
 		if (selection_panel_result.material_changed) {
-			applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
+			ui::applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator,
+			                                scene_ctx.material_mapped, scene_ctx.material_count,
+			                                scene_ctx.material_alloc);
 			// Reset only when a parameter value actually changes.
 			frame_number = 0;
 		}
@@ -3028,9 +2744,9 @@ void App::MainLoop() {
 		const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
 		if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE && !fly_cam.isMouseCaptured() &&
 		    !ImGui::GetIO().WantCaptureMouse) {
-			if (selectMesh(m_scene.get(),
-			               pickMeshAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
-			                                framebuffer_width, framebuffer_height))) {
+			if (ui::selectMesh(m_scene.get(),
+			                   pickMeshAtCursor(m_scene.get(), m_window->handle(), gpu_camera,
+			                                    framebuffer_width, framebuffer_height))) {
 				frame_number          = 0;
 				needs_visibility_pass = true;
 				material_edit_mode    = false;
@@ -3090,10 +2806,10 @@ void App::MainLoop() {
 		PathTracerPushConstants pc{};
 		pc.frame               = frame_number;
 		pc.material_count      = scene_ctx.material_count;
-		pc.selected_mesh_index = selection_ctx.selected_mesh_index;
-		pc.outline_width       = selection_ctx.outline_width;
-		pc.debug_view_mode     = static_cast<int32_t>(selection_ctx.debug_view_mode);
-		pc.outline_color       = selection_ctx.outline_color;
+		pc.selected_mesh_index = ui::selection_ctx.selected_mesh_index;
+		pc.outline_width       = ui::selection_ctx.outline_width;
+		pc.debug_view_mode     = static_cast<int32_t>(ui::selection_ctx.debug_view_mode);
+		pc.outline_color       = ui::selection_ctx.outline_color;
 
 		const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
 		const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;
