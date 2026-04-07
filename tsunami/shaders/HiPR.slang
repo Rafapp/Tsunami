@@ -139,13 +139,13 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 8;
+static const int   MAX_BOUNCES = 6;
 static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 
 // ─── Light ────────────────────────────────────────────────────────────────────
-static float3       g_sun_dir       = normalize(float3(0.f, -1.0f, 0.f));
+static float3       g_sun_dir       = normalize(float3(0.f, 1.0f, 0.f));
 static const float3 g_sun_color     = float3(1.0f, 0.95f, 0.85f);
 static const float  g_sun_intensity = 0.5f;
 
@@ -173,6 +173,23 @@ float3 cosineHemisphere(inout RNG rng, float3 n) {
     float3 t = normalize(cross(up, n));
     float3 b = cross(n, t);
     return normalize(t * local.x + b * local.y + n * local.z);
+}
+
+
+/// ─── Halton sequence for stable sampling in probe pass ─────────────────────────
+float halton(uint index, uint base)
+{
+    float f = 1.0f;
+    float r = 0.0f;
+
+    while (index > 0u)
+    {
+        f = f / float(base);
+        r = r + f * float(index % base);
+        index = index / base;
+    }
+
+    return r;
 }
 
 // ─── RNG ──────────────────────────────────────────────────────────────────────
@@ -313,7 +330,12 @@ OpenPBR_ResolvedInputs material_to_openpbr(
     inp.specular_roughness_anisotropy = m.specular_anisotropy;
 
     inp.transmission_weight                 = m.transmission_weight;
-    inp.transmission_color                  = m.transmission_color.rgb;
+    float3 trans_albedo = m.transmission_color.rgb;
+    bool transIsWhite = (trans_albedo.r + trans_albedo.g + trans_albedo.b > 2.99f);
+    if (transIsWhite) {
+        trans_albedo = inp.base_color;
+    }
+    inp.transmission_color                  = trans_albedo;
     inp.transmission_depth                  = m.transmission_depth;
     inp.transmission_scatter                = m.transmission_scatter.rgb;
     inp.transmission_scatter_anisotropy     = m.transmission_scatter_anisotropy;
@@ -505,13 +527,16 @@ void stage0(uint2 pixel, uint2 dims, uint local_idx, uint3 group_id, inout RNG r
     output_image[pixel] = float4(display, 1.f);
 }
 
-// ─── Stage 1: path trace for current object ───────────────────────────────────
 // ── Stage 1: path trace ───────────────────────────────────────────────────────
 void stage1(uint2 pixel, uint2 dims, uint tile_idx, inout RNG rng) {
     // Workgroup-uniform early exit: skip tiles not in the current BFS frontier
     if (tile_render_flags[tile_idx] == 0u) return;
 
-    Ray ray = makeRay(pixel, dims, float2(rng.nextFloat(), rng.nextFloat()));
+    float2 jitter = float2(
+        frac(halton(push.frame + 1u, 2u) + float(pixel.x * 1619u + pixel.y * 1021u) * 0.000001f),
+        frac(halton(push.frame + 1u, 3u) + float(pixel.x * 2357u + pixel.y * 1637u) * 0.000001f)
+    );
+    Ray ray = makeRay(pixel, dims, jitter);
     float3 throughput = float3(1, 1, 1);
     float3 radiance = float3(0, 0, 0);
 

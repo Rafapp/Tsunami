@@ -284,7 +284,7 @@ struct TileData {
 };
 
 static constexpr int BFS_MAX_DEPTH              = 2;
-static constexpr int BACKGROUND_TILES_PER_FRAME = 8;        // tune to taste
+static constexpr int BACKGROUND_TILES_PER_FRAME = 32;        // tune to taste
 
 struct ProbeContext {
 	std::vector<TileData> tiles;        // CPU readback of tile_buffer
@@ -888,6 +888,8 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	    "Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f, "%.2f");
 	result.material_changed |= ImGui::SliderFloat(
 	    "Roughness", &selection_ctx.editor_material.specular_roughness, 0.02f, 1.0f, "%.2f");
+	result.material_changed |= ImGui::ColorEdit3(
+        "Transmission tint", glm::value_ptr(selection_ctx.editor_material.transmission_color));
 	result.material_changed |= ImGui::SliderFloat(
 	    "Transmission", &selection_ctx.editor_material.transmission_weight, 0.0f, 1.0f, "%.2f");
 	result.material_changed |=
@@ -2225,9 +2227,10 @@ App::App() {
 	m_scene           = std::make_unique<Scene>();
 	m_scene->m_camera = Camera(glm::vec3(0.f, 20.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
-	m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
+    //m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
+	//m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
+	m_scene->load_gltf("resources/scenes/cornell/cornell.gltf");
 	rebuildObjectIdMap(m_scene.get());
-	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
 	// === I. Vulkan function pointers
@@ -3191,6 +3194,8 @@ void App::MainLoop() {
 		// ── Fly-camera update ─────────────────────────────────────────────────
 		if (fly_cam.update(m_window->handle(), dt)) {
 			frame_number    = 0;
+			//turn of HiPR
+			probe_ctx.hipr_enabled = false;
 			probe_ctx.valid = false;        // camera moved — interaction map is stale
 			// Clear accumulation image immediately to avoid temporal smearing
 			if (render_target_ctx.accum_image != VK_NULL_HANDLE) {
@@ -3251,7 +3256,7 @@ void App::MainLoop() {
 		const bool need_probe = !probe_ctx.valid || frame_number == 0 ||
 		                        probe_ctx.last_selected != selection_ctx.selected_mesh_index;
 
-		if (need_probe) {
+		if (need_probe || fly_cam.update(m_window->handle(), dt)) {
 			// -- Submit stage 0 -----------------------------------------------
 			{
 				VkCommandBuffer probe_cmd =
