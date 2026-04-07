@@ -1707,7 +1707,7 @@ static bool rebuild_pipeline() {
 	// Recompile the shader from disk
 	std::vector<uint32_t> spirv;
 	try {
-		spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/pathtracer.slang", "main",
+		spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/hipr.slang", "main",
 		                             {VENDORS_DIR});
 	} catch (const std::exception& e) {
 		std::cerr << "[SHADER RELOAD] Compile failed: " << e.what() << "\n";
@@ -2511,7 +2511,7 @@ App::App() {
 	// === X. Compute Pipeline
 	// ============================================
 	{
-		auto spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/pathtracer.slang", "main",
+		auto spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/hipr.slang", "main",
 		                                  {VENDORS_DIR});
 		std::cout << "[INFO] Shader: " << spirv.size() * 4 << " bytes SPIR-V\n";
 		VkShaderModuleCreateInfo mci{};
@@ -2939,17 +2939,20 @@ void App::MainLoop() {
 			update_water_and_floaters(updated_water_audio_level);
 		}
 
-		if (selection_panel_result.material_changed) {
-			applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
-			frame_number = 0;
-		}
-
-		if (selection_panel_result.material_edit_active) {
+		if (selection_panel_result.material_edit_active && !material_edit_mode) {
+			// Entering edit mode: restart accumulation for selected-object-only updates.
 			material_edit_mode = true;
 			frame_number       = 0;
 		}
 
+		if (selection_panel_result.material_changed) {
+			applySelectedMaterialEditor(m_scene.get(), render_target_ctx.allocator);
+			// Reset only when a parameter value actually changes.
+			frame_number = 0;
+		}
+
 		if (selection_panel_result.material_edit_just_finished) {
+			// Leaving edit mode: restart full-screen accumulation.
 			material_edit_mode = false;
 			frame_number       = 0;
 		}
