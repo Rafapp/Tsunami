@@ -113,12 +113,16 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* mat
 	                         selection_ctx.selected_mesh_index, selection_ctx.editor_material);
 }
 
-SelectionPanelResult drawSelectionPanel(const Scene* scene) {
+SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	SelectionPanelResult result{};
+
+	if (is_open != nullptr && !*is_open) {
+		return result;
+	}
 
 	ImGui::SetNextWindowPos(ImVec2(470.0f, 24.0f), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(360.0f, 320.0f), ImGuiCond_FirstUseEver);
-	if (!ImGui::Begin("Object Inspector")) {
+	if (!ImGui::Begin("Object Inspector", is_open)) {
 		ImGui::End();
 		return result;
 	}
@@ -291,7 +295,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 	record_item_edit_state();
 
 	if (ImGui::SliderFloat("Emission intensity", &selection_ctx.editor_material.emission_luminance,
-	                       0.0f, 20.0f, "%.2f")) {
+	                       0.0f, 100.0f, "%.2f")) {
 		result.material_changed = true;
 	}
 	record_item_edit_state();

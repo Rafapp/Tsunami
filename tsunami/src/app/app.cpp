@@ -2712,6 +2712,8 @@ void App::MainLoop() {
 	bool                    camera_was_moving      = false;
 	bool                    hipr_force_clear_order = true;
 	ui::RenderDebugViewMode last_render_mode       = ui::selection_ctx.debug_view_mode;
+	bool                    show_all_gui           = true;
+	bool                    show_selection_panel   = true;
 
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
@@ -2789,17 +2791,23 @@ void App::MainLoop() {
 		update_water_and_floaters(water_audio_level);
 
 		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
-			overlay_ctx.show_control_panel = !overlay_ctx.show_control_panel;
+			show_all_gui = !show_all_gui;
+			if (show_all_gui) {
+				overlay_ctx.show_control_panel = true;
+				show_selection_panel           = true;
+			}
 		}
 
 		bool controls_changed = false;
-		if (overlay_ctx.show_control_panel) {
+		if (show_all_gui && overlay_ctx.show_control_panel) {
 			controls_changed = ui::drawAudienceControlPanel(
 			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
 		}
 
-		const ui::SelectionPanelResult selection_panel_result =
-		    ui::drawSelectionPanel(m_scene.get());
+		ui::SelectionPanelResult selection_panel_result{};
+		if (show_all_gui && show_selection_panel) {
+			selection_panel_result = ui::drawSelectionPanel(m_scene.get(), &show_selection_panel);
+		}
 
 		if (ui::selection_ctx.debug_view_mode != last_render_mode) {
 			frame_number           = 0;
@@ -2893,7 +2901,7 @@ void App::MainLoop() {
 			overlay_ctx.controls.reset_objects_requested = false;
 		}
 
-		if (overlay_ctx.controls.show_overlay) {
+		if (show_all_gui && overlay_ctx.controls.show_overlay) {
 			ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_ctx.controls.overlay,
 			                        overlay_ctx.controls.style);
 		}
@@ -3076,6 +3084,9 @@ void App::MainLoop() {
 		bool    run_single_rank_stage4 = false;
 		bool    run_ranked_stage4_loop = false;
 		int32_t single_rank_stage4_id  = -1;
+		const bool hipr_vis_reveal_complete =
+		    hipr_vis_mode && pc.hipr_top_k > 0u &&
+		    (frame_number / hipr_frames_per_object) >= (pc.hipr_top_k - 1u);
 		if (obj_id_mode) {
 			run_stage1 = false;
 			run_stage2 = true;
@@ -3100,12 +3111,19 @@ void App::MainLoop() {
 				single_rank_stage4_id  = static_cast<int32_t>(sample_rank);
 			}
 		} else if (hipr_full_scene_sampling) {
-			// After the focused per-object sequence, resume full-scene accumulation.
-			run_stage1             = hipr_active;
+			// After the focused per-object sequence, switch to single-pass naive accumulation.
+			run_stage1             = false;
 			run_stage2             = true;
 			run_ranked_stage4_loop = false;
 		} else {
-			run_ranked_stage4_loop = use_hipr_ranked && run_stage2;
+			if (hipr_vis_mode && hipr_vis_reveal_complete) {
+				// In visualization mode, once the ranked reveal is complete, switch to
+				// full-scene stage-2 tracing only.
+				run_stage1 = false;
+				run_stage2 = true;
+			}
+			run_ranked_stage4_loop =
+			    use_hipr_ranked && run_stage2 && !(hipr_vis_mode && hipr_vis_reveal_complete);
 		}
 
 		if ((!hipr_mode || !hipr_active) &&
@@ -3240,6 +3258,10 @@ void App::MainLoop() {
 			pc.stage            = 2;
 			pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
 			pc.frame            = hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number;
+			if (hipr_full_scene_sampling) {
+				// Force stage-2 to include selected-object pixels (true naive path).
+				pc.debug_view_mode = static_cast<int32_t>(ui::RenderDebugViewMode::Naive);
+			}
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);

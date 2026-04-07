@@ -37,7 +37,7 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 		return false;
 	}
 
-	ImGui::TextUnformatted("F1 toggles this window.");
+	ImGui::TextUnformatted("F1 toggles all demo UI.");
 	changed |= ImGui::Checkbox("Show audience overlay", &state.show_overlay);
 	ImGui::SameLine();
 	if (ImGui::Button("Reset defaults")) {
