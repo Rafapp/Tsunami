@@ -61,9 +61,8 @@ static uint32_t get_tex_index(const aiScene* ai_scene, const std::string& scene_
 
 // Load every material texture from the Assimp scene so they are all present in
 // m_textures before we wire up the per-material indices.
-static void load_all_material_textures(const aiScene* ai_scene,
-                                       const std::string& scene_source_path,
-                                       Scene& dst) {
+static void load_all_material_textures(const aiScene*     ai_scene,
+                                       const std::string& scene_source_path, Scene& dst) {
 	if (!ai_scene)
 		return;
 
@@ -127,12 +126,12 @@ static void wire_texture_indices_node_recursive(const aiScene* ai_scene, const a
 			uint32_t alb = get_tex_index(ai_scene, scene_source_path, ai_mat,
 			                             aiTextureType_BASE_COLOR, true, dst);
 			if (alb == 0xFFFFFFFFu)
-				alb =
-				    get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_DIFFUSE, true, dst);
+				alb = get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_DIFFUSE,
+				                    true, dst);
 			mat->m_gpu.albedo_tex_index = alb;
 
-			uint32_t nrm = get_tex_index(ai_scene, scene_source_path, ai_mat,
-			                             aiTextureType_NORMALS, false, dst);
+			uint32_t nrm = get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_NORMALS,
+			                             false, dst);
 			if (nrm == 0xFFFFFFFFu)
 				nrm = get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_HEIGHT,
 				                    false, dst);
@@ -141,12 +140,12 @@ static void wire_texture_indices_node_recursive(const aiScene* ai_scene, const a
 			uint32_t rgh = get_tex_index(ai_scene, scene_source_path, ai_mat,
 			                             aiTextureType_DIFFUSE_ROUGHNESS, false, dst);
 			if (rgh == 0xFFFFFFFFu)
-				rgh =
-				    get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_UNKNOWN, false, dst);
+				rgh = get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_UNKNOWN,
+				                    false, dst);
 			mat->m_gpu.roughness_tex_index = rgh;
 
-			mat->m_gpu.emissive_tex_index =
-			    get_tex_index(ai_scene, scene_source_path, ai_mat, aiTextureType_EMISSIVE, true, dst);
+			mat->m_gpu.emissive_tex_index = get_tex_index(ai_scene, scene_source_path, ai_mat,
+			                                              aiTextureType_EMISSIVE, true, dst);
 		}
 
 		++mesh_idx;
@@ -195,8 +194,7 @@ void Scene::append_gltf(const std::string& path) {
 	const aiScene*   ai_scene = importer.ReadFile(path, TEXTURE_FLAGS);
 	if (!ai_scene || !ai_scene->mRootNode) {
 		std::cerr << "[Scene::append_gltf] Assimp texture pass failed: "
-		          << importer.GetErrorString()
-		          << "\n";
+		          << importer.GetErrorString() << "\n";
 		return;
 	}
 

@@ -74,8 +74,7 @@ std::shared_ptr<Texture> Texture::load_from_assimp(const aiScene*     scene,
 				return nullptr;
 			}
 
-			auto tex = make_texture_from_rgba8(
-			    data, w, h, c, scene_source_path + "|" + path, srgb);
+			auto tex = make_texture_from_rgba8(data, w, h, c, scene_source_path + "|" + path, srgb);
 			stbi_image_free(data);
 			return tex;
 		}

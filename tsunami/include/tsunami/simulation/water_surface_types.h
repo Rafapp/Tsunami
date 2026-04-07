@@ -40,7 +40,7 @@ struct WaterSurfaceDiagnostics {
 };
 
 struct FloatingObjectSettings {
-	glm::vec2 anchor                 = glm::vec2(0.0f);
+	glm::vec2 anchor                = glm::vec2(0.0f);
 	float     base_height           = 0.0f;
 	float     base_yaw_radians      = 0.0f;
 	glm::vec3 size                  = glm::vec3(0.25f, 0.12f, 0.18f);

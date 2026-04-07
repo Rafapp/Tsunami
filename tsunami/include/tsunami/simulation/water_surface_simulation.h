@@ -35,9 +35,9 @@ class WaterSurfaceSimulation {
 	                                            float delta_time);
 	void                           requestReset();
 	void                           requestObjectReset();
-	void                           setFloatingObjects(std::span<const FloatingObjectSettings> objects);
+	void setFloatingObjects(std::span<const FloatingObjectSettings> objects);
 	std::vector<FloatingObjectRenderData> floatingObjectRenderData() const;
-	void                           record(VkCommandBuffer command_buffer);
+	void                                  record(VkCommandBuffer command_buffer);
 
 	VkImage outputImage() const {
 		return m_output_image;
