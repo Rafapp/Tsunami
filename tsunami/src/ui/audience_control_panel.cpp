@@ -48,6 +48,73 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	}
 
 	ImGui::Separator();
+	ImGui::TextUnformatted("Render Stats");
+	if (diagnostics.render.frame_sample_count == 0) {
+		ImGui::TextUnformatted("Collecting frame timing samples...");
+	} else {
+		if (ImGui::BeginTable("render_stats_summary", 5,
+		                      ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
+			ImGui::TableSetupColumn("Metric");
+			ImGui::TableSetupColumn("Current");
+			ImGui::TableSetupColumn("Avg");
+			ImGui::TableSetupColumn("Min");
+			ImGui::TableSetupColumn("Max");
+			ImGui::TableHeadersRow();
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextUnformatted("FPS");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("%7.1f", diagnostics.render.current_fps);
+			ImGui::TableSetColumnIndex(2);
+			ImGui::Text("%7.1f", diagnostics.render.average_fps);
+			ImGui::TableSetColumnIndex(3);
+			ImGui::Text("%7.1f", diagnostics.render.min_fps);
+			ImGui::TableSetColumnIndex(4);
+			ImGui::Text("%7.1f", diagnostics.render.max_fps);
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextUnformatted("Frame (ms)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("%7.2f", diagnostics.render.current_frame_time_ms);
+			ImGui::TableSetColumnIndex(2);
+			ImGui::Text("%7.2f", diagnostics.render.average_frame_time_ms);
+			ImGui::TableSetColumnIndex(3);
+			ImGui::Text("%7.2f", diagnostics.render.min_frame_time_ms);
+			ImGui::TableSetColumnIndex(4);
+			ImGui::Text("%7.2f", diagnostics.render.max_frame_time_ms);
+
+			ImGui::EndTable();
+		}
+		ImGui::Text("Timing window: %u frames", diagnostics.render.frame_sample_count);
+	}
+
+	if (ImGui::CollapsingHeader("Advanced Stats")) {
+		ImGui::Text("Render target: %u x %u", diagnostics.render.render_width,
+		            diagnostics.render.render_height);
+		ImGui::Text("Swapchain images: %u", diagnostics.render.swapchain_image_count);
+		ImGui::Text("Surface grid: %u x %u (%llu samples)", diagnostics.water.grid_width,
+		            diagnostics.water.grid_height,
+		            static_cast<unsigned long long>(diagnostics.water.sample_count));
+		ImGui::Text("Equivalent mesh: %llu quads | %llu triangles",
+		            static_cast<unsigned long long>(diagnostics.water.cell_count),
+		            static_cast<unsigned long long>(diagnostics.water.triangle_count));
+		ImGui::Text("Compute dispatch: %u x %u workgroups", diagnostics.water.dispatch_groups_x,
+		            diagnostics.water.dispatch_groups_y);
+		ImGui::Text("Ping-pong height images: %u", diagnostics.water.history_image_count);
+		ImGui::Text("ImGui geometry: %d vertices | %d indices | %d windows",
+		            diagnostics.render.imgui_vertex_count, diagnostics.render.imgui_index_count,
+		            diagnostics.render.imgui_window_count);
+	}
+
+	ImGui::Separator();
+	ImGui::TextUnformatted("Color Pipeline");
+	changed |= ImGui::Checkbox("Enable tonemapping", &state.render_post.enable_tonemapping);
+	changed |= ImGui::SliderFloat("Exposure bias", &state.render_post.exposure_bias, 0.1f, 8.0f,
+	                              "%.2f");
+
+	ImGui::Separator();
 	ImGui::TextUnformatted("Audio");
 
 	int         input_mode    = static_cast<int>(state.audio.input_mode);
@@ -125,36 +192,6 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |=
 	    ImGui::ColorEdit4("Marker color", reinterpret_cast<float*>(&state.style.marker_color),
 	                      ImGuiColorEditFlags_AlphaBar);
-
-	ImGui::Separator();
-	ImGui::TextUnformatted("Render Stats");
-	if (diagnostics.render.frame_sample_count == 0) {
-		ImGui::TextUnformatted("Collecting frame timing samples...");
-	} else {
-		ImGui::Text("FPS: %.1f current | %.1f avg | %.1f min | %.1f max",
-		            diagnostics.render.current_fps, diagnostics.render.average_fps,
-		            diagnostics.render.min_fps, diagnostics.render.max_fps);
-		ImGui::Text("Frame time: %.2f ms current | %.2f avg | %.2f min | %.2f max",
-		            diagnostics.render.current_frame_time_ms,
-		            diagnostics.render.average_frame_time_ms, diagnostics.render.min_frame_time_ms,
-		            diagnostics.render.max_frame_time_ms);
-		ImGui::Text("Timing window: %u frames", diagnostics.render.frame_sample_count);
-	}
-	ImGui::Text("Render target: %u x %u", diagnostics.render.render_width,
-	            diagnostics.render.render_height);
-	ImGui::Text("Swapchain images: %u", diagnostics.render.swapchain_image_count);
-	ImGui::Text("Surface grid: %u x %u (%llu samples)", diagnostics.water.grid_width,
-	            diagnostics.water.grid_height,
-	            static_cast<unsigned long long>(diagnostics.water.sample_count));
-	ImGui::Text("Equivalent mesh: %llu quads | %llu triangles",
-	            static_cast<unsigned long long>(diagnostics.water.cell_count),
-	            static_cast<unsigned long long>(diagnostics.water.triangle_count));
-	ImGui::Text("Compute dispatch: %u x %u workgroups", diagnostics.water.dispatch_groups_x,
-	            diagnostics.water.dispatch_groups_y);
-	ImGui::Text("Ping-pong height images: %u", diagnostics.water.history_image_count);
-	ImGui::Text("ImGui geometry: %d vertices | %d indices | %d windows",
-	            diagnostics.render.imgui_vertex_count, diagnostics.render.imgui_index_count,
-	            diagnostics.render.imgui_window_count);
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Diagnostics");

@@ -8,6 +8,11 @@
 
 namespace ui {
 
+struct AudienceRenderPostSettings {
+	bool  enable_tonemapping = false;
+	float exposure_bias      = 2.0f;
+};
+
 struct AudienceRenderDiagnostics {
 	float    current_fps           = 0.0f;
 	float    average_fps           = 0.0f;
@@ -37,6 +42,7 @@ struct AudienceControlPanelState {
 	bool                             reset_water_requested   = false;
 	bool                             reset_objects_requested = false;
 	audio::ReactiveAudioSettings     audio{};
+	AudienceRenderPostSettings       render_post{};
 	simulation::WaterSurfaceSettings water{};
 	AudienceOverlayState             overlay{};
 	AudienceOverlayStyle             style{};

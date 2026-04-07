@@ -32,6 +32,8 @@ struct PushConstants {
     uint   _pad1;
     uint   _pad2;
     float4 outline_color;
+    uint   enable_tonemapping;
+    float  exposure_bias;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
@@ -145,8 +147,8 @@ static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 // camera position.  Angle it slightly so surfaces at grazing incidence still
 // catch some light.
 static float3 g_sun_dir       = normalize(float3(0.1f, 1.0f, .1f));
-static const float3 g_sun_color     = float3(1.0f, 0.85f, 0.65f);
-static const float  g_sun_intensity = 15.0f;   // tweak for desired exposure
+static const float3 g_sun_color     = float3(1.0f, 0.85f, 0.5f);
+static const float  g_sun_intensity = 10.0f;   // tweak for desired exposure
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 struct Ray { float3 origin; float3 dir; };
@@ -530,6 +532,26 @@ float3 debugColorForObjectId(int object_id) {
     return 0.15f + 0.85f * rgb;
 }
 
+float3 srgbToLinear(float3 color) {
+    float3 cutoff = step(float3(0.04045f, 0.04045f, 0.04045f), color);
+    float3 low    = color / 12.92f;
+    float3 high   = pow((color + 0.055f) / 1.055f, float3(2.4f, 2.4f, 2.4f));
+    return lerp(low, high, cutoff);
+}
+
+float3 unchartedTonemapPartial(float3 color) {
+    float3 x = max(float3(0.0f, 0.0f, 0.0f), color - 0.004f);
+    return (x * (6.2f * x + 0.5f)) / (x * (6.2f * x + 1.7f) + 0.06f);
+}
+
+float3 unchartedTonemapFilmic(float3 color, float exposureBias) {
+    float3 exposed = color * exposureBias;
+    exposed        = unchartedTonemapPartial(exposed);
+    float3 W       = unchartedTonemapPartial(float3(11.2f, 11.2f, 11.2f));
+    float3 whiteScale = 1.0f / max(W, float3(1.0e-6f, 1.0e-6f, 1.0e-6f));
+    return exposed * whiteScale;
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 [shader("compute")]
@@ -589,6 +611,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     accum_image[pixel] = float4(accum, 1.f);
 
     float3 display = (push.debug_view_mode == 1) ? debugColorForObjectId(visible_object_id) : accum;
+    if (push.debug_view_mode == 0) {
+        if (push.enable_tonemapping != 0u) {
+            display = unchartedTonemapFilmic(display, push.exposure_bias);
+        }
+    }
     if (isSelectionOutline(pixel, dims, visible_object_id)) {
         display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
     }

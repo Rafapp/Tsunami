@@ -186,9 +186,11 @@ struct PathTracerPushConstants {
 	uint32_t  _pad1               = 0;
 	uint32_t  _pad2               = 0;
 	glm::vec4 outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	uint32_t  enable_tonemapping  = 1;
+	float     exposure_bias       = 2.0f;
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 48);
+static_assert(sizeof(PathTracerPushConstants) == 56);
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -2811,6 +2813,8 @@ void App::MainLoop() {
 		pc.outline_width       = ui::selection_ctx.outline_width;
 		pc.debug_view_mode     = static_cast<int32_t>(ui::selection_ctx.debug_view_mode);
 		pc.outline_color       = ui::selection_ctx.outline_color;
+		pc.enable_tonemapping  = overlay_ctx.controls.render_post.enable_tonemapping ? 1u : 0u;
+		pc.exposure_bias       = overlay_ctx.controls.render_post.exposure_bias;
 
 		const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
 		const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;
