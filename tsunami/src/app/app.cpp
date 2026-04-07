@@ -209,6 +209,7 @@ struct PathTracerPushConstants {
 	uint32_t  hipr_vis_enable_tint      = 1;
 	uint32_t  hipr_vis_rainbow_tint     = 1;
 	uint32_t  hipr_update_period        = HIPR_UPDATE_PERIOD;
+	uint32_t  hipr_frames_per_object    = 300;
 	float     hipr_score_blend          = 0.25f;
 	float     hipr_vis_tint_strength    = 0.2f;
 	uint32_t  skybox_enabled            = 1;
@@ -219,7 +220,7 @@ struct PathTracerPushConstants {
 	float     sun_intensity             = 10.0f;
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 120);
+static_assert(sizeof(PathTracerPushConstants) == 124);
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -2718,6 +2719,26 @@ void App::MainLoop() {
 	int prev_lmb = GLFW_RELEASE;
 
 	ui::LightingSettings last_lighting = ui::selection_ctx.lighting;
+	bool                 hipr_object_sampling_active = false;
+	bool                 hipr_object_sampling_done   = false;
+	uint32_t             hipr_object_sampling_rank   = 0;
+	uint32_t             hipr_object_sampling_frame  = 0;
+	uint32_t             hipr_full_scene_frame       = 0;
+
+	const auto reset_hipr_object_sampling = [&]() {
+		hipr_object_sampling_active = false;
+		hipr_object_sampling_done   = false;
+		hipr_object_sampling_rank   = 0;
+		hipr_object_sampling_frame  = 0;
+		hipr_full_scene_frame       = 0;
+	};
+	const auto restart_hipr_object_sampling = [&]() {
+		hipr_object_sampling_active = true;
+		hipr_object_sampling_done   = false;
+		hipr_object_sampling_rank   = 0;
+		hipr_object_sampling_frame  = 0;
+		hipr_full_scene_frame       = 0;
+	};
 
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
@@ -2735,6 +2756,7 @@ void App::MainLoop() {
 			recreateSwapchainResources();
 			frame_number          = 0;
 			needs_visibility_pass = true;
+			reset_hipr_object_sampling();
 		}
 
 		const float time_seconds = static_cast<float>(glfwGetTime());
@@ -2784,6 +2806,7 @@ void App::MainLoop() {
 			needs_visibility_pass  = true;
 			hipr_force_clear_order = true;
 			last_render_mode       = ui::selection_ctx.debug_view_mode;
+			reset_hipr_object_sampling();
 		}
 
 		if (controls_changed) {
@@ -2800,6 +2823,7 @@ void App::MainLoop() {
 			// Entering edit mode: restart accumulation at the edited value.
 			material_edit_mode = true;
 			frame_number       = 0;
+			reset_hipr_object_sampling();
 		}
 
 		if (selection_panel_result.material_changed) {
@@ -2808,6 +2832,7 @@ void App::MainLoop() {
 			                                scene_ctx.material_alloc);
 			// Reset only when a parameter value actually changes.
 			frame_number = 0;
+			restart_hipr_object_sampling();
 			if (ui::selection_ctx.hipr_debug.full_resort_on_material_change) {
 				hipr_force_clear_order = true;
 			}
@@ -2824,6 +2849,7 @@ void App::MainLoop() {
 			needs_visibility_pass  = true;
 			material_edit_mode     = false;
 			hipr_force_clear_order = true;
+			reset_hipr_object_sampling();
 		}
 
 		{
@@ -2835,6 +2861,7 @@ void App::MainLoop() {
 			    cur.sun_intensity != last_lighting.sun_intensity) {
 				frame_number  = 0;
 				last_lighting = cur;
+				reset_hipr_object_sampling();
 			}
 		}
 
@@ -2848,6 +2875,7 @@ void App::MainLoop() {
 				frame_number            = 0;
 				needs_visibility_pass   = true;
 				hipr_force_clear_order  = true;
+				reset_hipr_object_sampling();
 			}
 		}
 
@@ -2885,6 +2913,7 @@ void App::MainLoop() {
 		    fb_h != swapchain_ctx.swapchain.extent.height) {
 			handle_resize(frame_number, fb_w, fb_h);
 			needs_visibility_pass = true;
+			reset_hipr_object_sampling();
 		}
 
 		// ---- F11: fullscreen toggle -----------------------------------------
@@ -2900,6 +2929,7 @@ void App::MainLoop() {
 			if (rebuild_pipeline()) {
 				frame_number          = 0;
 				needs_visibility_pass = true;
+				reset_hipr_object_sampling();
 			}
 		}
 		prev_f6 = f6;
@@ -2910,10 +2940,12 @@ void App::MainLoop() {
 			frame_number           = 0;
 			needs_visibility_pass  = true;
 			hipr_force_clear_order = true;
+			reset_hipr_object_sampling();
 		}
 		if (!camera_moving_this_frame && camera_was_moving) {
 			// Start a fresh accumulation the first frame after camera motion stops.
 			frame_number = 0;
+			reset_hipr_object_sampling();
 		}
 		camera_was_moving = camera_moving_this_frame;
 
@@ -2929,6 +2961,7 @@ void App::MainLoop() {
 				frame_number          = 0;
 				needs_visibility_pass = true;
 				material_edit_mode    = false;
+				reset_hipr_object_sampling();
 			}
 		}
 		prev_lmb = current_lmb;
@@ -2949,6 +2982,7 @@ void App::MainLoop() {
 		if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR) {
 			handle_resize(frame_number, fb_w, fb_h);
 			needs_visibility_pass = true;
+			reset_hipr_object_sampling();
 			continue;
 		}
 
@@ -2982,6 +3016,9 @@ void App::MainLoop() {
 			frame_number = 0;
 		}
 
+		const uint32_t hipr_frames_per_object =
+		    std::max(ui::selection_ctx.hipr_debug.frames_per_object, 1u);
+
 		PathTracerPushConstants pc{};
 		pc.frame               = frame_number;
 		pc.material_count      = scene_ctx.material_count;
@@ -3000,6 +3037,7 @@ void App::MainLoop() {
 		pc.hipr_vis_enable_tint  = ui::selection_ctx.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
 		pc.hipr_vis_rainbow_tint = ui::selection_ctx.hipr_debug.vis_rainbow_tint ? 1u : 0u;
 		pc.hipr_update_period    = std::max(ui::selection_ctx.hipr_debug.update_period_frames, 1u);
+		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
 		    std::clamp(ui::selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f);
@@ -3028,9 +3066,16 @@ void App::MainLoop() {
 		const bool hipr_active = ui::selection_ctx.selected_mesh_index >= 0;
 		const bool use_hipr_ranked =
 		    (hipr_mode || hipr_vis_mode) && hipr_active && !camera_moving_this_frame;
+		const bool hipr_object_sampling_enabled =
+		    hipr_mode && hipr_active && hipr_object_sampling_active && !camera_moving_this_frame;
+		const bool hipr_full_scene_sampling =
+		    hipr_mode && hipr_active && hipr_object_sampling_done && !camera_moving_this_frame;
 
 		bool run_stage1 = true;
 		bool run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
+		bool run_single_rank_stage4   = false;
+		bool run_ranked_stage4_loop   = false;
+		int32_t single_rank_stage4_id = -1;
 		if (obj_id_mode) {
 			run_stage1 = false;
 			run_stage2 = true;
@@ -3042,9 +3087,45 @@ void App::MainLoop() {
 			run_stage2 = true;        // Composite pass for reveal visualization.
 		}
 
+		if (hipr_object_sampling_enabled) {
+			const uint32_t sample_rank =
+			    (pc.hipr_top_k > 0u) ? std::min(hipr_object_sampling_rank, pc.hipr_top_k - 1u) : 0u;
+			run_stage2             = false;
+			run_ranked_stage4_loop = false;
+			if (pc.hipr_top_k == 0u || sample_rank == 0u) {
+				run_stage1 = true;
+			} else {
+				run_stage1             = false;
+				run_single_rank_stage4 = true;
+				single_rank_stage4_id  = static_cast<int32_t>(sample_rank);
+			}
+		} else if (hipr_full_scene_sampling) {
+			// After the focused per-object sequence, resume full-scene accumulation.
+			run_stage1             = hipr_active;
+			run_stage2             = true;
+			run_ranked_stage4_loop = false;
+		} else {
+			run_ranked_stage4_loop = use_hipr_ranked && run_stage2;
+		}
+
+		if ((!hipr_mode || !hipr_active) &&
+		    (hipr_object_sampling_active || hipr_object_sampling_done)) {
+			reset_hipr_object_sampling();
+		}
+
 		const uint32_t hipr_update_period = std::max(pc.hipr_update_period, 1u);
-		const bool hipr_refresh = use_hipr_ranked && (needs_visibility_pass || frame_number == 0 ||
-		                                              (frame_number % hipr_update_period) == 0);
+		bool hipr_refresh = use_hipr_ranked && (needs_visibility_pass || frame_number == 0 ||
+		                                        (frame_number % hipr_update_period) == 0);
+		if (hipr_object_sampling_enabled) {
+			// Keep ranking responsive while sampling the selected object (rank 0), then
+			// freeze it while we march through the remaining ranks.
+			hipr_refresh = use_hipr_ranked &&
+			               (needs_visibility_pass || frame_number == 0 ||
+			                (hipr_object_sampling_rank == 0u &&
+			                 (frame_number % hipr_update_period) == 0));
+		} else if (hipr_full_scene_sampling) {
+			hipr_refresh = false;
+		}
 
 		// Stage 10: clear per-object HiPR stats and ordering slots.
 		if (use_hipr_ranked && hipr_refresh) {
@@ -3085,6 +3166,10 @@ void App::MainLoop() {
 		// Stage 1: trace selected object pixels and gather influence.
 		if (run_stage1) {
 			pc.stage = 1;
+			pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
+			pc.frame = hipr_object_sampling_enabled ?
+			               hipr_object_sampling_frame :
+			               (hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number);
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
@@ -3117,18 +3202,28 @@ void App::MainLoop() {
 			                     nullptr, 0, nullptr);
 		}
 
-		if (use_hipr_ranked && run_stage2) {
+		if (run_single_rank_stage4) {
+			pc.stage            = 4;
+			pc.frame            = hipr_object_sampling_frame;
+			pc.hipr_render_rank = single_rank_stage4_id;
+			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			                   sizeof(pc), &pc);
+			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+		}
+
+		if (run_ranked_stage4_loop) {
 			// Stage 4: render by HiPR-ranked object order (skip rank 0; already handled by stage
 			// 1).
 			uint32_t stage4_end_rank = pc.hipr_top_k;
 			if (hipr_vis_mode) {
 				const uint32_t reveal_rank_count =
-				    std::min(pc.hipr_top_k, 1u + (frame_number / hipr_update_period));
+				    std::min(pc.hipr_top_k, 1u + (frame_number / hipr_frames_per_object));
 				stage4_end_rank = reveal_rank_count;
 			}
 
 			for (uint32_t rank = 1; rank < stage4_end_rank; ++rank) {
 				pc.stage            = 4;
+				pc.frame            = frame_number;
 				pc.hipr_render_rank = static_cast<int32_t>(rank);
 				vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 				                   sizeof(pc), &pc);
@@ -3143,9 +3238,29 @@ void App::MainLoop() {
 			// - HiPR Vis mode: reveal/composite pass.
 			// - Fallback: full-scene path tracing when no ranked HiPR pass is active.
 			pc.stage = 2;
+			pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
+			pc.frame            = hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number;
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+		}
+
+		if (hipr_object_sampling_enabled && pc.hipr_top_k > 0u) {
+			++hipr_object_sampling_frame;
+			if (hipr_object_sampling_frame >= hipr_frames_per_object) {
+				hipr_object_sampling_frame = 0;
+				++hipr_object_sampling_rank;
+				if (hipr_object_sampling_rank >= pc.hipr_top_k) {
+					hipr_object_sampling_active = false;
+					hipr_object_sampling_done   = true;
+					hipr_object_sampling_rank   = 0;
+					hipr_object_sampling_frame  = 0;
+					hipr_full_scene_frame       = 0;
+				}
+			}
+		}
+		if (hipr_full_scene_sampling) {
+			++hipr_full_scene_frame;
 		}
 
 		// Make compute writes visible to transfer
@@ -3235,6 +3350,7 @@ void App::MainLoop() {
 		if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
 			handle_resize(frame_number, fb_w, fb_h);
 			needs_visibility_pass = true;
+			reset_hipr_object_sampling();
 			continue;
 		}
 

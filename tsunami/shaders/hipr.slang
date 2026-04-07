@@ -46,6 +46,7 @@ struct PushConstants {
     uint   hipr_vis_enable_tint;
     uint   hipr_vis_rainbow_tint;
     uint   hipr_update_period;
+    uint   hipr_frames_per_object;
     float  hipr_score_blend;
     float  hipr_vis_tint_strength;
     uint   skybox_enabled;
@@ -689,10 +690,22 @@ float3 debugColorForObjectId(int object_id) {
     return 0.15f + 0.85f * rgb;
 }
 
-float3 hsvToRgb(float3 hsv) {
-    float4 K = float4(1.0f, 2.0f / 3.0f, 1.0f / 3.0f, 3.0f);
-    float3 p = abs(frac(hsv.xxx + K.xyz) * 6.0f - K.www);
-    return hsv.z * lerp(K.xxx, saturate(p - K.xxx), hsv.y);
+float3 heatmapRamp(float t) {
+    t = saturate(t);
+    float3 c0 = float3(0.12f, 0.18f, 0.45f); // deep blue
+    float3 c1 = float3(0.06f, 0.54f, 0.78f); // cyan
+    float3 c2 = float3(0.12f, 0.76f, 0.26f); // green
+    float3 c3 = float3(0.95f, 0.82f, 0.22f); // yellow
+    float3 c4 = float3(0.95f, 0.20f, 0.10f); // red
+
+    if (t < 0.25f) {
+        return lerp(c0, c1, t * 4.0f);
+    } else if (t < 0.5f) {
+        return lerp(c1, c2, (t - 0.25f) * 4.0f);
+    } else if (t < 0.75f) {
+        return lerp(c2, c3, (t - 0.5f) * 4.0f);
+    }
+    return lerp(c3, c4, (t - 0.75f) * 4.0f);
 }
 
 float3 hiprInfluenceTintColor(int rank) {
@@ -702,8 +715,8 @@ float3 hiprInfluenceTintColor(int rank) {
     }
 
     float denom = max(float(max(int(push.hipr_top_k), 1) - 1), 1.0f);
-    float hue   = frac(float(rank) / denom);
-    return hsvToRgb(float3(hue, 0.75f, 1.0f));
+    float heat  = 1.0f - (float(rank) / denom);
+    return heatmapRamp(heat);
 }
 
 int hiprRankForObject(int object_id) {
@@ -813,7 +826,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
                     }
                 }
 
-                if (best_id < 0 || best_score <= 0.0f) break;
+                if (best_id < 0) break;
                 hipr_order[rank] = best_id;
             }
         } else {
@@ -867,7 +880,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
                         best_id    = id;
                     }
                 }
-                if (best_id < 0 || best_score <= 0.0f) {
+                if (best_id < 0) {
                     hipr_order[write_rank++] = -1;
                 } else {
                     hipr_order[write_rank++] = best_id;
@@ -938,7 +951,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
         if (push.selected_mesh_index >= 0 && visible_object_id >= 0 && push.hipr_top_k > 0) {
             int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
                        hiprRankForObject(visible_object_id);
-            uint reveal_period = max(push.hipr_update_period, 1u);
+            uint reveal_period = max(push.hipr_frames_per_object, 1u);
             uint reveal_rank = min(push.hipr_top_k - 1u, push.frame / reveal_period);
             revealed = (rank >= 0) && (uint(rank) <= reveal_rank);
             if (revealed) {
@@ -984,7 +997,25 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     float3 color = colorAccum / float(SPP);
 
     float3 prev  = accum_image[pixel].rgb;
-    float  blend = 1.f / float(push.frame + 1u);
+    uint accumulation_frame = push.frame;
+
+    // Special continuation mode: after per-object focused sampling is complete,
+    // stage 1/2 switch to full-scene accumulation. Objects already in the HiPR
+    // set keep their prior N-sample history, while never-sampled objects start
+    // from the new full-scene frame index.
+    if (push.debug_view_mode == VIEW_MODE_HIPR && push.hipr_render_rank == -2) {
+        if (push.stage == 1) {
+            accumulation_frame = push.hipr_frames_per_object + push.frame;
+        } else if (push.stage == 2) {
+            int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
+                       hiprRankForObject(visible_object_id);
+            if (rank >= 0) {
+                accumulation_frame = push.hipr_frames_per_object + push.frame;
+            }
+        }
+    }
+
+    float  blend = 1.f / float(accumulation_frame + 1u);
     float3 accum = lerp(prev, color, blend);
     accum_image[pixel] = float4(accum, 1.f);
 

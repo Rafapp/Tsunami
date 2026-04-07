@@ -143,6 +143,11 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 			selection_ctx.hipr_debug.rank_count = static_cast<uint32_t>(rank_count);
 		}
 
+		int frames_per_object = static_cast<int>(selection_ctx.hipr_debug.frames_per_object);
+		if (ImGui::SliderInt("Frames per object", &frames_per_object, 1, 2000)) {
+			selection_ctx.hipr_debug.frames_per_object = static_cast<uint32_t>(frames_per_object);
+		}
+
 		int update_period = static_cast<int>(selection_ctx.hipr_debug.update_period_frames);
 		if (ImGui::SliderInt("Resort every N frames", &update_period, 1, 120)) {
 			selection_ctx.hipr_debug.update_period_frames = static_cast<uint32_t>(update_period);
@@ -161,7 +166,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		ImGui::SeparatorText("HiPR Vis");
 		ImGui::Checkbox("Influence tint", &selection_ctx.hipr_debug.vis_enable_influence_tint);
 		ImGui::BeginDisabled(!selection_ctx.hipr_debug.vis_enable_influence_tint);
-		ImGui::Checkbox("Rainbow tint", &selection_ctx.hipr_debug.vis_rainbow_tint);
+		ImGui::Checkbox("Heatmap tint", &selection_ctx.hipr_debug.vis_rainbow_tint);
 		ImGui::SliderFloat("Tint strength", &selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f,
 		                   "%.2f");
 		ImGui::EndDisabled();
