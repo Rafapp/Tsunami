@@ -17,10 +17,10 @@ class Camera {
 
 	GPUCamera pack() const;
 
-	glm::vec3 m_position = glm::vec3(0.0f, 0.0f, -1.0f);
+	glm::vec3 m_position = glm::vec3(0.0f, 0.5f, 0.0f);
 	glm::vec3 m_target   = glm::vec3(0.0f, 0.0f, 0.0f);
 	glm::vec3 m_up       = glm::vec3(0.0f, 1.0f, 0.0f);
-	float     m_fov      = 45.0f;
+	float     m_fov      = 60.0f;
 	float     m_nearClip = 0.1f;
-	float     m_farClip  = 100.0f;
+	float     m_farClip  = 10000.0f;
 };

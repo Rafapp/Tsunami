@@ -6,10 +6,24 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/trigonometric.hpp>
 
-FlyCamera::FlyCamera(glm::vec3 position, glm::vec3 target, float fov_deg, float speed_) :
-    speed(speed_), fov(fov_deg), m_position(position) {
+FlyCamera::FlyCamera(glm::vec3 position, glm::vec3 target, float fov_deg, float speed,
+                     float sensitivity, float near_clip, float far_clip, glm::vec3 up) :
+    m_speed(speed),
+    m_sensitivity(sensitivity),
+    m_fov(fov_deg),
+    m_near_clip(near_clip),
+    m_far_clip(far_clip),
+    m_position(position) {
+	const float up_len = glm::length(up);
+	m_up               = (up_len > 1e-6f) ? (up / up_len) : glm::vec3{0.f, 1.f, 0.f};
+
 	// Derive initial yaw/pitch from the look direction
-	glm::vec3 dir = glm::normalize(target - position);
+	glm::vec3 dir = target - position;
+	if (glm::length(dir) < 1e-6f) {
+		dir = glm::vec3{0.f, 0.f, -1.f};
+	} else {
+		dir = glm::normalize(dir);
+	}
 	m_pitch       = std::asin(dir.y);
 	m_yaw         = std::atan2(dir.x, dir.z);
 }
@@ -20,7 +34,11 @@ glm::vec3 FlyCamera::forward() const {
 }
 
 glm::vec3 FlyCamera::right() const {
-	return glm::normalize(glm::cross(forward(), glm::vec3{0.f, 1.f, 0.f}));
+	const glm::vec3 side = glm::cross(forward(), m_up);
+	if (glm::length(side) > 1e-6f) {
+		return glm::normalize(side);
+	}
+	return glm::normalize(glm::cross(forward(), glm::vec3{0.f, 0.f, 1.f}));
 }
 
 bool FlyCamera::update(GLFWwindow* window, float dt) {
@@ -58,8 +76,8 @@ bool FlyCamera::update(GLFWwindow* window, float dt) {
 			m_first_mouse = false;
 		}
 
-		float dx = (fx - m_last_x) * sensitivity;
-		float dy = (fy - m_last_y) * sensitivity;
+		float dx = (fx - m_last_x) * m_sensitivity;
+		float dy = (fy - m_last_y) * m_sensitivity;
 		m_last_x = fx;
 		m_last_y = fy;
 
@@ -74,14 +92,14 @@ bool FlyCamera::update(GLFWwindow* window, float dt) {
 	}
 
 	// ---- keyboard movement ----
-	float spd = speed;
+	float spd = m_speed;
 	if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
 	    glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
 		spd *= 4.f;
 
 	glm::vec3 fwd = forward();
 	glm::vec3 rgt = right();
-	glm::vec3 up  = {0.f, 1.f, 0.f};
+	glm::vec3 up  = m_up;
 
 	glm::vec3 move{0.f};
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
@@ -107,9 +125,9 @@ bool FlyCamera::update(GLFWwindow* window, float dt) {
 	int        cur_q = glfwGetKey(window, GLFW_KEY_Q);
 	int        cur_e = glfwGetKey(window, GLFW_KEY_E);
 	if (cur_q == GLFW_PRESS && prev_q == GLFW_RELEASE)
-		speed = std::max(1.f, speed * 0.5f);
+		m_speed = std::max(0.01f, m_speed * 0.5f);
 	if (cur_e == GLFW_PRESS && prev_e == GLFW_RELEASE)
-		speed *= 2.f;
+		m_speed *= 2.f;
 	prev_q = cur_q;
 	prev_e = cur_e;
 
@@ -119,5 +137,5 @@ bool FlyCamera::update(GLFWwindow* window, float dt) {
 GPUCamera FlyCamera::pack() const {
 	glm::vec3 target = m_position + forward();
 	return GPUCamera{glm::vec4(m_position, 0.f), glm::vec4(target, 0.f),
-	                 glm::vec4(0.f, 1.f, 0.f, 0.f), glm::vec4(fov, 0.1f, 10000.f, 0.f)};
+	                 glm::vec4(m_up, 0.f), glm::vec4(m_fov, m_near_clip, m_far_clip, 0.f)};
 }

@@ -1324,7 +1324,8 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
             .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
             .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
             .set_desired_extent(new_w, new_h)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
             .set_old_swapchain(old_swapchain.swapchain)
             .build();
     vkb::destroy_swapchain(old_swapchain);
@@ -1960,7 +1961,7 @@ App::App() {
 	// === 0. Scene setup
 	// ==============================
 	m_scene           = std::make_unique<Scene>();
-	m_scene->m_camera = Camera(glm::vec3(0.f, 20.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
+	m_scene->m_camera = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	// m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
 	// rebuildObjectIdMap(m_scene.get());
@@ -2184,9 +2185,6 @@ App::App() {
 	{
 		constexpr VkBufferUsageFlags SB = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
-		GPUCamera gc = m_scene->m_camera.pack();
-		scene_ctx.camera_buffer =
-		    create_and_upload_buffer(allocator, sizeof(GPUCamera), &gc, SB, scene_ctx.camera_alloc);
 		VmaAllocationCreateInfo cam_alloc_info{};
 		cam_alloc_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 		cam_alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
@@ -2635,6 +2633,181 @@ App::~App() {
 	shutdown_imgui();
 	destroySwapchainResources();
 
+	if (compute_ctx.pipeline != VK_NULL_HANDLE) {
+		vkDestroyPipeline(vulkan_ctx.device, compute_ctx.pipeline, nullptr);
+		compute_ctx.pipeline = VK_NULL_HANDLE;
+	}
+	if (compute_ctx.pipeline_layout != VK_NULL_HANDLE) {
+		vkDestroyPipelineLayout(vulkan_ctx.device, compute_ctx.pipeline_layout, nullptr);
+		compute_ctx.pipeline_layout = VK_NULL_HANDLE;
+	}
+
+	for (VkImageView& view : render_target_ctx.mat_views) {
+		if (view != VK_NULL_HANDLE) {
+			vkDestroyImageView(vulkan_ctx.device, view, nullptr);
+			view = VK_NULL_HANDLE;
+		}
+	}
+	for (size_t i = 0; i < render_target_ctx.mat_images.size(); ++i) {
+		if (render_target_ctx.mat_images[i] != VK_NULL_HANDLE &&
+		    i < render_target_ctx.mat_allocs.size() &&
+		    render_target_ctx.mat_allocs[i] != VK_NULL_HANDLE) {
+			vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.mat_images[i],
+			                render_target_ctx.mat_allocs[i]);
+			render_target_ctx.mat_images[i] = VK_NULL_HANDLE;
+			render_target_ctx.mat_allocs[i] = VK_NULL_HANDLE;
+		}
+	}
+	render_target_ctx.mat_views.clear();
+	render_target_ctx.mat_images.clear();
+	render_target_ctx.mat_allocs.clear();
+
+	for (auto& lut : render_target_ctx.lut_textures_2d) {
+		if (lut.view != VK_NULL_HANDLE) {
+			vkDestroyImageView(vulkan_ctx.device, lut.view, nullptr);
+			lut.view = VK_NULL_HANDLE;
+		}
+		if (lut.image != VK_NULL_HANDLE && lut.alloc != VK_NULL_HANDLE) {
+			vmaDestroyImage(render_target_ctx.allocator, lut.image, lut.alloc);
+			lut.image = VK_NULL_HANDLE;
+			lut.alloc = VK_NULL_HANDLE;
+		}
+	}
+	for (auto& lut : render_target_ctx.lut_textures_3d) {
+		if (lut.view != VK_NULL_HANDLE) {
+			vkDestroyImageView(vulkan_ctx.device, lut.view, nullptr);
+			lut.view = VK_NULL_HANDLE;
+		}
+		if (lut.image != VK_NULL_HANDLE && lut.alloc != VK_NULL_HANDLE) {
+			vmaDestroyImage(render_target_ctx.allocator, lut.image, lut.alloc);
+			lut.image = VK_NULL_HANDLE;
+			lut.alloc = VK_NULL_HANDLE;
+		}
+	}
+
+	if (render_target_ctx.storage_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+		render_target_ctx.storage_image_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.storage_image != VK_NULL_HANDLE &&
+	    render_target_ctx.storage_image_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.storage_image,
+		                render_target_ctx.storage_image_alloc);
+		render_target_ctx.storage_image       = VK_NULL_HANDLE;
+		render_target_ctx.storage_image_alloc = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.object_id_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+		render_target_ctx.object_id_image_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.object_id_image != VK_NULL_HANDLE &&
+	    render_target_ctx.object_id_image_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.object_id_image,
+		                render_target_ctx.object_id_image_alloc);
+		render_target_ctx.object_id_image       = VK_NULL_HANDLE;
+		render_target_ctx.object_id_image_alloc = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.accum_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+		render_target_ctx.accum_image_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.accum_image != VK_NULL_HANDLE &&
+	    render_target_ctx.accum_image_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.accum_image,
+		                render_target_ctx.accum_image_alloc);
+		render_target_ctx.accum_image       = VK_NULL_HANDLE;
+		render_target_ctx.accum_image_alloc = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.dummy_image_2d_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.dummy_image_2d_view, nullptr);
+		render_target_ctx.dummy_image_2d_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.dummy_image_2d != VK_NULL_HANDLE &&
+	    render_target_ctx.dummy_image_2d_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.dummy_image_2d,
+		                render_target_ctx.dummy_image_2d_alloc);
+		render_target_ctx.dummy_image_2d       = VK_NULL_HANDLE;
+		render_target_ctx.dummy_image_2d_alloc = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.dummy_image_3d_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.dummy_image_3d_view, nullptr);
+		render_target_ctx.dummy_image_3d_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.dummy_image_3d != VK_NULL_HANDLE &&
+	    render_target_ctx.dummy_image_3d_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.dummy_image_3d,
+		                render_target_ctx.dummy_image_3d_alloc);
+		render_target_ctx.dummy_image_3d       = VK_NULL_HANDLE;
+		render_target_ctx.dummy_image_3d_alloc = VK_NULL_HANDLE;
+	}
+
+	if (render_target_ctx.lut_sampler != VK_NULL_HANDLE) {
+		vkDestroySampler(vulkan_ctx.device, render_target_ctx.lut_sampler, nullptr);
+		render_target_ctx.lut_sampler = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.material_sampler != VK_NULL_HANDLE) {
+		vkDestroySampler(vulkan_ctx.device, render_target_ctx.material_sampler, nullptr);
+		render_target_ctx.material_sampler = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.descriptor_pool != VK_NULL_HANDLE) {
+		vkDestroyDescriptorPool(vulkan_ctx.device, render_target_ctx.descriptor_pool, nullptr);
+		render_target_ctx.descriptor_pool = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.descriptor_set_layout != VK_NULL_HANDLE) {
+		vkDestroyDescriptorSetLayout(vulkan_ctx.device, render_target_ctx.descriptor_set_layout,
+		                             nullptr);
+		render_target_ctx.descriptor_set_layout = VK_NULL_HANDLE;
+	}
+
+	if (scene_ctx.camera_buffer != VK_NULL_HANDLE && scene_ctx.camera_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.camera_buffer, scene_ctx.camera_alloc);
+		scene_ctx.camera_buffer = VK_NULL_HANDLE;
+		scene_ctx.camera_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.material_buffer != VK_NULL_HANDLE && scene_ctx.material_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.material_buffer,
+		                 scene_ctx.material_alloc);
+		scene_ctx.material_buffer = VK_NULL_HANDLE;
+		scene_ctx.material_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.mesh_buffer != VK_NULL_HANDLE && scene_ctx.mesh_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.mesh_buffer, scene_ctx.mesh_alloc);
+		scene_ctx.mesh_buffer = VK_NULL_HANDLE;
+		scene_ctx.mesh_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.vertex_buffer != VK_NULL_HANDLE && scene_ctx.vertex_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.vertex_buffer, scene_ctx.vertex_alloc);
+		scene_ctx.vertex_buffer = VK_NULL_HANDLE;
+		scene_ctx.vertex_alloc  = VK_NULL_HANDLE;
+	}
+	if (scene_ctx.index_buffer != VK_NULL_HANDLE && scene_ctx.index_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.index_buffer, scene_ctx.index_alloc);
+		scene_ctx.index_buffer = VK_NULL_HANDLE;
+		scene_ctx.index_alloc  = VK_NULL_HANDLE;
+	}
+
+	if (as_ctx.tlas != VK_NULL_HANDLE) {
+		vkDestroyAccelerationStructureKHR(vulkan_ctx.device, as_ctx.tlas, nullptr);
+		as_ctx.tlas = VK_NULL_HANDLE;
+	}
+	if (as_ctx.tlas_buffer != VK_NULL_HANDLE && as_ctx.tlas_buffer_alloc != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(render_target_ctx.allocator, as_ctx.tlas_buffer, as_ctx.tlas_buffer_alloc);
+		as_ctx.tlas_buffer       = VK_NULL_HANDLE;
+		as_ctx.tlas_buffer_alloc = VK_NULL_HANDLE;
+	}
+	for (auto& blas : as_ctx.blases) {
+		if (blas.handle != VK_NULL_HANDLE) {
+			vkDestroyAccelerationStructureKHR(vulkan_ctx.device, blas.handle, nullptr);
+			blas.handle = VK_NULL_HANDLE;
+		}
+		if (blas.buffer != VK_NULL_HANDLE && blas.buffer_alloc != VK_NULL_HANDLE) {
+			vmaDestroyBuffer(render_target_ctx.allocator, blas.buffer, blas.buffer_alloc);
+			blas.buffer       = VK_NULL_HANDLE;
+			blas.buffer_alloc = VK_NULL_HANDLE;
+		}
+	}
+	as_ctx.blases.clear();
+
 	if (sync_ctx.in_flight != VK_NULL_HANDLE) {
 		vkDestroyFence(vulkan_ctx.device, sync_ctx.in_flight, nullptr);
 	}
@@ -2676,7 +2849,7 @@ void App::MainLoop() {
 
 	// Initialise fly camera from the scene camera
 	FlyCamera fly_cam(m_scene->m_camera.m_position, m_scene->m_camera.m_target,
-	                  m_scene->m_camera.m_fov, 0.1f);
+	                  m_scene->m_camera.m_fov, 0.5f);
 
 	double   last_time    = glfwGetTime();
 	uint32_t frame_number = 0;
@@ -3014,33 +3187,29 @@ void App::MainLoop() {
 		swapchain_ctx.image_initialized[image_index] = true;
 
 		// ---- ImGui render pass ----------------------------------------------
-		VkRenderingAttachmentInfo color_attachment{};
-		color_attachment.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-		color_attachment.imageView   = swapchain_ctx.image_views[image_index];
-		color_attachment.imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-		color_attachment.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-		color_attachment.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-
-		VkRenderingInfo rendering_info{};
-		rendering_info.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-		rendering_info.renderArea.offset    = {0, 0};
-		rendering_info.renderArea.extent    = swapchain_ctx.extent;
-		rendering_info.layerCount           = 1;
-		rendering_info.colorAttachmentCount = 1;
-		rendering_info.pColorAttachments    = &color_attachment;
-
-		vkCmdBeginRendering(cmd, &rendering_info);
-		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-		vkCmdEndRendering(cmd);
-
 		transition_layout(cmd, swapchain_ctx.images[image_index],
-		                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-		                  VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
-		                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+		                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TRANSFER_BIT,
+		                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+		VkRenderPassBeginInfo rp_begin{};
+		rp_begin.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		rp_begin.renderPass        = overlay_ctx.render_pass;
+		rp_begin.framebuffer       = overlay_ctx.framebuffers[image_index];
+		rp_begin.renderArea.offset = {0, 0};
+		rp_begin.renderArea.extent = swapchain_ctx.extent;
+		rp_begin.clearValueCount   = 0;
+		rp_begin.pClearValues      = nullptr;
+
+		vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+		vkCmdEndRenderPass(cmd);
 
 		vkEndCommandBuffer(cmd);
 
-		VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 
 		VkSubmitInfo submit_info{};
 		submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -3050,14 +3219,14 @@ void App::MainLoop() {
 		submit_info.commandBufferCount   = 1;
 		submit_info.pCommandBuffers      = &cmd;
 		submit_info.signalSemaphoreCount = 1;
-		submit_info.pSignalSemaphores    = &sync_ctx.render_finished[frame_idx];
+		submit_info.pSignalSemaphores    = &sync_ctx.render_finished[image_index];
 
 		vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight);
 
 		VkPresentInfoKHR present_info{};
 		present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 		present_info.waitSemaphoreCount = 1;
-		present_info.pWaitSemaphores    = &sync_ctx.render_finished[frame_idx];
+		present_info.pWaitSemaphores    = &sync_ctx.render_finished[image_index];
 		present_info.swapchainCount     = 1;
 		present_info.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
 		present_info.pImageIndices      = &image_index;

@@ -134,7 +134,7 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 8;
+static const int   MAX_BOUNCES = 32;
 static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
@@ -144,9 +144,9 @@ static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 // so it passes cleanly through Sponza's open atrium top regardless of the
 // camera position.  Angle it slightly so surfaces at grazing incidence still
 // catch some light.
-static float3 g_sun_dir       = normalize(float3(0.f, -1.0f, 0.f));
-static const float3 g_sun_color     = float3(1.0f, 0.95f, 0.85f);
-static const float  g_sun_intensity = 0.5f;   // tweak for desired exposure
+static float3 g_sun_dir       = normalize(float3(0.1f, 1.0f, .1f));
+static const float3 g_sun_color     = float3(1.0f, 0.85f, 0.65f);
+static const float  g_sun_intensity = 15.0f;   // tweak for desired exposure
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 struct Ray { float3 origin; float3 dir; };
