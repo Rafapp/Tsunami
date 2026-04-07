@@ -161,7 +161,7 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 128;
+static const int   MAX_BOUNCES = 8;
 static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
@@ -182,6 +182,7 @@ struct Hit {
     bool   front_face;
     int    matIndex;
     int    instanceID;
+    int    primID;
 };
 
 // ─── Halton low-discrepancy jitter ───────────────────────────────────────────
@@ -227,6 +228,20 @@ struct RNG {
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 struct VertexAttribs { float3 normal; float2 uv; float4 tangent;};
+
+float3 safeNormalize(float3 v, float3 fallback) {
+    float len2 = dot(v, v);
+    if (len2 > 1.0e-12f) {
+        return v * rsqrt(len2);
+    }
+    return fallback;
+}
+
+float3 buildOrthoTangent(float3 n) {
+    // Pick an axis least aligned with n, then project to get a stable tangent.
+    float3 axis = (abs(n.y) < 0.999f) ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    return safeNormalize(cross(axis, n), float3(1.0f, 0.0f, 0.0f));
+}
 
 VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     uint voff = (uint)meshes_buf[NonUniformResourceIndex(instanceID)].vertexOffset;
@@ -331,29 +346,45 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     hit.uv         = attr.uv;
     hit.front_face = frontFace;
     hit.instanceID = int(instID);
-    hit.matIndex = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
+    hit.primID     = int(primID);
+    hit.matIndex   = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
     mat = materials_buf[NonUniformResourceIndex(hit.matIndex)];
 
-    float3 N = normalize(attr.normal);
-    float3 T = normalize(attr.tangent.xyz);
-    float  handedness = attr.tangent.w;
+    // Vertex normals/tangents are in local (BLAS) space.
+    // The TLAS instance transform moves positions to world space, so we must
+    // bring the TBN basis to world space too:
+    //   normals  → multiply by inverse-transpose of model matrix
+    //             = mul(n_local, inverseTransform)  [row-vec × mat in Slang]
+    //   tangents → multiply by the forward model matrix (no inverse needed)
+    float3x3 M    = (float3x3) meshes_buf[NonUniformResourceIndex(instID)].transform;
+    float3x3 Minv = (float3x3) meshes_buf[NonUniformResourceIndex(instID)].inverseTransform;
 
-    T = normalize(T - N * dot(N, T));
-    float3 B = handedness * cross(N, T);
+    float3 N = safeNormalize(mul(attr.normal, Minv), float3(0.0f, 1.0f, 0.0f)); // inverse-transpose
+    float3 T = mul(attr.tangent.xyz, M); // forward transform
+    float  handedness = (attr.tangent.w < 0.0f) ? -1.0f : 1.0f;
 
-    float3 normal_tex = sample_tex(
-        mat.normal_tex_index,
-        attr.uv,
-        float4(0.5, 0.5, 1.0, 1.0)
-    ).xyz;
+    // Re-orthogonalize T against the (now world-space) N.
+    T = T - N * dot(N, T);
+    T = safeNormalize(T, buildOrthoTangent(N));
+    float3 B = safeNormalize(handedness * cross(N, T), buildOrthoTangent(N));
 
-    normal_tex = normal_tex * 2.0 - 1.0;
+    float3 N_world = N;
+    if (mat.normal_tex_index != NO_TEXTURE) {
+        float3 normal_tex = sample_tex(
+            mat.normal_tex_index,
+            attr.uv,
+            float4(0.5, 0.5, 1.0, 1.0)
+        ).xyz;
 
-    float3 N_world = normalize(
-        T * normal_tex.x +
-        B * normal_tex.y +
-        N * normal_tex.z
-    );
+        normal_tex = normal_tex * 2.0 - 1.0;
+
+        // Perturb N by the normal map in the world-space TBN frame.
+        N_world = safeNormalize(
+            T * normal_tex.x +
+            B * normal_tex.y +
+            N * normal_tex.z,
+            N);
+    }
 
     hit.normal    = frontFace ? N_world : -N_world;
     hit.tangent   = T;
@@ -514,20 +545,17 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
         throughput *= openpbr_get_sum_of_diffuse_specular(weight);
 
         // Russian roulette after bounce 2
-        if (bounce >= 8) {
+        if (bounce >= 2) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
             if (rng.nextFloat() > p) break;
             throughput /= p;
         }
 
-        // check for refraction and flip the ray bias direction if needed to avoid self-intersection
-        float biasDir = 1.0f;
-        if ((sampled_type & OpenPBR_BsdfLobeTypeTransmission) != 0 && hit.front_face) {
-            biasDir = -1.0f;
-        }
-
+        // Offset origin to the same side as the outgoing ray to avoid self-intersection.
+        // offset_n always points toward light_dir — correct for both reflection
+        // (same hemisphere as hit.normal) and transmission (opposite hemisphere).
         float3 offset_n = dot(light_dir, hit.normal) >= 0.f ? hit.normal : -hit.normal;
-        ray.origin = hitPos + offset_n * (T_MIN * biasDir);
+        ray.origin = hitPos + offset_n * T_MIN;
         ray.dir    = light_dir;
     }
 
@@ -898,7 +926,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     // Path trace this pixel and accumulate into the running average.
     RNG rng = RNG::make(pixel, push.frame);
     float3 colorAccum = float3(0, 0, 0);
-    static const int SPP = 64;
+    static const int SPP = 1;
     for (int i = 0; i < SPP; ++i) {
         uint sample_index = push.frame * uint(SPP) + uint(i);
         float2 jitter = haltonJitter(sample_index, pixel);

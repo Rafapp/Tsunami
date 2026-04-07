@@ -1711,8 +1711,8 @@ App::App() {
 	// m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
 	// ui::rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
-	// m_scene->load_gltf("resources/scenes/cornell/cornell.glb");
-	m_scene->load_gltf("resources/scenes/cornell/cornell_simple.glb");
+	m_scene->load_gltf("resources/scenes/cornell/cornell.glb");
+	// m_scene->load_gltf("resources/scenes/cornell/cornell_simple.glb");
 	ui::rebuildObjectIdMap(m_scene.get());
 	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
