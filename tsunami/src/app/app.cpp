@@ -1707,8 +1707,8 @@ static bool rebuild_pipeline() {
 	// Recompile the shader from disk
 	std::vector<uint32_t> spirv;
 	try {
-		spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/hipr.slang", "main",
-		                             {VENDORS_DIR});
+		spirv =
+		    compile_slang_shader(std::string(SHADERS_DIR) + "/hipr.slang", "main", {VENDORS_DIR});
 	} catch (const std::exception& e) {
 		std::cerr << "[SHADER RELOAD] Compile failed: " << e.what() << "\n";
 		return false;
@@ -2511,8 +2511,8 @@ App::App() {
 	// === X. Compute Pipeline
 	// ============================================
 	{
-		auto spirv = compile_slang_shader(std::string(SHADERS_DIR) + "/hipr.slang", "main",
-		                                  {VENDORS_DIR});
+		auto spirv =
+		    compile_slang_shader(std::string(SHADERS_DIR) + "/hipr.slang", "main", {VENDORS_DIR});
 		std::cout << "[INFO] Shader: " << spirv.size() * 4 << " bytes SPIR-V\n";
 		VkShaderModuleCreateInfo mci{};
 		mci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
