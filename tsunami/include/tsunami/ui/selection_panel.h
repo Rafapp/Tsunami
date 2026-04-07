@@ -17,10 +17,10 @@ enum class MaterialEditMode : int {
 };
 
 enum class RenderDebugViewMode : int {
-	HiPR    = 0,
+	HiPR      = 0,
 	ObjectIds = 1,
-	HiPRVis = 2,
-	Naive   = 3,
+	HiPRVis   = 2,
+	Naive     = 3,
 };
 
 struct ObjectIdEntry {
@@ -30,10 +30,22 @@ struct ObjectIdEntry {
 	int         material_index = -1;
 };
 
+struct HiPRDebugSettings {
+	uint32_t rank_count                       = 8;
+	uint32_t update_period_frames             = 8;
+	bool     incremental_sorting              = true;
+	bool     full_resort_on_material_change   = false;
+	float    score_blend                      = 0.25f;
+	bool     vis_enable_influence_tint        = true;
+	bool     vis_rainbow_tint                 = true;
+	float    vis_tint_strength                = 0.20f;
+};
+
 struct SelectionContext {
 	int                        selected_mesh_index = -1;
 	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
 	RenderDebugViewMode        debug_view_mode     = RenderDebugViewMode::HiPR;
+	HiPRDebugSettings          hipr_debug{};
 	GPUMaterial                editor_material{};
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;

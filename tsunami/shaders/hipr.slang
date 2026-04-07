@@ -41,6 +41,13 @@ struct PushConstants {
     uint   hipr_object_count;
     uint   hipr_top_k;
     int    hipr_render_rank;
+    uint   hipr_incremental_sort;
+    uint   hipr_clear_order;
+    uint   hipr_vis_enable_tint;
+    uint   hipr_vis_rainbow_tint;
+    uint   hipr_update_period;
+    float  hipr_score_blend;
+    float  hipr_vis_tint_strength;
     uint   _pad3;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
@@ -577,6 +584,23 @@ float3 debugColorForObjectId(int object_id) {
     return 0.15f + 0.85f * rgb;
 }
 
+float3 hsvToRgb(float3 hsv) {
+    float4 K = float4(1.0f, 2.0f / 3.0f, 1.0f / 3.0f, 3.0f);
+    float3 p = abs(frac(hsv.xxx + K.xyz) * 6.0f - K.www);
+    return hsv.z * lerp(K.xxx, saturate(p - K.xxx), hsv.y);
+}
+
+float3 hiprInfluenceTintColor(int rank) {
+    if (rank < 0) return float3(1.0f, 1.0f, 1.0f);
+    if (push.hipr_vis_rainbow_tint == 0u) {
+        return float3(1.0f, 0.82f, 0.22f);
+    }
+
+    float denom = max(float(max(int(push.hipr_top_k), 1) - 1), 1.0f);
+    float hue   = frac(float(rank) / denom);
+    return hsvToRgb(float3(hue, 0.75f, 1.0f));
+}
+
 int hiprRankForObject(int object_id) {
     if (object_id < 0) return -1;
     if (push.hipr_top_k == 0) return -1;
@@ -625,9 +649,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
             hipr_visible_counts[index]   = 0u;
             hipr_secondary_counts[index] = 0u;
             hipr_shadow_counts[index]    = 0u;
-            hipr_scores[index]           = 0.0f;
+            if (push.hipr_clear_order != 0u) {
+                hipr_scores[index] = 0.0f;
+            }
         }
-        if (index < push.hipr_top_k) {
+        if (push.hipr_clear_order != 0u && index < push.hipr_top_k) {
             hipr_order[index] = -1;
         }
         return;
@@ -640,42 +666,128 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
         if (push.selected_mesh_index < 0 || push.hipr_object_count == 0 || push.hipr_top_k == 0)
             return;
 
-        for (uint i = 0; i < push.hipr_top_k; ++i) {
-            hipr_order[i] = -1;
-        }
+        const bool incremental = (push.hipr_incremental_sort != 0u) && (push.hipr_clear_order == 0u);
+        const float score_blend = saturate(push.hipr_score_blend);
 
         for (uint i = 0; i < push.hipr_object_count; ++i) {
             float visible = float(max(hipr_visible_counts[i], 1u));
-            float score   = (float(hipr_secondary_counts[i]) + 0.5f * float(hipr_shadow_counts[i])) /
-                          visible;
-            hipr_scores[i] = score;
+            float instant_score =
+                (float(hipr_secondary_counts[i]) + 0.5f * float(hipr_shadow_counts[i])) / visible;
+            if (incremental) {
+                hipr_scores[i] = lerp(hipr_scores[i], instant_score, score_blend);
+            } else {
+                hipr_scores[i] = instant_score;
+            }
         }
 
-        hipr_order[0] = push.selected_mesh_index;
-        for (uint rank = 1; rank < push.hipr_top_k; ++rank) {
-            float best_score = -1.0f;
-            int   best_id    = -1;
-            for (uint obj = 0; obj < push.hipr_object_count; ++obj) {
-                if (int(obj) == push.selected_mesh_index) continue;
+        if (!incremental) {
+            for (uint i = 0; i < push.hipr_top_k; ++i) {
+                hipr_order[i] = -1;
+            }
 
-                bool already_chosen = false;
-                for (uint prev = 0; prev < rank; ++prev) {
-                    if (hipr_order[prev] == int(obj)) {
-                        already_chosen = true;
+            hipr_order[0] = push.selected_mesh_index;
+            for (uint rank = 1; rank < push.hipr_top_k; ++rank) {
+                float best_score = -1.0f;
+                int   best_id    = -1;
+                for (uint obj = 0; obj < push.hipr_object_count; ++obj) {
+                    if (int(obj) == push.selected_mesh_index) continue;
+
+                    bool already_chosen = false;
+                    for (uint prev = 0; prev < rank; ++prev) {
+                        if (hipr_order[prev] == int(obj)) {
+                            already_chosen = true;
+                            break;
+                        }
+                    }
+                    if (already_chosen) continue;
+
+                    float s = hipr_scores[obj];
+                    if (s > best_score) {
+                        best_score = s;
+                        best_id    = int(obj);
+                    }
+                }
+
+                if (best_id < 0 || best_score <= 0.0f) break;
+                hipr_order[rank] = best_id;
+            }
+        } else {
+            // Keep previous ranking as the base ordering to avoid disruptive reshuffles.
+            int seen[64];
+            uint seen_count = 0u;
+            [unroll]
+            for (uint i = 0; i < 64; ++i) {
+                seen[i] = -1;
+            }
+
+            hipr_order[0] = push.selected_mesh_index;
+            seen[seen_count++] = push.selected_mesh_index;
+
+            uint write_rank = 1u;
+            for (uint rank = 1; rank < push.hipr_top_k && write_rank < push.hipr_top_k; ++rank) {
+                int id = hipr_order[rank];
+                if (id < 0 || id == push.selected_mesh_index || uint(id) >= push.hipr_object_count) {
+                    continue;
+                }
+                bool duplicate = false;
+                for (uint i = 0; i < seen_count; ++i) {
+                    if (seen[i] == id) {
+                        duplicate = true;
                         break;
                     }
                 }
-                if (already_chosen) continue;
+                if (duplicate) continue;
+                hipr_order[write_rank++] = id;
+                if (seen_count < 64u) seen[seen_count++] = id;
+            }
 
-                float s = hipr_scores[obj];
-                if (s > best_score) {
-                    best_score = s;
-                    best_id    = int(obj);
+            while (write_rank < push.hipr_top_k) {
+                float best_score = -1.0f;
+                int   best_id    = -1;
+                for (uint obj = 0; obj < push.hipr_object_count; ++obj) {
+                    int id = int(obj);
+                    if (id == push.selected_mesh_index) continue;
+                    bool duplicate = false;
+                    for (uint i = 0; i < seen_count; ++i) {
+                        if (seen[i] == id) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (duplicate) continue;
+
+                    float s = hipr_scores[obj];
+                    if (s > best_score) {
+                        best_score = s;
+                        best_id    = id;
+                    }
+                }
+                if (best_id < 0 || best_score <= 0.0f) {
+                    hipr_order[write_rank++] = -1;
+                } else {
+                    hipr_order[write_rank++] = best_id;
+                    if (seen_count < 64u) seen[seen_count++] = best_id;
                 }
             }
 
-            if (best_id < 0 || best_score <= 0.0f) break;
-            hipr_order[rank] = best_id;
+            // Gentle local swaps only when score improvement is significant.
+            const float swap_threshold = 1.08f;
+            for (uint pass = 0; pass < push.hipr_top_k; ++pass) {
+                for (uint rank = 1; rank + 1 < push.hipr_top_k; ++rank) {
+                    int a = hipr_order[rank];
+                    int b = hipr_order[rank + 1u];
+                    if (a < 0 || b < 0 || uint(a) >= push.hipr_object_count ||
+                        uint(b) >= push.hipr_object_count) {
+                        continue;
+                    }
+                    float sa = hipr_scores[uint(a)];
+                    float sb = hipr_scores[uint(b)];
+                    if (sb > sa * swap_threshold) {
+                        hipr_order[rank] = b;
+                        hipr_order[rank + 1u] = a;
+                    }
+                }
+            }
         }
         return;
     }
@@ -721,10 +833,15 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
         if (push.selected_mesh_index >= 0 && visible_object_id >= 0 && push.hipr_top_k > 0) {
             int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
                        hiprRankForObject(visible_object_id);
-            uint reveal_rank = min(push.hipr_top_k - 1u, push.frame / 8u);
+            uint reveal_period = max(push.hipr_update_period, 1u);
+            uint reveal_rank = min(push.hipr_top_k - 1u, push.frame / reveal_period);
             revealed = (rank >= 0) && (uint(rank) <= reveal_rank);
             if (revealed) {
                 display = accum_image[pixel].rgb;
+                if (push.hipr_vis_enable_tint != 0u) {
+                    float3 tint_color = hiprInfluenceTintColor(rank);
+                    display = lerp(display, tint_color, saturate(push.hipr_vis_tint_strength));
+                }
             }
         }
 

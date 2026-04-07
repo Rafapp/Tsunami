@@ -78,21 +78,21 @@ static constexpr uint32_t HIPR_UPDATE_PERIOD    = 8;
 // === Context structs ===
 // =======================
 struct SceneContext {
-	void*         camera_mapped   = nullptr;
-	VkBuffer      camera_buffer   = VK_NULL_HANDLE;
-	VmaAllocation camera_alloc    = VK_NULL_HANDLE;
-	void*         material_mapped = nullptr;
-	VkBuffer      material_buffer = VK_NULL_HANDLE;
-	VmaAllocation material_alloc  = VK_NULL_HANDLE;
-	uint32_t      material_count  = 0;
-	VkBuffer      mesh_buffer     = VK_NULL_HANDLE;
-	VmaAllocation mesh_alloc      = VK_NULL_HANDLE;
-	VkBuffer      vertex_buffer   = VK_NULL_HANDLE;
-	VmaAllocation vertex_alloc    = VK_NULL_HANDLE;
-	VkBuffer      index_buffer    = VK_NULL_HANDLE;
-	VmaAllocation index_alloc     = VK_NULL_HANDLE;
-	uint32_t      mesh_count      = 0;
-	uint32_t      hipr_top_k      = HIPR_TOP_K;
+	void*         camera_mapped               = nullptr;
+	VkBuffer      camera_buffer               = VK_NULL_HANDLE;
+	VmaAllocation camera_alloc                = VK_NULL_HANDLE;
+	void*         material_mapped             = nullptr;
+	VkBuffer      material_buffer             = VK_NULL_HANDLE;
+	VmaAllocation material_alloc              = VK_NULL_HANDLE;
+	uint32_t      material_count              = 0;
+	VkBuffer      mesh_buffer                 = VK_NULL_HANDLE;
+	VmaAllocation mesh_alloc                  = VK_NULL_HANDLE;
+	VkBuffer      vertex_buffer               = VK_NULL_HANDLE;
+	VmaAllocation vertex_alloc                = VK_NULL_HANDLE;
+	VkBuffer      index_buffer                = VK_NULL_HANDLE;
+	VmaAllocation index_alloc                 = VK_NULL_HANDLE;
+	uint32_t      mesh_count                  = 0;
+	uint32_t      hipr_top_k                  = HIPR_TOP_K;
 	VkBuffer      hipr_visible_count_buffer   = VK_NULL_HANDLE;
 	VmaAllocation hipr_visible_count_alloc    = VK_NULL_HANDLE;
 	VkBuffer      hipr_secondary_count_buffer = VK_NULL_HANDLE;
@@ -204,10 +204,17 @@ struct PathTracerPushConstants {
 	uint32_t  hipr_object_count   = 0;
 	uint32_t  hipr_top_k          = HIPR_TOP_K;
 	int32_t   hipr_render_rank    = -1;
-	uint32_t  _pad3               = 0;
+	uint32_t  hipr_incremental_sort = 1;
+	uint32_t  hipr_clear_order      = 1;
+	uint32_t  hipr_vis_enable_tint  = 1;
+	uint32_t  hipr_vis_rainbow_tint = 1;
+	uint32_t  hipr_update_period    = HIPR_UPDATE_PERIOD;
+	float     hipr_score_blend      = 0.25f;
+	float     hipr_vis_tint_strength = 0.2f;
+	uint32_t  _pad3                 = 0;
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 72);
+static_assert(sizeof(PathTracerPushConstants) == 100);
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -2001,28 +2008,29 @@ App::App() {
 	// === VIII.6  HiPR buffers (per-object influence stats)
 	// ======================================================
 	{
-		constexpr VkBufferUsageFlags SB = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-		const uint32_t object_count     = std::max(scene_ctx.mesh_count, 1u);
-		scene_ctx.hipr_top_k            = std::min(HIPR_TOP_K, object_count);
+		constexpr VkBufferUsageFlags SB           = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		const uint32_t               object_count = std::max(scene_ctx.mesh_count, 1u);
+		scene_ctx.hipr_top_k                      = std::min(HIPR_TOP_K, object_count);
 
 		std::vector<uint32_t> zero_counts(object_count, 0u);
 		std::vector<float>    zero_scores(object_count, 0.0f);
 		std::vector<int32_t>  empty_order(scene_ctx.hipr_top_k, -1);
 
-		scene_ctx.hipr_visible_count_buffer = create_and_upload_buffer(
-		    allocator, sizeof(uint32_t) * object_count, zero_counts.data(), SB,
-		    scene_ctx.hipr_visible_count_alloc);
-		scene_ctx.hipr_secondary_count_buffer = create_and_upload_buffer(
-		    allocator, sizeof(uint32_t) * object_count, zero_counts.data(), SB,
-		    scene_ctx.hipr_secondary_count_alloc);
-		scene_ctx.hipr_shadow_count_buffer = create_and_upload_buffer(
-		    allocator, sizeof(uint32_t) * object_count, zero_counts.data(), SB,
-		    scene_ctx.hipr_shadow_count_alloc);
-		scene_ctx.hipr_score_buffer = create_and_upload_buffer(
-		    allocator, sizeof(float) * object_count, zero_scores.data(), SB, scene_ctx.hipr_score_alloc);
-		scene_ctx.hipr_order_buffer = create_and_upload_buffer(
-		    allocator, sizeof(int32_t) * scene_ctx.hipr_top_k, empty_order.data(), SB,
-		    scene_ctx.hipr_order_alloc);
+		scene_ctx.hipr_visible_count_buffer =
+		    create_and_upload_buffer(allocator, sizeof(uint32_t) * object_count, zero_counts.data(),
+		                             SB, scene_ctx.hipr_visible_count_alloc);
+		scene_ctx.hipr_secondary_count_buffer =
+		    create_and_upload_buffer(allocator, sizeof(uint32_t) * object_count, zero_counts.data(),
+		                             SB, scene_ctx.hipr_secondary_count_alloc);
+		scene_ctx.hipr_shadow_count_buffer =
+		    create_and_upload_buffer(allocator, sizeof(uint32_t) * object_count, zero_counts.data(),
+		                             SB, scene_ctx.hipr_shadow_count_alloc);
+		scene_ctx.hipr_score_buffer =
+		    create_and_upload_buffer(allocator, sizeof(float) * object_count, zero_scores.data(),
+		                             SB, scene_ctx.hipr_score_alloc);
+		scene_ctx.hipr_order_buffer =
+		    create_and_upload_buffer(allocator, sizeof(int32_t) * scene_ctx.hipr_top_k,
+		                             empty_order.data(), SB, scene_ctx.hipr_order_alloc);
 	}
 
 	// ===================================================
@@ -2602,13 +2610,15 @@ App::~App() {
 		scene_ctx.hipr_shadow_count_buffer = VK_NULL_HANDLE;
 		scene_ctx.hipr_shadow_count_alloc  = VK_NULL_HANDLE;
 	}
-	if (scene_ctx.hipr_score_buffer != VK_NULL_HANDLE && scene_ctx.hipr_score_alloc != VK_NULL_HANDLE) {
+	if (scene_ctx.hipr_score_buffer != VK_NULL_HANDLE &&
+	    scene_ctx.hipr_score_alloc != VK_NULL_HANDLE) {
 		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_score_buffer,
 		                 scene_ctx.hipr_score_alloc);
 		scene_ctx.hipr_score_buffer = VK_NULL_HANDLE;
 		scene_ctx.hipr_score_alloc  = VK_NULL_HANDLE;
 	}
-	if (scene_ctx.hipr_order_buffer != VK_NULL_HANDLE && scene_ctx.hipr_order_alloc != VK_NULL_HANDLE) {
+	if (scene_ctx.hipr_order_buffer != VK_NULL_HANDLE &&
+	    scene_ctx.hipr_order_alloc != VK_NULL_HANDLE) {
 		vmaDestroyBuffer(render_target_ctx.allocator, scene_ctx.hipr_order_buffer,
 		                 scene_ctx.hipr_order_alloc);
 		scene_ctx.hipr_order_buffer = VK_NULL_HANDLE;
@@ -2688,9 +2698,10 @@ void App::MainLoop() {
 	bool needs_visibility_pass = true;
 
 	// Tracks active material drag/edit interactions from the selection panel.
-	bool material_edit_mode = false;
-	bool camera_was_moving  = false;
-	ui::RenderDebugViewMode last_render_mode = ui::selection_ctx.debug_view_mode;
+	bool                    material_edit_mode   = false;
+	bool                    camera_was_moving    = false;
+	bool                    hipr_force_clear_order = true;
+	ui::RenderDebugViewMode last_render_mode     = ui::selection_ctx.debug_view_mode;
 
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
@@ -2760,6 +2771,7 @@ void App::MainLoop() {
 		if (ui::selection_ctx.debug_view_mode != last_render_mode) {
 			frame_number          = 0;
 			needs_visibility_pass = true;
+			hipr_force_clear_order = true;
 			last_render_mode      = ui::selection_ctx.debug_view_mode;
 		}
 
@@ -2785,6 +2797,9 @@ void App::MainLoop() {
 			                                scene_ctx.material_alloc);
 			// Reset only when a parameter value actually changes.
 			frame_number = 0;
+			if (ui::selection_ctx.hipr_debug.full_resort_on_material_change) {
+				hipr_force_clear_order = true;
+			}
 		}
 
 		if (selection_panel_result.material_edit_just_finished) {
@@ -2797,6 +2812,7 @@ void App::MainLoop() {
 			frame_number          = 0;
 			needs_visibility_pass = true;
 			material_edit_mode    = false;
+			hipr_force_clear_order = true;
 		}
 
 		if (overlay_ctx.controls.reset_water_requested) {
@@ -2857,6 +2873,7 @@ void App::MainLoop() {
 		if (camera_moving_this_frame) {
 			frame_number          = 0;
 			needs_visibility_pass = true;
+			hipr_force_clear_order = true;
 		}
 		if (!camera_moving_this_frame && camera_was_moving) {
 			// Start a fresh accumulation the first frame after camera motion stops.
@@ -2939,15 +2956,27 @@ void App::MainLoop() {
 		pc.enable_tonemapping  = overlay_ctx.controls.render_post.enable_tonemapping ? 1u : 0u;
 		pc.exposure_bias       = overlay_ctx.controls.render_post.exposure_bias;
 		pc.hipr_object_count   = scene_ctx.mesh_count;
-		pc.hipr_top_k          = scene_ctx.hipr_top_k;
+		pc.hipr_top_k          = std::min(scene_ctx.hipr_top_k,
+		                                  std::max(ui::selection_ctx.hipr_debug.rank_count, 1u));
 		pc.hipr_render_rank    = -1;
+		pc.hipr_incremental_sort =
+		    ui::selection_ctx.hipr_debug.incremental_sorting ? 1u : 0u;
+		pc.hipr_clear_order      = hipr_force_clear_order ? 1u : 0u;
+		pc.hipr_vis_enable_tint  = ui::selection_ctx.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
+		pc.hipr_vis_rainbow_tint = ui::selection_ctx.hipr_debug.vis_rainbow_tint ? 1u : 0u;
+		pc.hipr_update_period =
+		    std::max(ui::selection_ctx.hipr_debug.update_period_frames, 1u);
+		pc.hipr_score_blend =
+		    std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
+		pc.hipr_vis_tint_strength =
+		    std::clamp(ui::selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f);
 
 		const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
 		const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;
 
-		const auto render_mode = ui::selection_ctx.debug_view_mode;
-		const bool hipr_mode   = render_mode == ui::RenderDebugViewMode::HiPR;
-		const bool obj_id_mode = render_mode == ui::RenderDebugViewMode::ObjectIds;
+		const auto render_mode   = ui::selection_ctx.debug_view_mode;
+		const bool hipr_mode     = render_mode == ui::RenderDebugViewMode::HiPR;
+		const bool obj_id_mode   = render_mode == ui::RenderDebugViewMode::ObjectIds;
 		const bool hipr_vis_mode = render_mode == ui::RenderDebugViewMode::HiPRVis;
 		const bool naive_mode    = render_mode == ui::RenderDebugViewMode::Naive;
 
@@ -2968,9 +2997,9 @@ void App::MainLoop() {
 			run_stage2 = true;        // Composite pass for reveal visualization.
 		}
 
-		const bool hipr_refresh = use_hipr_ranked &&
-		                          (needs_visibility_pass || frame_number == 0 ||
-		                           (frame_number % HIPR_UPDATE_PERIOD) == 0);
+		const uint32_t hipr_update_period = std::max(pc.hipr_update_period, 1u);
+		const bool hipr_refresh = use_hipr_ranked && (needs_visibility_pass || frame_number == 0 ||
+		                                              (frame_number % hipr_update_period) == 0);
 
 		// Stage 10: clear per-object HiPR stats and ordering slots.
 		if (use_hipr_ranked && hipr_refresh) {
@@ -2980,6 +3009,7 @@ void App::MainLoop() {
 			const uint32_t clear_count =
 			    std::max(pc.hipr_object_count, std::max(pc.hipr_top_k, 1u));
 			vkCmdDispatch(cmd, (clear_count + 15) / 16, 1, 1);
+			hipr_force_clear_order = false;
 		}
 
 		// Stage 0: visibility pass.
@@ -3043,11 +3073,12 @@ void App::MainLoop() {
 		}
 
 		if (use_hipr_ranked && run_stage2) {
-			// Stage 4: render by HiPR-ranked object order (skip rank 0; already handled by stage 1).
+			// Stage 4: render by HiPR-ranked object order (skip rank 0; already handled by stage
+			// 1).
 			uint32_t stage4_end_rank = pc.hipr_top_k;
 			if (hipr_vis_mode) {
 				const uint32_t reveal_rank_count =
-				    std::min(pc.hipr_top_k, 1u + (frame_number / HIPR_UPDATE_PERIOD));
+				    std::min(pc.hipr_top_k, 1u + (frame_number / hipr_update_period));
 				stage4_end_rank = reveal_rank_count;
 			}
 
@@ -3165,4 +3196,3 @@ void App::MainLoop() {
 		++frame_number;
 	}
 }
-

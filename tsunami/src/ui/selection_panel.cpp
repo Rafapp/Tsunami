@@ -137,6 +137,36 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene) {
 		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
 	}
 
+	if (ImGui::CollapsingHeader("HiPR Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+		int rank_count = static_cast<int>(selection_ctx.hipr_debug.rank_count);
+		if (ImGui::SliderInt("Top-K objects", &rank_count, 1, 16)) {
+			selection_ctx.hipr_debug.rank_count = static_cast<uint32_t>(rank_count);
+		}
+
+		int update_period = static_cast<int>(selection_ctx.hipr_debug.update_period_frames);
+		if (ImGui::SliderInt("Resort every N frames", &update_period, 1, 120)) {
+			selection_ctx.hipr_debug.update_period_frames = static_cast<uint32_t>(update_period);
+		}
+
+		ImGui::Checkbox("Incremental stable sorting",
+		                &selection_ctx.hipr_debug.incremental_sorting);
+		ImGui::Checkbox("Full resort on material change",
+		                &selection_ctx.hipr_debug.full_resort_on_material_change);
+
+		ImGui::BeginDisabled(!selection_ctx.hipr_debug.incremental_sorting);
+		ImGui::SliderFloat("Score blend", &selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f,
+		                   "%.2f");
+		ImGui::EndDisabled();
+
+		ImGui::SeparatorText("HiPR Vis");
+		ImGui::Checkbox("Influence tint", &selection_ctx.hipr_debug.vis_enable_influence_tint);
+		ImGui::BeginDisabled(!selection_ctx.hipr_debug.vis_enable_influence_tint);
+		ImGui::Checkbox("Rainbow tint", &selection_ctx.hipr_debug.vis_rainbow_tint);
+		ImGui::SliderFloat("Tint strength", &selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f,
+		                   "%.2f");
+		ImGui::EndDisabled();
+	}
+
 	ImGui::Text("Scene objects: %d",
 	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
 	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
