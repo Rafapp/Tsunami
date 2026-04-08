@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
-#include <string>
 #include <stdexcept>
+#include <string>
 
 #include "tsunami/core/window.h"
 #include "tsunami/scene/scene.h"

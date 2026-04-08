@@ -1734,7 +1734,7 @@ static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
 		return "resources/scenes/Sponza/glTF/Sponza.gltf";
 	}
 
-	const fs::path user_path(scene_argument);
+	const fs::path    user_path(scene_argument);
 	const std::string ext = toLowerAscii(user_path.extension().string());
 	if (ext != ".gltf" && ext != ".glb") {
 		throw std::runtime_error(
@@ -1758,9 +1758,9 @@ App::App(const std::string& scene_argument) {
 	// ==============================
 	// === 0. Scene setup
 	// ==============================
-	m_scene           = std::make_unique<Scene>();
-	m_scene->m_camera = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
-	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
+	m_scene                      = std::make_unique<Scene>();
+	m_scene->m_camera            = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
+	                                      glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
 	const std::string scene_path = resolveScenePathOrThrow(scene_argument);
 	std::cout << "[INFO] Loading scene: " << scene_path << "\n";
 	m_scene->load_gltf(scene_path);

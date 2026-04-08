@@ -6,8 +6,8 @@
 int main(int argc, char** argv) {
 	try {
 		if (argc > 2) {
-			std::cerr
-			    << "Usage: tsunami [pool|chess|cornell|cornellsimple|sponza|<path/to/scene.gltf|.glb>]\n";
+			std::cerr << "Usage: tsunami "
+			             "[pool|chess|cornell|cornellsimple|sponza|<path/to/scene.gltf|.glb>]\n";
 			return 1;
 		}
 
