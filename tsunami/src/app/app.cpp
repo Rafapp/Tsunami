@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -1702,20 +1704,70 @@ static void build_tlas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQ
 // =======================
 // === App constructor ===
 // =======================
-App::App() {
+static std::string toLowerAscii(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return value;
+}
+
+static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
+	namespace fs = std::filesystem;
+
+	if (scene_argument.empty()) {
+		return "resources/scenes/cornell/cornell.glb";
+	}
+
+	const std::string scene_key = toLowerAscii(scene_argument);
+	if (scene_key == "pool") {
+		return "resources/scenes/poolHouse/poolHouse_optimized.glb";
+	}
+	if (scene_key == "chess") {
+		return "resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb";
+	}
+	if (scene_key == "cornell") {
+		return "resources/scenes/cornell/cornell.glb";
+	}
+	if (scene_key == "cornellsimple") {
+		return "resources/scenes/cornell/cornell_simple.glb";
+	}
+	if (scene_key == "sponza") {
+		return "resources/scenes/Sponza/glTF/Sponza.gltf";
+	}
+
+	const fs::path user_path(scene_argument);
+	const std::string ext = toLowerAscii(user_path.extension().string());
+	if (ext != ".gltf" && ext != ".glb") {
+		throw std::runtime_error(
+		    "unknown scene alias '" + scene_argument +
+		    "'. Use one of: pool, chess, cornell, cornellsimple, sponza, or provide a .gltf/.glb "
+		    "file path.");
+	}
+
+	std::error_code ec;
+	if (!fs::exists(user_path, ec) || ec) {
+		throw std::runtime_error("scene file does not exist: " + user_path.string());
+	}
+	if (!fs::is_regular_file(user_path, ec) || ec) {
+		throw std::runtime_error("scene path is not a regular file: " + user_path.string());
+	}
+
+	return user_path.lexically_normal().string();
+}
+
+App::App(const std::string& scene_argument) {
 	// ==============================
 	// === 0. Scene setup
 	// ==============================
 	m_scene           = std::make_unique<Scene>();
 	m_scene->m_camera = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                           glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
-	// m_scene->load_gltf("resources/scenes/poolHouse/poolHouse_optimized.glb");
-	// ui::rebuildObjectIdMap(m_scene.get());
-	// m_scene->load_gltf("resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb");
-	m_scene->load_gltf("resources/scenes/cornell/cornell.glb");
-	// m_scene->load_gltf("resources/scenes/cornell/cornell_simple.glb");
+	const std::string scene_path = resolveScenePathOrThrow(scene_argument);
+	std::cout << "[INFO] Loading scene: " << scene_path << "\n";
+	m_scene->load_gltf(scene_path);
+	if (m_scene->m_meshes.empty()) {
+		throw std::runtime_error("failed to load scene: " + scene_path);
+	}
 	ui::rebuildObjectIdMap(m_scene.get());
-	// m_scene->load_gltf("resources/scenes/Sponza/glTF/Sponza.gltf");
 
 	// ========================================
 	// === I. Vulkan function pointers

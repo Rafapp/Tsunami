@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <stdexcept>
 
 #include "tsunami/core/window.h"
@@ -17,7 +18,7 @@ class WaterSurfaceSimulation;
 
 class App {
   public:
-	App();
+	explicit App(const std::string& scene_argument = "");
 	~App();
 
 	void run();
