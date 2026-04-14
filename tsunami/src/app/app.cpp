@@ -74,7 +74,7 @@ struct LutTexture3D {
 static constexpr uint32_t NUM_LUTS              = 8;
 static constexpr uint32_t MAX_MATERIAL_TEXTURES = 256;
 static constexpr uint32_t HIPR_TOP_K            = 16;
-static constexpr uint32_t HIPR_UPDATE_PERIOD    = 8;
+static constexpr uint32_t HIPR_UPDATE_PERIOD    = 10;
 
 // =======================
 // === Context structs ===
@@ -211,9 +211,9 @@ struct PathTracerPushConstants {
 	uint32_t  hipr_vis_enable_tint      = 1;
 	uint32_t  hipr_vis_rainbow_tint     = 1;
 	uint32_t  hipr_update_period        = HIPR_UPDATE_PERIOD;
-	uint32_t  hipr_frames_per_object    = 300;
+	uint32_t  hipr_frames_per_object    = 10;
 	float     hipr_score_blend          = 0.25f;
-	float     hipr_vis_tint_strength    = 0.2f;
+	float     hipr_vis_tint_strength    = 0.5f;
 	uint32_t  skybox_enabled            = 1;
 	uint32_t  directional_light_enabled = 1;
 	float     sun_dir_x                 = 0.0f;
@@ -2744,6 +2744,21 @@ void App::run() {
 	MainLoop();
 }
 void App::MainLoop() {
+	const auto sanitize_hipr_ten_step_value = [](uint32_t value) -> uint32_t {
+		// Allowed set: 1, 10, 20, ... 100
+		if (value <= 1u) {
+			return 1u;
+		}
+		if (value >= 100u) {
+			return 100u;
+		}
+
+		uint32_t snapped = ((value + 5u) / 10u) * 10u;        // nearest 10
+		snapped          = std::max(snapped, 10u);
+		snapped          = std::min(snapped, 100u);
+		return snapped;
+	};
+
 	float last_frame_time = static_cast<float>(glfwGetTime());
 
 	// Initialise fly camera from the scene camera
@@ -2860,6 +2875,27 @@ void App::MainLoop() {
 		if (show_all_gui && show_selection_panel) {
 			selection_panel_result = ui::drawSelectionPanel(m_scene.get(), &show_selection_panel);
 		}
+		{
+			const uint32_t sanitized_rank_count =
+			    std::clamp(ui::selection_ctx.hipr_debug.rank_count, 1u, HIPR_TOP_K);
+			const uint32_t sanitized_frames =
+			    sanitize_hipr_ten_step_value(ui::selection_ctx.hipr_debug.frames_per_object);
+			const uint32_t sanitized_period =
+			    sanitize_hipr_ten_step_value(ui::selection_ctx.hipr_debug.update_period_frames);
+
+			if (sanitized_rank_count != ui::selection_ctx.hipr_debug.rank_count) {
+				ui::selection_ctx.hipr_debug.rank_count      = sanitized_rank_count;
+				selection_panel_result.hipr_settings_changed = true;
+			}
+			if (sanitized_frames != ui::selection_ctx.hipr_debug.frames_per_object) {
+				ui::selection_ctx.hipr_debug.frames_per_object = sanitized_frames;
+				selection_panel_result.hipr_settings_changed   = true;
+			}
+			if (sanitized_period != ui::selection_ctx.hipr_debug.update_period_frames) {
+				ui::selection_ctx.hipr_debug.update_period_frames = sanitized_period;
+				selection_panel_result.hipr_settings_changed      = true;
+			}
+		}
 
 		if (ui::selection_ctx.debug_view_mode != last_render_mode) {
 			frame_number           = 0;
@@ -2910,6 +2946,18 @@ void App::MainLoop() {
 			material_edit_mode     = false;
 			hipr_force_clear_order = true;
 			reset_hipr_object_sampling();
+		}
+		if (selection_panel_result.hipr_settings_changed) {
+			// Safety: changing HiPR schedule parameters should restart ranked scheduling.
+			frame_number           = 0;
+			needs_visibility_pass  = true;
+			hipr_force_clear_order = true;
+			if (ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::HiPR &&
+			    ui::selection_ctx.selected_mesh_index >= 0) {
+				restart_hipr_object_sampling();
+			} else {
+				reset_hipr_object_sampling();
+			}
 		}
 
 		{
@@ -3077,7 +3125,7 @@ void App::MainLoop() {
 		}
 
 		const uint32_t hipr_frames_per_object =
-		    std::max(ui::selection_ctx.hipr_debug.frames_per_object, 1u);
+		    sanitize_hipr_ten_step_value(ui::selection_ctx.hipr_debug.frames_per_object);
 
 		PathTracerPushConstants pc{};
 		pc.frame               = frame_number;
@@ -3096,7 +3144,8 @@ void App::MainLoop() {
 		pc.hipr_clear_order      = hipr_force_clear_order ? 1u : 0u;
 		pc.hipr_vis_enable_tint  = ui::selection_ctx.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
 		pc.hipr_vis_rainbow_tint = ui::selection_ctx.hipr_debug.vis_rainbow_tint ? 1u : 0u;
-		pc.hipr_update_period    = std::max(ui::selection_ctx.hipr_debug.update_period_frames, 1u);
+		pc.hipr_update_period =
+		    sanitize_hipr_ten_step_value(ui::selection_ctx.hipr_debug.update_period_frames);
 		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =

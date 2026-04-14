@@ -5,6 +5,7 @@
 
 #include "vk_mem_alloc.h"
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
@@ -32,14 +33,14 @@ struct ObjectIdEntry {
 
 struct HiPRDebugSettings {
 	uint32_t rank_count                     = 8;
-	uint32_t frames_per_object              = 300;
-	uint32_t update_period_frames           = 8;
+	uint32_t frames_per_object              = 10;
+	uint32_t update_period_frames           = 10;
 	bool     incremental_sorting            = true;
 	bool     full_resort_on_material_change = false;
 	float    score_blend                    = 0.25f;
 	bool     vis_enable_influence_tint      = true;
 	bool     vis_rainbow_tint               = true;
-	float    vis_tint_strength              = 0.20f;
+	float    vis_tint_strength              = 0.50f;
 };
 
 struct LightingSettings {
@@ -74,6 +75,7 @@ struct SelectionPanelResult {
 	bool material_edit_active        = false;
 	bool material_edit_just_finished = false;
 	bool selection_changed           = false;
+	bool hipr_settings_changed       = false;
 };
 
 extern SelectionContext selection_ctx;

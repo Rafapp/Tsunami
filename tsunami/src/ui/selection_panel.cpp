@@ -2,6 +2,8 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
 #include <utility>
 
@@ -66,6 +68,32 @@ static void refreshSelectedMaterialEditor(const Scene* scene) {
 	selection_ctx.editor_material = (mesh != nullptr && mesh->m_material != nullptr) ?
 	                                    mesh->m_material->pack() :
 	                                    Material{}.pack();
+}
+
+static uint32_t sanitizeTopKValue(uint64_t value) {
+	if (value < 1ull) {
+		return 1u;
+	}
+	if (value > 16ull) {
+		return 16u;
+	}
+	return static_cast<uint32_t>(value);
+}
+
+static uint32_t sanitizeTenStepFrameValue(uint64_t value) {
+	// Allowed set: 1, 10, 20, ... 100
+	if (value <= 1ull) {
+		return 1u;
+	}
+	if (value >= 100ull) {
+		return 100u;
+	}
+
+	uint32_t clamped = static_cast<uint32_t>(value);
+	uint32_t snapped = ((clamped + 5u) / 10u) * 10u;        // nearest 10
+	snapped          = std::max(snapped, 10u);
+	snapped          = std::min(snapped, 100u);
+	return snapped;
 }
 
 bool selectMesh(const Scene* scene, int mesh_index) {
@@ -142,20 +170,36 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	}
 
 	if (ImGui::CollapsingHeader("HiPR Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
-		int rank_count = static_cast<int>(selection_ctx.hipr_debug.rank_count);
-		if (ImGui::SliderInt("Top-K objects", &rank_count, 1, 16)) {
-			selection_ctx.hipr_debug.rank_count = static_cast<uint32_t>(rank_count);
+		uint64_t rank_count = selection_ctx.hipr_debug.rank_count;
+		if (ImGui::InputScalar("Top-K objects", ImGuiDataType_U64, &rank_count, nullptr, nullptr,
+		                       "%llu")) {
+			const uint32_t previous             = selection_ctx.hipr_debug.rank_count;
+			selection_ctx.hipr_debug.rank_count = sanitizeTopKValue(rank_count);
+			result.hipr_settings_changed |= (selection_ctx.hipr_debug.rank_count != previous);
 		}
 
-		int frames_per_object = static_cast<int>(selection_ctx.hipr_debug.frames_per_object);
-		if (ImGui::SliderInt("Frames per object", &frames_per_object, 1, 2000)) {
-			selection_ctx.hipr_debug.frames_per_object = static_cast<uint32_t>(frames_per_object);
+		uint64_t       frames_per_object = selection_ctx.hipr_debug.frames_per_object;
+		const uint64_t frame_step        = 10ull;
+		if (ImGui::InputScalar("Frames per object", ImGuiDataType_U64, &frames_per_object,
+		                       &frame_step, &frame_step, "%llu")) {
+			const uint32_t previous = selection_ctx.hipr_debug.frames_per_object;
+			selection_ctx.hipr_debug.frames_per_object =
+			    sanitizeTenStepFrameValue(frames_per_object);
+			result.hipr_settings_changed |=
+			    (selection_ctx.hipr_debug.frames_per_object != previous);
 		}
 
-		int update_period = static_cast<int>(selection_ctx.hipr_debug.update_period_frames);
-		if (ImGui::SliderInt("Resort every N frames", &update_period, 1, 120)) {
-			selection_ctx.hipr_debug.update_period_frames = static_cast<uint32_t>(update_period);
+		uint64_t       update_period = selection_ctx.hipr_debug.update_period_frames;
+		const uint64_t period_step   = 10ull;
+		if (ImGui::InputScalar("Resort every N frames", ImGuiDataType_U64, &update_period,
+		                       &period_step, &period_step, "%llu")) {
+			const uint32_t previous = selection_ctx.hipr_debug.update_period_frames;
+			selection_ctx.hipr_debug.update_period_frames =
+			    sanitizeTenStepFrameValue(update_period);
+			result.hipr_settings_changed |=
+			    (selection_ctx.hipr_debug.update_period_frames != previous);
 		}
+		ImGui::TextDisabled("Frames controls snap to: 1, 10, 20, ... 100");
 
 		ImGui::Checkbox("Incremental stable sorting",
 		                &selection_ctx.hipr_debug.incremental_sorting);
