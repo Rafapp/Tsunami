@@ -50,13 +50,6 @@ void rebuildObjectIdMap(const Scene* scene) {
 	}
 }
 
-static const ObjectIdEntry* objectIdEntryForId(int object_id) {
-	if (object_id < 0 || object_id >= static_cast<int>(selection_ctx.object_id_map.size())) {
-		return nullptr;
-	}
-	return &selection_ctx.object_id_map[object_id];
-}
-
 static void refreshSelectedMaterialEditor(const Scene* scene) {
 	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
 	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
@@ -170,16 +163,19 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	}
 
 	if (ImGui::CollapsingHeader("Path Tracing", ImGuiTreeNodeFlags_DefaultOpen)) {
-		int spp = static_cast<int>(selection_ctx.path_tracing.spp);
-		if (ImGui::SliderInt("SPP", &spp, 1, 1024)) {
-			selection_ctx.path_tracing.spp       = static_cast<uint32_t>(std::clamp(spp, 1, 1024));
+		uint64_t       spp       = selection_ctx.path_tracing.spp;
+		const uint64_t unit_step = 1ull;
+		if (ImGui::InputScalar("SPP", ImGuiDataType_U64, &spp, &unit_step, &unit_step, "%llu")) {
+			selection_ctx.path_tracing.spp =
+			    static_cast<uint32_t>(std::clamp<uint64_t>(spp, 1ull, 1024ull));
 			result.path_tracing_settings_changed = true;
 		}
 
-		int max_bounces = static_cast<int>(selection_ctx.path_tracing.max_bounces);
-		if (ImGui::SliderInt("Max bounces", &max_bounces, 1, 1024)) {
+		uint64_t max_bounces = selection_ctx.path_tracing.max_bounces;
+		if (ImGui::InputScalar("Max bounces", ImGuiDataType_U64, &max_bounces, &unit_step,
+		                       &unit_step, "%llu")) {
 			selection_ctx.path_tracing.max_bounces =
-			    static_cast<uint32_t>(std::clamp(max_bounces, 1, 1024));
+			    static_cast<uint32_t>(std::clamp<uint64_t>(max_bounces, 1ull, 1024ull));
 			result.path_tracing_settings_changed = true;
 		}
 	}
@@ -203,23 +199,16 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 			result.hipr_settings_changed |=
 			    (selection_ctx.hipr_debug.frames_per_object != previous);
 		}
-		ImGui::TextDisabled("Frames-per-object snaps to: 1, 10, 20, ... 100");
 
-		ImGui::Checkbox("Incremental stable sorting",
-		                &selection_ctx.hipr_debug.incremental_sorting);
-
-		ImGui::BeginDisabled(!selection_ctx.hipr_debug.incremental_sorting);
-		ImGui::SliderFloat("Score blend", &selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f,
-		                   "%.2f");
-		ImGui::EndDisabled();
-
-		ImGui::SeparatorText("HiPR Vis");
-		ImGui::Checkbox("Influence tint", &selection_ctx.hipr_debug.vis_enable_influence_tint);
-		ImGui::BeginDisabled(!selection_ctx.hipr_debug.vis_enable_influence_tint);
-		ImGui::Checkbox("Heatmap tint", &selection_ctx.hipr_debug.vis_rainbow_tint);
-		ImGui::SliderFloat("Tint strength", &selection_ctx.hipr_debug.vis_tint_strength, 0.0f, 1.0f,
-		                   "%.2f");
-		ImGui::EndDisabled();
+		if (selection_ctx.debug_view_mode == RenderDebugViewMode::HiPRVis) {
+			ImGui::SeparatorText("HiPR Vis");
+			ImGui::Checkbox("Influence tint", &selection_ctx.hipr_debug.vis_enable_influence_tint);
+			ImGui::BeginDisabled(!selection_ctx.hipr_debug.vis_enable_influence_tint);
+			ImGui::Checkbox("Heatmap tint", &selection_ctx.hipr_debug.vis_rainbow_tint);
+			ImGui::SliderFloat("Tint strength", &selection_ctx.hipr_debug.vis_tint_strength, 0.0f,
+			                   1.0f, "%.2f");
+			ImGui::EndDisabled();
+		}
 	}
 
 	if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -237,22 +226,15 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 
 	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("FOV", &selection_ctx.camera.fov_deg, 20.0f, 120.0f, "%.1f deg");
+		ImGui::Text("Selected mesh: %s",
+		            meshDisplayName(scene, selection_ctx.selected_mesh_index).c_str());
 	}
-
-	ImGui::Text("Scene objects: %d",
-	            scene != nullptr ? static_cast<int>(scene->m_meshes.size()) : 0);
-	ImGui::Text("Object IDs: %d", static_cast<int>(selection_ctx.object_id_map.size()));
-	ImGui::Text("Selected mesh: %s",
-	            meshDisplayName(scene, selection_ctx.selected_mesh_index).c_str());
 
 	const bool has_selection =
 	    scene != nullptr && selection_ctx.selected_mesh_index >= 0 &&
 	    selection_ctx.selected_mesh_index < static_cast<int>(scene->m_meshes.size());
 
 	if (has_selection) {
-		const ObjectIdEntry* selected_entry = objectIdEntryForId(selection_ctx.selected_mesh_index);
-		ImGui::Text("Object ID: %d", selected_entry != nullptr ? selected_entry->object_id : -1);
-		ImGui::Text("Mesh index: %d", selection_ctx.selected_mesh_index);
 		if (ImGui::Button("Clear selection")) {
 			result.selection_changed = selectMesh(scene, -1);
 		}
@@ -269,27 +251,15 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	ImGui::ColorEdit4("Outline color", glm::value_ptr(selection_ctx.outline_color),
 	                  ImGuiColorEditFlags_AlphaBar);
 
-	if (ImGui::CollapsingHeader("Object ID Map")) {
-		for (const ObjectIdEntry& entry : selection_ctx.object_id_map) {
-			ImGui::Text("ID %d -> %s", entry.object_id, entry.display_name.c_str());
-		}
-	}
-
 	if (!has_selection) {
 		if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
 			ImGui::Separator();
-			ImGui::TextWrapped(
-			    "Voice mode is selected, but there is not yet a speech-to-text command layer for "
-			    "material edits in this project.");
 		}
 		ImGui::End();
 		return result;
 	}
 
 	ImGui::Separator();
-	ImGui::TextUnformatted("Material");
-	ImGui::TextWrapped(
-	    "Texture-backed meshes use these controls as live multipliers and overrides.");
 
 	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
 	ImGui::BeginDisabled(!gui_mode_enabled);
@@ -391,12 +361,6 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	             0.0f, 100.0f, "%.3f");
 
 	ImGui::EndDisabled();
-
-	if (!gui_mode_enabled) {
-		ImGui::TextWrapped(
-		    "Voice mode is selected, but there is not yet a speech-to-text command layer for "
-		    "material edits in this project.");
-	}
 
 	ImGui::End();
 	return result;

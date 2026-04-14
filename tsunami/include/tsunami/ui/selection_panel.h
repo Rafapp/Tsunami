@@ -33,7 +33,7 @@ struct ObjectIdEntry {
 
 struct HiPRDebugSettings {
 	uint32_t rank_count                = 8;
-	uint32_t frames_per_object         = 10;
+	uint32_t frames_per_object         = 20;
 	bool     incremental_sorting       = true;
 	float    score_blend               = 0.25f;
 	bool     vis_enable_influence_tint = true;
