@@ -32,15 +32,13 @@ struct ObjectIdEntry {
 };
 
 struct HiPRDebugSettings {
-	uint32_t rank_count                     = 8;
-	uint32_t frames_per_object              = 10;
-	uint32_t update_period_frames           = 10;
-	bool     incremental_sorting            = true;
-	bool     full_resort_on_material_change = false;
-	float    score_blend                    = 0.25f;
-	bool     vis_enable_influence_tint      = true;
-	bool     vis_rainbow_tint               = true;
-	float    vis_tint_strength              = 0.50f;
+	uint32_t rank_count                = 8;
+	uint32_t frames_per_object         = 10;
+	bool     incremental_sorting       = true;
+	float    score_blend               = 0.25f;
+	bool     vis_enable_influence_tint = true;
+	bool     vis_rainbow_tint          = true;
+	float    vis_tint_strength         = 0.50f;
 };
 
 struct LightingSettings {
@@ -55,6 +53,11 @@ struct CameraSettings {
 	float fov_deg = 60.0f;
 };
 
+struct PathTracingSettings {
+	uint32_t spp         = 1;
+	uint32_t max_bounces = 8;
+};
+
 struct SelectionContext {
 	int                        selected_mesh_index = -1;
 	MaterialEditMode           material_edit_mode  = MaterialEditMode::Gui;
@@ -62,6 +65,7 @@ struct SelectionContext {
 	HiPRDebugSettings          hipr_debug{};
 	LightingSettings           lighting{};
 	CameraSettings             camera{};
+	PathTracingSettings        path_tracing{};
 	GPUMaterial                editor_material{};
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;
@@ -71,11 +75,12 @@ struct SelectionContext {
 };
 
 struct SelectionPanelResult {
-	bool material_changed            = false;
-	bool material_edit_active        = false;
-	bool material_edit_just_finished = false;
-	bool selection_changed           = false;
-	bool hipr_settings_changed       = false;
+	bool material_changed              = false;
+	bool material_edit_active          = false;
+	bool material_edit_just_finished   = false;
+	bool selection_changed             = false;
+	bool hipr_settings_changed         = false;
+	bool path_tracing_settings_changed = false;
 };
 
 extern SelectionContext selection_ctx;

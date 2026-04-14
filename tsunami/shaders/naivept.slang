@@ -65,11 +65,6 @@ struct PushConstants {
 [[vk::binding(8,  0)]] StructuredBuffer<uint>          indices_buf;
 [[vk::binding(11, 0)]] Texture2D<float4>               material_textures[MAX_MAT_TEXTURES];
 [[vk::binding(13, 0)]] RWTexture2D<int>               object_id_image;
-[[vk::binding(14, 0)]] RWStructuredBuffer<uint>       hipr_visible_counts;
-[[vk::binding(15, 0)]] RWStructuredBuffer<uint>       hipr_secondary_counts;
-[[vk::binding(16, 0)]] RWStructuredBuffer<uint>       hipr_shadow_counts;
-[[vk::binding(17, 0)]] RWStructuredBuffer<float>      hipr_scores;
-[[vk::binding(18, 0)]] RWStructuredBuffer<int>        hipr_order;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -499,7 +494,7 @@ float3 skyColor(float3 dir) {
 }
 
 // ─── Path tracing ─────────────────────────────────────────────────────────────
-float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
+float3 tracePath(Ray ray, inout RNG rng) {
     float3 throughput = float3(1, 1, 1);
     float3 radiance   = float3(0, 0, 0);
 
@@ -514,11 +509,6 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
             if (push.skybox_enabled != 0u)
                 radiance += throughput * skyColor(ray.dir);
             break;
-        }
-
-        if (collect_influence && bounce > 0 && hit.instanceID >= 0 &&
-            uint(hit.instanceID) < push.hipr_object_count) {
-            InterlockedAdd(hipr_secondary_counts[uint(hit.instanceID)], 1);
         }
 
         // ── Emission ──
@@ -558,10 +548,6 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
                              inputs.transmission_weight > 0.f;
 
             int occluder_front = traceOccluderInstance(hitPos, hit.normal, g_sun_dir, T_MAX);
-            if (collect_influence && occluder_front >= 0 &&
-                uint(occluder_front) < push.hipr_object_count) {
-                InterlockedAdd(hipr_shadow_counts[uint(occluder_front)], 1);
-            }
             if (sun_front && occluder_front < 0) {
                 float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, g_sun_dir));
                 radiance += throughput * f * g_sun_color * g_sun_intensity;
@@ -569,10 +555,6 @@ float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
             // For back-hemisphere shadow rays, offset the origin toward the sun side
             // so the ray doesn't self-intersect with the surface it just hit.
             int occluder_back = traceOccluderInstance(hitPos, -hit.normal, -g_sun_dir, T_MAX);
-            if (collect_influence && occluder_back >= 0 &&
-                uint(occluder_back) < push.hipr_object_count) {
-                InterlockedAdd(hipr_shadow_counts[uint(occluder_back)], 1);
-            }
             if (sun_back && occluder_back < 0) {
                 float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, -g_sun_dir));
                 radiance += throughput * f * g_sun_color * g_sun_intensity;
@@ -667,18 +649,6 @@ bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
     return false;
 }
 
-int hiprRankForObject(int object_id) {
-    if (object_id < 0) return -1;
-    if (push.hipr_top_k == 0) return -1;
-    [loop]
-    for (uint rank = 0; rank < push.hipr_top_k; ++rank) {
-        if (hipr_order[rank] == object_id) {
-            return int(rank);
-        }
-    }
-    return -1;
-}
-
 float3 srgbToLinear(float3 color) {
     float3 cutoff = step(float3(0.04045f, 0.04045f, 0.04045f), color);
     float3 low    = color / 12.92f;
@@ -708,188 +678,20 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     uint2 dims;
     output_image.GetDimensions(dims.x, dims.y);
 
-    if (push.stage == 10) {
-        if (pixel.y != 0) return;
-        uint index = pixel.x;
-        if (index < push.hipr_object_count) {
-            hipr_visible_counts[index]   = 0u;
-            hipr_secondary_counts[index] = 0u;
-            hipr_shadow_counts[index]    = 0u;
-            if (push.hipr_clear_order != 0u) {
-                hipr_scores[index] = 0.0f;
-            }
-        }
-        if (push.hipr_clear_order != 0u && index < push.hipr_top_k) {
-            hipr_order[index] = -1;
-        }
-        return;
-    }
-
     if (any(pixel >= dims)) return;
 
-    if (push.stage == 3) {
-        if (pixel.x != 0 || pixel.y != 0) return;
-        if (push.selected_mesh_index < 0 || push.hipr_object_count == 0 || push.hipr_top_k == 0)
-            return;
-
-        const bool incremental = (push.hipr_incremental_sort != 0u) && (push.hipr_clear_order == 0u);
-        const float score_blend = saturate(push.hipr_score_blend);
-
-        for (uint i = 0; i < push.hipr_object_count; ++i) {
-            float visible = float(max(hipr_visible_counts[i], 1u));
-            float instant_score =
-                (float(hipr_secondary_counts[i]) + 0.5f * float(hipr_shadow_counts[i])) / visible;
-            if (incremental) {
-                hipr_scores[i] = lerp(hipr_scores[i], instant_score, score_blend);
-            } else {
-                hipr_scores[i] = instant_score;
-            }
-        }
-
-        if (!incremental) {
-            for (uint i = 0; i < push.hipr_top_k; ++i) {
-                hipr_order[i] = -1;
-            }
-
-            hipr_order[0] = push.selected_mesh_index;
-            for (uint rank = 1; rank < push.hipr_top_k; ++rank) {
-                float best_score = -1.0f;
-                int   best_id    = -1;
-                for (uint obj = 0; obj < push.hipr_object_count; ++obj) {
-                    if (int(obj) == push.selected_mesh_index) continue;
-
-                    bool already_chosen = false;
-                    for (uint prev = 0; prev < rank; ++prev) {
-                        if (hipr_order[prev] == int(obj)) {
-                            already_chosen = true;
-                            break;
-                        }
-                    }
-                    if (already_chosen) continue;
-
-                    float s = hipr_scores[obj];
-                    if (s > best_score) {
-                        best_score = s;
-                        best_id    = int(obj);
-                    }
-                }
-
-                if (best_id < 0) break;
-                hipr_order[rank] = best_id;
-            }
-        } else {
-            // Keep previous ranking as the base ordering to avoid disruptive reshuffles.
-            int seen[64];
-            uint seen_count = 0u;
-            [unroll]
-            for (uint i = 0; i < 64; ++i) {
-                seen[i] = -1;
-            }
-
-            hipr_order[0] = push.selected_mesh_index;
-            seen[seen_count++] = push.selected_mesh_index;
-
-            uint write_rank = 1u;
-            for (uint rank = 1; rank < push.hipr_top_k && write_rank < push.hipr_top_k; ++rank) {
-                int id = hipr_order[rank];
-                if (id < 0 || id == push.selected_mesh_index || uint(id) >= push.hipr_object_count) {
-                    continue;
-                }
-                bool duplicate = false;
-                for (uint i = 0; i < seen_count; ++i) {
-                    if (seen[i] == id) {
-                        duplicate = true;
-                        break;
-                    }
-                }
-                if (duplicate) continue;
-                hipr_order[write_rank++] = id;
-                if (seen_count < 64u) seen[seen_count++] = id;
-            }
-
-            while (write_rank < push.hipr_top_k) {
-                float best_score = -1.0f;
-                int   best_id    = -1;
-                for (uint obj = 0; obj < push.hipr_object_count; ++obj) {
-                    int id = int(obj);
-                    if (id == push.selected_mesh_index) continue;
-                    bool duplicate = false;
-                    for (uint i = 0; i < seen_count; ++i) {
-                        if (seen[i] == id) {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-                    if (duplicate) continue;
-
-                    float s = hipr_scores[obj];
-                    if (s > best_score) {
-                        best_score = s;
-                        best_id    = id;
-                    }
-                }
-                if (best_id < 0) {
-                    hipr_order[write_rank++] = -1;
-                } else {
-                    hipr_order[write_rank++] = best_id;
-                    if (seen_count < 64u) seen[seen_count++] = best_id;
-                }
-            }
-
-            // Gentle local swaps only when score improvement is significant.
-            const float swap_threshold = 1.08f;
-            for (uint pass = 0; pass < push.hipr_top_k; ++pass) {
-                for (uint rank = 1; rank + 1 < push.hipr_top_k; ++rank) {
-                    int a = hipr_order[rank];
-                    int b = hipr_order[rank + 1u];
-                    if (a < 0 || b < 0 || uint(a) >= push.hipr_object_count ||
-                        uint(b) >= push.hipr_object_count) {
-                        continue;
-                    }
-                    float sa = hipr_scores[uint(a)];
-                    float sb = hipr_scores[uint(b)];
-                    if (sb > sa * swap_threshold) {
-                        hipr_order[rank] = b;
-                        hipr_order[rank + 1u] = a;
-                    }
-                }
-            }
-        }
-        return;
-    }
-
-    // ── Stage 0: visibility pass ─────────────────────────────────────────────
-    // Fire a primary ray for every pixel and record which object it hit.
-    // This pass only runs when the camera changes; results are cached in
-    // object_id_image for use by subsequent stage-1 dispatches.
+    // Stage 0: visibility pre-pass used for selection outlines.
     if (push.stage == 0) {
         int visible_id = traceVisibleInstance(makeRay(pixel, dims, float2(0.5f, 0.5f)));
         object_id_image[pixel] = visible_id;
-        if (push.selected_mesh_index >= 0 && visible_id >= 0 && uint(visible_id) < push.hipr_object_count) {
-            InterlockedAdd(hipr_visible_counts[uint(visible_id)], 1);
-        }
         return;
     }
 
-    // ── Stages 1 & 2: path trace ────────────────────────────────────────────
+    // Naive mode only writes in stage 2.
+    if (push.stage != 2) return;
+
     int visible_object_id = object_id_image[pixel];
 
-    // Determine whether this pixel belongs to the selected object.
-    bool is_selected_pixel = (push.selected_mesh_index >= 0) &&
-                              (visible_object_id == push.selected_mesh_index);
-
-    // Stage 1 handles only the selected object's pixels.
-    // Stage 2 handles everything else.
-    if (push.stage == 1 && !is_selected_pixel) return;
-    if (push.stage == 2 && is_selected_pixel) return;
-    if (push.stage == 4) {
-        if (push.hipr_render_rank < 0) return;
-        uint rank = min(uint(push.hipr_render_rank), push.hipr_top_k - 1u);
-        int target_object_id = hipr_order[rank];
-        if (target_object_id < 0 || visible_object_id != target_object_id) return;
-    }
-
-    // Path trace this pixel and accumulate into the running average.
     RNG rng = RNG::make(pixel, push.frame);
     float3 colorAccum = float3(0, 0, 0);
     const uint spp = max(push.spp, 1u);
@@ -897,31 +699,12 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     for (uint i = 0u; i < spp; ++i) {
         uint sample_index = push.frame * spp + i;
         float2 jitter = haltonJitter(sample_index, pixel);
-        bool collect_influence = (push.stage == 1) && is_selected_pixel && (push.selected_mesh_index >= 0);
-        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng, collect_influence);
+        colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
     }
     float3 color = colorAccum / float(spp);
 
     float3 prev  = accum_image[pixel].rgb;
-    uint accumulation_frame = push.frame;
-
-    // Special continuation mode: after per-object focused sampling is complete,
-    // stage 1/2 switch to full-scene accumulation. Objects already in the HiPR
-    // set keep their prior N-sample history, while never-sampled objects start
-    // from the new full-scene frame index.
-    if (push.hipr_render_rank == -2) {
-        if (push.stage == 1) {
-            accumulation_frame = push.hipr_frames_per_object + push.frame;
-        } else if (push.stage == 2) {
-            int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
-                       hiprRankForObject(visible_object_id);
-            if (rank >= 0) {
-                accumulation_frame = push.hipr_frames_per_object + push.frame;
-            }
-        }
-    }
-
-    float  blend = 1.f / float(accumulation_frame + 1u);
+    float  blend = 1.f / float(push.frame + 1u);
     float3 accum = lerp(prev, color, blend);
     accum_image[pixel] = float4(accum, 1.f);
 
@@ -934,4 +717,3 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     }
     output_image[pixel] = float4(display, 1.f);
 }
-

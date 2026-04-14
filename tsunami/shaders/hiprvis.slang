@@ -667,6 +667,24 @@ bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
     return false;
 }
 
+float3 heatmapRamp(float t) {
+    t = saturate(t);
+    float3 red  = float3(0.95f, 0.20f, 0.10f);
+    float3 blue = float3(0.12f, 0.18f, 0.45f);
+    return lerp(red, blue, t);
+}
+
+float3 hiprInfluenceTintColor(int rank) {
+    if (rank < 0) return float3(1.0f, 1.0f, 1.0f);
+    if (push.hipr_vis_rainbow_tint == 0u) {
+        return float3(1.0f, 0.82f, 0.22f);
+    }
+
+    float denom = max(float(max(int(push.hipr_top_k), 1) - 1), 1.0f);
+    float heat  = float(rank) / denom;
+    return heatmapRamp(heat);
+}
+
 int hiprRankForObject(int object_id) {
     if (object_id < 0) return -1;
     if (push.hipr_top_k == 0) return -1;
@@ -877,11 +895,54 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     // Determine whether this pixel belongs to the selected object.
     bool is_selected_pixel = (push.selected_mesh_index >= 0) &&
                               (visible_object_id == push.selected_mesh_index);
+    bool hipr_vis_post_reveal = false;
+
+    // HiPR visualization mode:
+    // Stage 2 is used as a compositing pass that reveals objects in ranked order over time.
+    if (push.stage == 2) {
+        const uint reveal_period = max(push.hipr_frames_per_object, 1u);
+        const uint reveal_rank = (push.hipr_top_k > 0u) ?
+                                     min(push.hipr_top_k - 1u, push.frame / reveal_period) :
+                                     0u;
+        const bool reveal_complete = (push.hipr_top_k == 0u) ||
+                                     (reveal_rank >= (push.hipr_top_k - 1u));
+
+        if (!reveal_complete) {
+            float3 display = float3(0.0f, 0.0f, 0.0f);
+            bool   revealed = false;
+
+            if (push.selected_mesh_index >= 0 && visible_object_id >= 0 && push.hipr_top_k > 0) {
+                int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
+                           hiprRankForObject(visible_object_id);
+                revealed = (rank >= 0) && (uint(rank) <= reveal_rank);
+                if (revealed) {
+                    display = accum_image[pixel].rgb;
+                    if (push.hipr_vis_enable_tint != 0u) {
+                        float3 tint_color = hiprInfluenceTintColor(rank);
+                        display = lerp(display, tint_color, saturate(push.hipr_vis_tint_strength));
+                    }
+                }
+            }
+
+            if (!revealed) {
+                accum_image[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            }
+            if (isSelectionOutline(pixel, dims, visible_object_id)) {
+                display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
+            }
+            output_image[pixel] = float4(display, 1.0f);
+            return;
+        }
+
+        // Once all ranked objects are revealed, continue with full-scene path tracing
+        // in this visualization mode (including unranked objects).
+        hipr_vis_post_reveal = true;
+    }
 
     // Stage 1 handles only the selected object's pixels.
     // Stage 2 handles everything else.
     if (push.stage == 1 && !is_selected_pixel) return;
-    if (push.stage == 2 && is_selected_pixel) return;
+    if (push.stage == 2 && is_selected_pixel && !hipr_vis_post_reveal) return;
     if (push.stage == 4) {
         if (push.hipr_render_rank < 0) return;
         uint rank = min(uint(push.hipr_render_rank), push.hipr_top_k - 1u);
@@ -926,8 +987,13 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     accum_image[pixel] = float4(accum, 1.f);
 
     float3 display = accum;
-    if (push.enable_tonemapping != 0u) {
-        display = unchartedTonemapFilmic(display, push.exposure_bias);
+    if (push.stage == 2 && hipr_vis_post_reveal &&
+        push.hipr_vis_enable_tint != 0u && visible_object_id >= 0) {
+        int rank = (visible_object_id == push.selected_mesh_index) ? 0 :
+                   hiprRankForObject(visible_object_id);
+        int tint_rank = (rank >= 0) ? rank : int(push.hipr_top_k);
+        float3 tint_color = hiprInfluenceTintColor(tint_rank);
+        display = lerp(display, tint_color, saturate(push.hipr_vis_tint_strength));
     }
     if (isSelectionOutline(pixel, dims, visible_object_id)) {
         display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));

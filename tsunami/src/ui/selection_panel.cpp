@@ -169,6 +169,21 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 		selection_ctx.debug_view_mode = static_cast<RenderDebugViewMode>(debug_view_mode);
 	}
 
+	if (ImGui::CollapsingHeader("Path Tracing", ImGuiTreeNodeFlags_DefaultOpen)) {
+		int spp = static_cast<int>(selection_ctx.path_tracing.spp);
+		if (ImGui::SliderInt("SPP", &spp, 1, 1024)) {
+			selection_ctx.path_tracing.spp       = static_cast<uint32_t>(std::clamp(spp, 1, 1024));
+			result.path_tracing_settings_changed = true;
+		}
+
+		int max_bounces = static_cast<int>(selection_ctx.path_tracing.max_bounces);
+		if (ImGui::SliderInt("Max bounces", &max_bounces, 1, 1024)) {
+			selection_ctx.path_tracing.max_bounces =
+			    static_cast<uint32_t>(std::clamp(max_bounces, 1, 1024));
+			result.path_tracing_settings_changed = true;
+		}
+	}
+
 	if (ImGui::CollapsingHeader("HiPR Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
 		uint64_t rank_count = selection_ctx.hipr_debug.rank_count;
 		if (ImGui::InputScalar("Top-K objects", ImGuiDataType_U64, &rank_count, nullptr, nullptr,
@@ -188,23 +203,10 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 			result.hipr_settings_changed |=
 			    (selection_ctx.hipr_debug.frames_per_object != previous);
 		}
-
-		uint64_t       update_period = selection_ctx.hipr_debug.update_period_frames;
-		const uint64_t period_step   = 10ull;
-		if (ImGui::InputScalar("Resort every N frames", ImGuiDataType_U64, &update_period,
-		                       &period_step, &period_step, "%llu")) {
-			const uint32_t previous = selection_ctx.hipr_debug.update_period_frames;
-			selection_ctx.hipr_debug.update_period_frames =
-			    sanitizeTenStepFrameValue(update_period);
-			result.hipr_settings_changed |=
-			    (selection_ctx.hipr_debug.update_period_frames != previous);
-		}
-		ImGui::TextDisabled("Frames controls snap to: 1, 10, 20, ... 100");
+		ImGui::TextDisabled("Frames-per-object snaps to: 1, 10, 20, ... 100");
 
 		ImGui::Checkbox("Incremental stable sorting",
 		                &selection_ctx.hipr_debug.incremental_sorting);
-		ImGui::Checkbox("Full resort on material change",
-		                &selection_ctx.hipr_debug.full_resort_on_material_change);
 
 		ImGui::BeginDisabled(!selection_ctx.hipr_debug.incremental_sorting);
 		ImGui::SliderFloat("Score blend", &selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f,
@@ -297,59 +299,96 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 		result.material_edit_just_finished |= ImGui::IsItemDeactivatedAfterEdit();
 	};
 
-	if (ImGui::ColorEdit3("Base tint", glm::value_ptr(selection_ctx.editor_material.base_color))) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	auto mark_changed = [&](bool changed) {
+		result.material_changed |= changed;
+		record_item_edit_state();
+	};
 
-	if (ImGui::SliderFloat("Opacity", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f,
-	                       "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	auto slider_float = [&](const char* label, float* value, float min_value, float max_value,
+	                        const char* fmt) {
+		mark_changed(ImGui::SliderFloat(label, value, min_value, max_value, fmt));
+	};
 
-	if (ImGui::SliderFloat("Metalness", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f,
-	                       "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	auto color_edit3 = [&](const char* label, glm::vec4& value) {
+		mark_changed(ImGui::ColorEdit3(label, glm::value_ptr(value)));
+	};
 
-	if (ImGui::SliderFloat("Roughness", &selection_ctx.editor_material.specular_roughness, 0.02f,
-	                       1.0f, "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	auto color_edit4 = [&](const char* label, glm::vec4& value, ImGuiColorEditFlags flags = 0) {
+		mark_changed(ImGui::ColorEdit4(label, glm::value_ptr(value), flags));
+	};
 
-	if (ImGui::SliderFloat("Transmission", &selection_ctx.editor_material.transmission_weight, 0.0f,
-	                       1.0f, "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	ImGui::SeparatorText("Base");
+	color_edit4("Base color + weight##base", selection_ctx.editor_material.base_color,
+	            ImGuiColorEditFlags_AlphaBar);
+	slider_float("Base metalness##base", &selection_ctx.editor_material.base_metalness, 0.0f, 1.0f,
+	             "%.3f");
+	slider_float("Base diffuse roughness##base",
+	             &selection_ctx.editor_material.base_diffuse_roughness, 0.0f, 1.0f, "%.3f");
 
-	if (ImGui::SliderFloat("IOR", &selection_ctx.editor_material.specular_ior, 1.0f, 2.5f,
-	                       "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	ImGui::SeparatorText("Specular");
+	color_edit3("Specular color##spec", selection_ctx.editor_material.specular_color);
+	slider_float("Specular weight##spec", &selection_ctx.editor_material.specular_color.a, 0.0f,
+	             1.0f, "%.3f");
+	slider_float("Specular roughness##spec", &selection_ctx.editor_material.specular_roughness,
+	             0.02f, 1.0f, "%.3f");
+	slider_float("Specular IOR##spec", &selection_ctx.editor_material.specular_ior, 1.0f, 2.5f,
+	             "%.3f");
+	slider_float("Specular anisotropy##spec", &selection_ctx.editor_material.specular_anisotropy,
+	             -1.0f, 1.0f, "%.3f");
 
-	if (ImGui::ColorEdit3("Emission color",
-	                      glm::value_ptr(selection_ctx.editor_material.emission_color))) {
-		result.material_changed = true;
+	ImGui::SeparatorText("Transmission");
+	slider_float("Transmission weight##tr", &selection_ctx.editor_material.transmission_weight,
+	             0.0f, 1.0f, "%.3f");
+	slider_float("Opacity##tr", &selection_ctx.editor_material.geometry_opacity, 0.0f, 1.0f,
+	             "%.3f");
+	color_edit3("Transmission color##tr", selection_ctx.editor_material.transmission_color);
+	slider_float("Transmission depth##tr", &selection_ctx.editor_material.transmission_depth, 0.0f,
+	             10.0f, "%.3f");
+	color_edit3("Transmission scatter##tr", selection_ctx.editor_material.transmission_scatter);
+	slider_float("Scatter anisotropy##tr",
+	             &selection_ctx.editor_material.transmission_scatter_anisotropy, -1.0f, 1.0f,
+	             "%.3f");
+	slider_float("Dispersion scale##tr",
+	             &selection_ctx.editor_material.transmission_dispersion_scale, 0.0f, 1.0f, "%.3f");
+	slider_float("Abbe number##tr",
+	             &selection_ctx.editor_material.transmission_dispersion_abbe_number, 0.0f, 200.0f,
+	             "%.1f");
+	{
+		bool       thin_walled = selection_ctx.editor_material.geometry_thin_walled > 0.5f;
+		const bool changed     = ImGui::Checkbox("Thin walled##tr", &thin_walled);
+		if (changed) {
+			selection_ctx.editor_material.geometry_thin_walled = thin_walled ? 1.0f : 0.0f;
+		}
+		mark_changed(changed);
 	}
-	record_item_edit_state();
 
-	if (ImGui::SliderFloat("Emission intensity", &selection_ctx.editor_material.emission_luminance,
-	                       0.0f, 100.0f, "%.2f")) {
-		result.material_changed = true;
-	}
-	record_item_edit_state();
+	ImGui::SeparatorText("Coat");
+	slider_float("Coat weight##coat", &selection_ctx.editor_material.coat_weight, 0.0f, 1.0f,
+	             "%.3f");
+	color_edit3("Coat color##coat", selection_ctx.editor_material.coat_color);
+	slider_float("Coat roughness##coat", &selection_ctx.editor_material.coat_roughness, 0.0f, 1.0f,
+	             "%.3f");
+	slider_float("Coat IOR##coat", &selection_ctx.editor_material.coat_ior, 1.0f, 2.5f, "%.3f");
 
-	bool thin_walled = selection_ctx.editor_material.geometry_thin_walled > 0.5f;
-	if (ImGui::Checkbox("Thin walled", &thin_walled)) {
-		selection_ctx.editor_material.geometry_thin_walled = thin_walled ? 1.0f : 0.0f;
-		result.material_changed                            = true;
-	}
-	record_item_edit_state();
+	ImGui::SeparatorText("Fuzz");
+	slider_float("Fuzz weight##fuzz", &selection_ctx.editor_material.fuzz_weight, 0.0f, 1.0f,
+	             "%.3f");
+	color_edit3("Fuzz color##fuzz", selection_ctx.editor_material.fuzz_color);
+	slider_float("Fuzz roughness##fuzz", &selection_ctx.editor_material.fuzz_roughness, 0.0f, 1.0f,
+	             "%.3f");
+
+	ImGui::SeparatorText("Thin Film");
+	slider_float("Thin film weight##film", &selection_ctx.editor_material.thin_film_weight, 0.0f,
+	             1.0f, "%.3f");
+	slider_float("Thin film IOR##film", &selection_ctx.editor_material.thin_film_ior, 1.0f, 2.5f,
+	             "%.3f");
+	slider_float("Thin film thickness##film", &selection_ctx.editor_material.thin_film_thickness,
+	             0.0f, 3000.0f, "%.1f");
+
+	ImGui::SeparatorText("Emission");
+	color_edit3("Emission color##emiss", selection_ctx.editor_material.emission_color);
+	slider_float("Emission intensity##emiss", &selection_ctx.editor_material.emission_luminance,
+	             0.0f, 100.0f, "%.3f");
 
 	ImGui::EndDisabled();
 
