@@ -23,25 +23,51 @@ float4 openpbr_sample_3d_impl(int lut_id, float3 uvw) {
 
 // ─── Push constants ───────────────────────────────────────────────────────────
 struct PushConstants {
-    uint   accumulation_frame;
-    uint   rng_seed;
+    uint   frame;
     uint   material_count;
-    int    selected_object_id;
+    int    selected_mesh_index;
     uint   outline_width;
     int    debug_view_mode;
+    uint   stage;   // 0 = visibility pass, 1 = path trace selected object
+    uint   spp;
+    uint   max_bounces;
+    float4 outline_color;
+    uint   enable_tonemapping;
+    float  exposure_bias;
+    uint   hipr_object_count;
+    uint   hipr_top_k;
+    int    hipr_render_rank;
+    uint   hipr_incremental_sort;
+    uint   hipr_clear_order;
+    uint   hipr_vis_enable_tint;
+    uint   hipr_vis_rainbow_tint;
+    uint   hipr_reserved0;
+    uint   hipr_frames_per_object;
+    float  hipr_score_blend;
+    float  hipr_vis_tint_strength;
+    uint   skybox_enabled;
+    uint   directional_light_enabled;
+    float  sun_dir_x;
+    float  sun_dir_y;
+    float  sun_dir_z;
+    float  sun_intensity;
+};
+[[vk::push_constant]] ConstantBuffer<PushConstants> push;
+
+struct WaterSurfaceParams {
+    float4 center_trace_half_height;
+    float4 axis_u_half_extent;
+    float4 axis_v_half_extent;
+    float4 normal;
     int    water_object_id;
     uint   water_enabled;
     int    water_material_index;
     float  water_height_to_world_scale;
     int    first_floating_object_id;
-    float  _pad0;
-    float4 outline_color;
-    float4 water_center_trace_half_height;
-    float4 water_axis_u_half_extent;
-    float4 water_axis_v_half_extent;
-    float4 water_normal;
+    uint   _pad0;
+    uint   _pad1;
+    uint   _pad2;
 };
-[[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
 // ─── Bindings ─────────────────────────────────────────────────────────────────
 [[vk::binding(0,  0)]] RWTexture2D<float4>             output_image;
@@ -54,8 +80,9 @@ struct PushConstants {
 [[vk::binding(8,  0)]] StructuredBuffer<uint>          indices_buf;
 [[vk::binding(11, 0)]] Texture2D<float4>               material_textures[MAX_MAT_TEXTURES];
 [[vk::binding(13, 0)]] RWTexture2D<int>               object_id_image;
-[[vk::binding(14, 0)]] RWTexture2D<float>             water_height_image;
-[[vk::binding(15, 0)]] RWTexture2D<float>             water_prev_height_image;
+[[vk::binding(19, 0)]] StructuredBuffer<WaterSurfaceParams> water_surface_params_buf;
+[[vk::binding(20, 0)]] RWTexture2D<float>                  water_height_image;
+[[vk::binding(21, 0)]] RWTexture2D<float>                  water_prev_height_image;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -144,19 +171,14 @@ struct GPUMesh {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 static const float PI          = 3.14159265358979f;
-static const int   MAX_BOUNCES = 8;
 static const float T_MIN       = 1e-3f;
 static const float T_MAX       = 1e30f;
 static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 
 // ─── Light: directional sun ───────────────────────────────────────────────────
-// A directional light has no distance falloff and shoots shadow rays to T_MAX,
-// so it passes cleanly through Sponza's open atrium top regardless of the
-// camera position.  Angle it slightly so surfaces at grazing incidence still
-// catch some light.
-static float3 g_sun_dir       = normalize(float3(0.f, -1.0f, 0.f));
-static const float3 g_sun_color     = float3(1.0f, 0.95f, 0.85f);
-static const float  g_sun_intensity = 0.5f;   // tweak for desired exposure
+// Direction and intensity come from push constants (UI-controlled).
+// g_sun_dir is the direction FROM the surface TO the light (positive Y = above).
+static const float3 g_sun_color = float3(1.0f, 0.85f, 0.5f);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 struct Ray { float3 origin; float3 dir; };
@@ -164,13 +186,38 @@ struct Hit {
     float  t;
     float3 position;
     float3 normal;
+    float3 geom_normal;
     float3 tangent;
     float3 bitangent;
     float2 uv;
     bool   front_face;
     int    matIndex;
     int    instanceID;
+    int    primID;
 };
+
+// ─── Halton low-discrepancy jitter ───────────────────────────────────────────
+// Radical inverse base 2 via bit reversal — O(1), exact.
+float halton2(uint n) { return float(reversebits(n)) * (1.f / 4294967296.f); }
+
+// Radical inverse base 3 — converges in ≤12 iterations for n < 3^12 ≈ 530k.
+float halton3(uint n) {
+    float f = 1.f, r = 0.f;
+    while (n > 0u) { f /= 3.f; r += f * float(n % 3u); n /= 3u; }
+    return r;
+}
+
+// Returns a jittered pixel offset in [0,1)^2.
+// sample_index should be frame * SPP + spp_i so consecutive frames extend the
+// sequence rather than restarting it, giving full low-discrepancy coverage over time.
+// The per-pixel Cranley-Patterson offset decorrelates neighbouring pixels so they
+// don't all sample the same directions simultaneously.
+float2 haltonJitter(uint sample_index, uint2 pixel) {
+    float ox = frac(float(pixel.x * 0x9E3779B9u) * (1.f / 4294967296.f));
+    float oy = frac(float(pixel.y * 0x6C62272Eu) * (1.f / 4294967296.f));
+    return float2(frac(halton2(sample_index) + ox),
+                  frac(halton3(sample_index) + oy));
+}
 
 // ─── RNG ──────────────────────────────────────────────────────────────────────
 struct RNG {
@@ -178,6 +225,7 @@ struct RNG {
     static RNG make(uint2 pixel, uint frame) {
         RNG r;
         r.state = pixel.x ^ (pixel.y << 16) ^ (frame * 719393u);
+        r.next(); // warm-up: advance past the raw seed to break inter-pixel/frame correlation
         return r;
     }
     [mutating] uint next() {
@@ -190,7 +238,28 @@ struct RNG {
 };
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
-struct VertexAttribs { float3 normal; float2 uv; float4 tangent;};
+struct VertexAttribs {
+    float3 normal;
+    float2 uv;
+    float4 tangent;
+    float3 p0;
+    float3 p1;
+    float3 p2;
+};
+
+float3 safeNormalize(float3 v, float3 fallback) {
+    float len2 = dot(v, v);
+    if (len2 > 1.0e-12f) {
+        return v * rsqrt(len2);
+    }
+    return fallback;
+}
+
+float3 buildOrthoTangent(float3 n) {
+    // Pick an axis least aligned with n, then project to get a stable tangent.
+    float3 axis = (abs(n.y) < 0.999f) ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    return safeNormalize(cross(axis, n), float3(1.0f, 0.0f, 0.0f));
+}
 
 bool intersectAABB(float3 ray_origin, float3 ray_dir, float3 box_min, float3 box_max,
                    out float t_min, out float t_max) {
@@ -206,26 +275,33 @@ bool intersectAABB(float3 ray_origin, float3 ray_dir, float3 box_min, float3 box
     return t_max >= max(t_min, 0.0f);
 }
 
+WaterSurfaceParams getWaterSurfaceParams() {
+    return water_surface_params_buf[0];
+}
+
 bool waterEnabled() {
-    return push.water_enabled != 0 &&
-           push.water_axis_u_half_extent.w > 1e-4f &&
-           push.water_axis_v_half_extent.w > 1e-4f &&
-           push.water_height_to_world_scale > 1e-5f;
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    return water.water_enabled != 0 &&
+           water.axis_u_half_extent.w > 1e-4f &&
+           water.axis_v_half_extent.w > 1e-4f &&
+           water.water_height_to_world_scale > 1e-5f;
 }
 
 float3 worldToWater(float3 world_pos) {
-    float3 delta = world_pos - push.water_center_trace_half_height.xyz;
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    float3 delta = world_pos - water.center_trace_half_height.xyz;
     return float3(
-        dot(delta, push.water_axis_u_half_extent.xyz) / max(push.water_axis_u_half_extent.w, 1e-4f),
-        dot(delta, push.water_normal.xyz),
-        dot(delta, push.water_axis_v_half_extent.xyz) / max(push.water_axis_v_half_extent.w, 1e-4f));
+        dot(delta, water.axis_u_half_extent.xyz) / max(water.axis_u_half_extent.w, 1e-4f),
+        dot(delta, water.normal.xyz),
+        dot(delta, water.axis_v_half_extent.xyz) / max(water.axis_v_half_extent.w, 1e-4f));
 }
 
 float3 waterToWorld(float3 water_pos) {
-    return push.water_center_trace_half_height.xyz +
-           push.water_axis_u_half_extent.xyz * (water_pos.x * push.water_axis_u_half_extent.w) +
-           push.water_normal.xyz * water_pos.y +
-           push.water_axis_v_half_extent.xyz * (water_pos.z * push.water_axis_v_half_extent.w);
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    return water.center_trace_half_height.xyz +
+           water.axis_u_half_extent.xyz * (water_pos.x * water.axis_u_half_extent.w) +
+           water.normal.xyz * water_pos.y +
+           water.axis_v_half_extent.xyz * (water_pos.z * water.axis_v_half_extent.w);
 }
 
 float readWaterHeightRaw(int2 coord, int2 dims) {
@@ -274,7 +350,7 @@ float sampleWaterHeight(float2 water_xz, int2 dims) {
         return -1.0e6f;
     }
 
-    return sampleWaterHeightRaw(uv, dims) * push.water_height_to_world_scale;
+    return sampleWaterHeightRaw(uv, dims) * getWaterSurfaceParams().water_height_to_world_scale;
 }
 
 float samplePreviousWaterHeight(float2 water_xz, int2 dims) {
@@ -283,7 +359,8 @@ float samplePreviousWaterHeight(float2 water_xz, int2 dims) {
         return -1.0e6f;
     }
 
-    return samplePreviousWaterHeightRaw(uv, dims) * push.water_height_to_world_scale;
+    return samplePreviousWaterHeightRaw(uv, dims) *
+           getWaterSurfaceParams().water_height_to_world_scale;
 }
 
 float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
@@ -301,7 +378,7 @@ float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
     float3 pU = waterToWorld(float3(water_xz.x, hU, water_xz.y + dz));
 
     float3 normal = normalize(cross(pR - pL, pU - pD));
-    if (dot(normal, push.water_normal.xyz) < 0.0f) {
+    if (dot(normal, getWaterSurfaceParams().normal.xyz) < 0.0f) {
         normal = -normal;
     }
     return normal;
@@ -322,7 +399,7 @@ float3 previousWaterSurfaceNormal(float2 water_xz, int2 dims) {
     float3 pU = waterToWorld(float3(water_xz.x, hU, water_xz.y + dz));
 
     float3 normal = normalize(cross(pR - pL, pU - pD));
-    if (dot(normal, push.water_normal.xyz) < 0.0f) {
+    if (dot(normal, getWaterSurfaceParams().normal.xyz) < 0.0f) {
         normal = -normal;
     }
     return normal;
@@ -347,11 +424,11 @@ void waterTemporalInfoForHit(Hit water_hit, out float motion, out float blend) {
     float3 current_normal = water_hit.front_face ? water_hit.normal : -water_hit.normal;
     float3 previous_normal = previousWaterSurfaceNormal(water_xz, dims);
     float normal_delta = 1.0f - saturate(dot(current_normal, previous_normal));
-    float flatness = 1.0f - saturate(dot(current_normal, push.water_normal.xyz));
+    float flatness = 1.0f - saturate(dot(current_normal, getWaterSurfaceParams().normal.xyz));
 
     motion = saturate(height_delta * 14.0f + normal_delta * 5.5f + flatness * 2.2f);
     float history_blend = lerp(0.055f, 0.28f, motion);
-    float startup_blend = 1.0f / float(min(push.accumulation_frame + 1u, 12u));
+    float startup_blend = 1.0f / float(min(push.frame + 1u, 12u));
     blend = max(history_blend, startup_blend);
 }
 
@@ -394,9 +471,9 @@ GPUMaterial makeWaterMaterial() {
 
 GPUMaterial loadWaterMaterial() {
     GPUMaterial water = makeWaterMaterial();
-    if (push.water_material_index >= 0 &&
-        uint(push.water_material_index) < push.material_count) {
-        water = materials_buf[NonUniformResourceIndex(push.water_material_index)];
+    const int water_material_index = getWaterSurfaceParams().water_material_index;
+    if (water_material_index >= 0 && uint(water_material_index) < push.material_count) {
+        water = materials_buf[NonUniformResourceIndex(water_material_index)];
     }
 
     // The UI exposes "Base tint" but not a separate transmission tint, so use
@@ -418,17 +495,18 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
     int2 dims = int2(int(width), int(height));
     if (dims.x <= 1 || dims.y <= 1) return false;
 
+    WaterSurfaceParams water = getWaterSurfaceParams();
     float3 local_origin = worldToWater(ray.origin);
     float3 local_dir = float3(
-        dot(ray.dir, push.water_axis_u_half_extent.xyz) / max(push.water_axis_u_half_extent.w, 1e-4f),
-        dot(ray.dir, push.water_normal.xyz),
-        dot(ray.dir, push.water_axis_v_half_extent.xyz) / max(push.water_axis_v_half_extent.w, 1e-4f));
+        dot(ray.dir, water.axis_u_half_extent.xyz) / max(water.axis_u_half_extent.w, 1e-4f),
+        dot(ray.dir, water.normal.xyz),
+        dot(ray.dir, water.axis_v_half_extent.xyz) / max(water.axis_v_half_extent.w, 1e-4f));
 
     float t_min;
     float t_max;
     if (!intersectAABB(local_origin, local_dir,
-                       float3(-1.04f, -push.water_center_trace_half_height.w, -1.04f),
-                       float3(1.04f, push.water_center_trace_half_height.w, 1.04f),
+                       float3(-1.04f, -water.center_trace_half_height.w, -1.04f),
+                       float3(1.04f, water.center_trace_half_height.w, 1.04f),
                        t_min, t_max)) {
         return false;
     }
@@ -474,10 +552,10 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
 
             float3 geometric_normal = waterSurfaceNormal(hit_local.xz, dims);
             float3 tangent = normalize(
-                push.water_axis_u_half_extent.xyz -
-                geometric_normal * dot(geometric_normal, push.water_axis_u_half_extent.xyz));
+                water.axis_u_half_extent.xyz -
+                geometric_normal * dot(geometric_normal, water.axis_u_half_extent.xyz));
             float3 bitangent = normalize(cross(geometric_normal, tangent));
-            if (dot(bitangent, push.water_axis_v_half_extent.xyz) < 0.0f) {
+            if (dot(bitangent, water.axis_v_half_extent.xyz) < 0.0f) {
                 bitangent = -bitangent;
             }
 
@@ -487,8 +565,8 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
             hit.bitangent = bitangent;
             hit.uv = hit_local.xz * 0.5f + 0.5f;
             hit.front_face = front_face;
-            hit.matIndex = push.water_material_index;
-            hit.instanceID = push.water_object_id;
+            hit.matIndex = water.water_material_index;
+            hit.instanceID = water.water_object_id;
             mat = loadWaterMaterial();
             return true;
         }
@@ -517,6 +595,9 @@ VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     a.uv = vertices_buf[voff+i0].uv*w0 +
            vertices_buf[voff+i1].uv*bary.x +
            vertices_buf[voff+i2].uv*bary.y;
+    a.p0 = vertices_buf[voff+i0].position;
+    a.p1 = vertices_buf[voff+i1].position;
+    a.p2 = vertices_buf[voff+i2].position;
     return a;
 }
 
@@ -533,6 +614,23 @@ bool is_occluded(float3 origin, float3 normal, float3 dir, float tmax) {
     q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, sd);
     while (q.Proceed()) {}
     return q.CommittedStatus() != COMMITTED_NOTHING;
+}
+
+int traceOccluderInstance(float3 origin, float3 normal, float3 dir, float tmax) {
+    RayDesc sd;
+    sd.Origin    = origin + normal * 1e-3f;
+    sd.Direction = dir;
+    sd.TMin      = 0.f;
+    sd.TMax      = tmax;
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_NON_OPAQUE> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, sd);
+    while (q.Proceed()) {}
+
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+        return int(q.CommittedInstanceID());
+    }
+    return -1;
 }
 
 bool traceVisibleMeshHit(Ray ray, out float hit_t, out int object_id) {
@@ -559,6 +657,12 @@ bool traceVisibleMeshHit(Ray ray, out float hit_t, out int object_id) {
     hit_t = q.CommittedRayT();
     object_id = int(q.CommittedInstanceID());
     return true;
+}
+
+int traceVisibleInstance(Ray ray) {
+    float hit_t = 0.0f;
+    int object_id = -1;
+    return traceVisibleMeshHit(ray, hit_t, object_id) ? object_id : -1;
 }
 
 int traceVisibleObjectId(Ray ray, out bool visible_water, out Hit visible_water_hit) {
@@ -613,39 +717,86 @@ bool intersectMeshScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     uint instID    = q.CommittedInstanceID();
     uint primID    = q.CommittedPrimitiveIndex();
     float2 bary    = q.CommittedTriangleBarycentrics();
-    bool frontFace = q.CommittedTriangleFrontFace();
+    bool queryFrontFace = q.CommittedTriangleFrontFace();
 
     VertexAttribs attr = fetchAttribs(instID, primID, bary);
 
     hit.position   = ray.origin + hit.t * ray.dir;
     hit.uv         = attr.uv;
-    hit.front_face = frontFace;
     hit.instanceID = int(instID);
-    hit.matIndex = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
+    hit.primID     = int(primID);
+    hit.matIndex   = meshes_buf[NonUniformResourceIndex(instID)].matIndex;
     mat = materials_buf[NonUniformResourceIndex(hit.matIndex)];
 
-    float3 N = normalize(attr.normal);
-    float3 T = normalize(attr.tangent.xyz);
-    float  handedness = attr.tangent.w;
+    // Vertex normals/tangents are in local (BLAS) space.
+    // The TLAS instance transform moves positions to world space, so we must
+    // bring the TBN basis to world space too:
+    //   normals  → multiply by inverse-transpose of model matrix
+    //             = mul(n_local, inverseTransform)  [row-vec × mat in Slang]
+    //   tangents → multiply by the forward model matrix (no inverse needed)
+    float3x3 M    = (float3x3) meshes_buf[NonUniformResourceIndex(instID)].transform;
+    float3x3 Minv = (float3x3) meshes_buf[NonUniformResourceIndex(instID)].inverseTransform;
 
-    T = normalize(T - N * dot(N, T));
-    float3 B = handedness * cross(N, T);
+    float3 N = safeNormalize(mul(attr.normal, Minv), float3(0.0f, 1.0f, 0.0f)); // inverse-transpose
+    float3 T = mul(attr.tangent.xyz, M); // forward transform
+    float  handedness = (attr.tangent.w < 0.0f) ? -1.0f : 1.0f;
+    if (determinant(M) < 0.0f) {
+        handedness = -handedness;
+    }
 
-    float3 normal_tex = sample_tex(
-        mat.normal_tex_index,
-        attr.uv,
-        float4(0.5, 0.5, 1.0, 1.0)
-    ).xyz;
+    float3 Ng_local = cross(attr.p1 - attr.p0, attr.p2 - attr.p0);
+    float3 Ng_a = safeNormalize(mul(Ng_local, Minv), N);
+    float3 Ng_b = safeNormalize(mul(Ng_local, M), N);
+    bool   a_front = dot(ray.dir, Ng_a) < 0.0f;
+    bool   b_front = dot(ray.dir, Ng_b) < 0.0f;
+    float3 Ng_world = Ng_a;
+    if (a_front != queryFrontFace && b_front == queryFrontFace) {
+        Ng_world = Ng_b;
+    } else if (!(a_front == queryFrontFace && b_front != queryFrontFace)) {
+        // Tie-breaker: prefer the geometric normal most aligned with the
+        // transformed shading normal.
+        Ng_world = (abs(dot(Ng_b, N)) > abs(dot(Ng_a, N))) ? Ng_b : Ng_a;
+    }
 
-    normal_tex = normal_tex * 2.0 - 1.0;
+    // Re-orthogonalize T against the (now world-space) N.
+    T = T - N * dot(N, T);
+    T = safeNormalize(T, buildOrthoTangent(N));
+    float3 B = safeNormalize(handedness * cross(N, T), buildOrthoTangent(N));
 
-    float3 N_world = normalize(
-        T * normal_tex.x +
-        B * normal_tex.y +
-        N * normal_tex.z
-    );
+    float3 N_world = N;
+    if (mat.normal_tex_index != NO_TEXTURE) {
+        float3 normal_tex = sample_tex(
+            mat.normal_tex_index,
+            attr.uv,
+            float4(0.5, 0.5, 1.0, 1.0)
+        ).xyz;
 
-    hit.normal    = frontFace ? N_world : -N_world;
+        normal_tex = normal_tex * 2.0 - 1.0;
+
+        // Perturb N by the normal map in the world-space TBN frame.
+        N_world = safeNormalize(
+            T * normal_tex.x +
+            B * normal_tex.y +
+            N * normal_tex.z,
+            N);
+    }
+
+    bool frontFace = dot(ray.dir, Ng_world) < 0.0f;
+    if (!frontFace) {
+        Ng_world = -Ng_world;
+    }
+    hit.front_face = frontFace;
+
+    // Keep shading and geometric normals in the same hemisphere to avoid
+    // mirrored-looking response on rotated or negatively-scaled instances.
+    if (dot(N_world, Ng_world) < 0.0f) {
+        N_world = -N_world;
+        T = -T;
+        B = -B;
+    }
+
+    hit.normal      = N_world;
+    hit.geom_normal = Ng_world;
     hit.tangent   = T;
     hit.bitangent = B;
     return true;
@@ -696,8 +847,10 @@ OpenPBR_ResolvedInputs material_to_openpbr(
     // textured materials.
     float4 orm = sample_tex(m.roughness_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
 
+    float geometry_opacity = saturate(m.geometry_opacity);
+
     inp.base_color              = alb.rgb * m.base_color.rgb;
-    inp.base_weight             = alb.a * m.base_color.a;
+    inp.base_weight             = alb.a * m.base_color.a * geometry_opacity;
     inp.base_metalness          = saturate(orm.b * m.base_metalness);   // B channel = metalness
     inp.base_diffuse_roughness  = m.base_diffuse_roughness;
 
@@ -707,7 +860,7 @@ OpenPBR_ResolvedInputs material_to_openpbr(
     inp.specular_ior                   = m.specular_ior;
     inp.specular_roughness_anisotropy  = m.specular_anisotropy;
 
-    inp.transmission_weight                 = m.transmission_weight;
+    inp.transmission_weight                 = saturate(max(m.transmission_weight, 1.0f - geometry_opacity));
     inp.transmission_color                  = m.transmission_color.rgb;
     //inp.transmission_color                  = float3(1,0,0); // debug red transmission to visualize where it's used
     inp.transmission_depth                  = m.transmission_depth;
@@ -716,7 +869,7 @@ OpenPBR_ResolvedInputs material_to_openpbr(
     inp.transmission_dispersion_scale       = m.transmission_dispersion_scale;
     inp.transmission_dispersion_abbe_number = m.transmission_dispersion_abbe_number;
 
-    inp.geometry_opacity     = m.geometry_opacity;
+    inp.geometry_opacity     = geometry_opacity;
     inp.geometry_thin_walled = (m.geometry_thin_walled > 0.5);
 
     inp.coat_weight    = m.coat_weight;
@@ -748,13 +901,16 @@ float3 tracePath(Ray ray, inout RNG rng) {
     float3 throughput = float3(1, 1, 1);
     float3 radiance   = float3(0, 0, 0);
 
-    for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce) {
+    const uint bounce_count = max(push.max_bounces, 1u);
+    [loop]
+    for (uint bounce = 0u; bounce < bounce_count; ++bounce) {
         Hit         hit;
         GPUMaterial mat;
 
         if (!intersectScene(ray, hit, mat)) {
             // Ray escaped to sky — treat sky as an environment light
-            radiance += throughput * skyColor(ray.dir);
+            if (push.skybox_enabled != 0u)
+                radiance += throughput * skyColor(ray.dir);
             break;
         }
 
@@ -766,10 +922,14 @@ float3 tracePath(Ray ray, inout RNG rng) {
         float3 hitPos   = hit.position;
         float3 view_dir = -ray.dir;
 
-        // Pass the unflipped geometric normal to OpenPBR so it can detect back-face
-        // hits via dot(view_dir, shading_normal) < 0 and swap IORs for refraction.
-        // hit.normal is face-forwarded (always toward the ray origin), so we undo that.
-        float3 openpbr_normal = hit.front_face ? hit.normal : -hit.normal;
+        // For opaque surfaces, keep the face-forwarded shading normal to avoid
+        // winding-dependent mirrored seams across triangles.
+        // For transmissive/partially-opaque materials, preserve side information
+        // so OpenPBR can swap IORs correctly on back-face hits.
+        float3 openpbr_normal = hit.normal;
+        if (mat.transmission_weight > 0.0f || mat.geometry_opacity < 0.999f) {
+            openpbr_normal = hit.front_face ? hit.normal : -hit.normal;
+        }
         OpenPBR_ResolvedInputs inputs = material_to_openpbr(
             mat, hit.uv, openpbr_normal, hit.tangent, hit.bitangent);
 
@@ -782,17 +942,23 @@ float3 tracePath(Ray ray, inout RNG rng) {
         // openpbr_eval() takes world-space directions and returns BSDF × |cos θ_i|.
         // Do NOT convert to local space; do NOT multiply by n_dot_l again.
         // For transmissive materials, also sample the back hemisphere (backlit glass).
-        {
-            bool sun_front = dot(hit.normal,  g_sun_dir) > 0.f;
-            bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f && inputs.transmission_weight > 0.f;
+        if (push.directional_light_enabled != 0u) {
+            float3 g_sun_dir = normalize(float3(push.sun_dir_x, push.sun_dir_y, push.sun_dir_z));
+            float  g_sun_intensity = push.sun_intensity;
 
-            if (sun_front && !is_occluded(hitPos, hit.normal, g_sun_dir, T_MAX)) {
+            bool sun_front = dot(hit.normal,  g_sun_dir) > 0.f;
+            bool sun_back  = dot(hit.normal, -g_sun_dir) > 0.f &&
+                             inputs.transmission_weight > 0.f;
+
+            int occluder_front = traceOccluderInstance(hitPos, hit.normal, g_sun_dir, T_MAX);
+            if (sun_front && occluder_front < 0) {
                 float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, g_sun_dir));
                 radiance += throughput * f * g_sun_color * g_sun_intensity;
             }
             // For back-hemisphere shadow rays, offset the origin toward the sun side
             // so the ray doesn't self-intersect with the surface it just hit.
-            if (sun_back && !is_occluded(hitPos, -hit.normal, -g_sun_dir, T_MAX)) {
+            int occluder_back = traceOccluderInstance(hitPos, -hit.normal, -g_sun_dir, T_MAX);
+            if (sun_back && occluder_back < 0) {
                 float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, -g_sun_dir));
                 radiance += throughput * f * g_sun_color * g_sun_intensity;
             }
@@ -810,21 +976,19 @@ float3 tracePath(Ray ray, inout RNG rng) {
         // weight = BSDF × cosine / pdf — standard MC estimator
         throughput *= openpbr_get_sum_of_diffuse_specular(weight);
 
-        // Russian roulette after bounce 3
-        if (bounce >= 6) {
+        // Russian roulette after bounce 2
+        if (bounce >= 2u) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
             if (rng.nextFloat() > p) break;
             throughput /= p;
         }
 
-        // check for refraction and flip the ray bias direction if needed to avoid self-intersection
-        float biasDir = 1.0f;
-        if ((sampled_type & OpenPBR_BsdfLobeTypeTransmission) == 1 && hit.front_face) {
-            biasDir = -1.0f;
-        }
-
-        float3 offset_n = dot(light_dir, hit.normal) >= 0.f ? hit.normal : -hit.normal;
-        ray.origin = hitPos + offset_n * (T_MIN * biasDir);
+        // Adaptive ray epsilon reduces self-intersection on large scenes while
+        // keeping close-up precision.
+        float  ray_eps  = max(T_MIN, hit.t * 1.0e-4f);
+        float3 offset_n =
+            dot(light_dir, hit.geom_normal) >= 0.0f ? hit.geom_normal : -hit.geom_normal;
+        ray.origin = hitPos + offset_n * ray_eps;
         ray.dir    = light_dir;
     }
 
@@ -858,8 +1022,8 @@ Ray makeRay(uint2 pixel, uint2 dims, float2 jitter) {
 }
 
 bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
-    if (push.selected_object_id < 0) return false;
-    if (center_instance != push.selected_object_id) return false;
+    if (push.selected_mesh_index < 0) return false;
+    if (center_instance != push.selected_mesh_index) return false;
 
     const int outline_width = max(int(push.outline_width), 1);
     const int2 dims_i = int2(dims.x, dims.y);
@@ -880,7 +1044,7 @@ bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
 
         int neighbor_instance =
             traceVisibleObjectId(makeRay(uint2(neighbor.x, neighbor.y), dims, float2(0.5f, 0.5f)));
-        if (neighbor_instance != push.selected_object_id) {
+        if (neighbor_instance != push.selected_mesh_index) {
             return true;
         }
     }
@@ -888,26 +1052,24 @@ bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
     return false;
 }
 
-uint hash_u32(uint value) {
-    value ^= value >> 16;
-    value *= 0x7feb352du;
-    value ^= value >> 15;
-    value *= 0x846ca68bu;
-    value ^= value >> 16;
-    return value;
+float3 srgbToLinear(float3 color) {
+    float3 cutoff = step(float3(0.04045f, 0.04045f, 0.04045f), color);
+    float3 low    = color / 12.92f;
+    float3 high   = pow((color + 0.055f) / 1.055f, float3(2.4f, 2.4f, 2.4f));
+    return lerp(low, high, cutoff);
 }
 
-float3 debugColorForObjectId(int object_id) {
-    if (object_id < 0) {
-        return float3(0.02f, 0.02f, 0.02f);
-    }
+float3 unchartedTonemapPartial(float3 color) {
+    float3 x = max(float3(0.0f, 0.0f, 0.0f), color - 0.004f);
+    return (x * (6.2f * x + 0.5f)) / (x * (6.2f * x + 1.7f) + 0.06f);
+}
 
-    uint hashed = hash_u32(uint(object_id + 1));
-    float3 rgb = float3(
-        float(hashed & 0xFFu),
-        float((hashed >> 8) & 0xFFu),
-        float((hashed >> 16) & 0xFFu)) / 255.0f;
-    return 0.15f + 0.85f * rgb;
+float3 unchartedTonemapFilmic(float3 color, float exposureBias) {
+    float3 exposed = color * exposureBias;
+    exposed        = unchartedTonemapPartial(exposed);
+    float3 W       = unchartedTonemapPartial(float3(11.2f, 11.2f, 11.2f));
+    float3 whiteScale = 1.0f / max(W, float3(1.0e-6f, 1.0e-6f, 1.0e-6f));
+    return exposed * whiteScale;
 }
 
 static const uint WATER_FILTER_TILE_SIZE = 16u;
@@ -937,8 +1099,8 @@ float3 sanitizeColor(float3 color, float3 fallback) {
 }
 
 bool isDynamicObjectId(int object_id) {
-    return push.first_floating_object_id >= 0 &&
-           object_id >= push.first_floating_object_id;
+    const int first_floating_object_id = getWaterSurfaceParams().first_floating_object_id;
+    return first_floating_object_id >= 0 && object_id >= first_floating_object_id;
 }
 
 float historyMismatch(float3 previous_color, float3 current_color) {
@@ -1049,7 +1211,17 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     uint2 pixel = dispatch_id.xy;
     uint2 dims;
     output_image.GetDimensions(dims.x, dims.y);
+
     bool valid_pixel = all(pixel < dims);
+    if (push.stage == 0) {
+        if (valid_pixel) {
+            int visible_id = traceVisibleObjectId(makeRay(pixel, dims, float2(0.5f, 0.5f)));
+            object_id_image[pixel] = visible_id;
+        }
+        return;
+    }
+
+    if (push.stage != 2) return;
 
     float3 accum = float3(0.0f, 0.0f, 0.0f);
     float3 current_color = float3(0.0f, 0.0f, 0.0f);
@@ -1063,11 +1235,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     bool revealed_water_after_dynamic = false;
 
     if (valid_pixel) {
-        RNG rng = RNG::make(pixel, push.rng_seed);
+        RNG rng = RNG::make(pixel, push.frame);
         Ray center_ray = makeRay(pixel, dims, float2(0.5f, 0.5f));
         visible_object_id = traceVisibleObjectId(center_ray, center_visible_water, center_water_hit);
         dynamic_visible_object = isDynamicObjectId(visible_object_id);
-        if (push.accumulation_frame > 0u) {
+        if (push.frame > 0u) {
             previous_visible_object_id = object_id_image[pixel];
         }
         object_id_image[pixel] = visible_object_id;
@@ -1075,33 +1247,38 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
             center_visible_water && previous_visible_object_id != visible_object_id &&
             isDynamicObjectId(previous_visible_object_id);
 
-        int SPP = (center_visible_water || dynamic_visible_object) ? 2 : 1;
-        float3 colorAccum = float3(0, 0, 0);
-        for (int i = 0; i < SPP; ++i) {
-            float2 jitter = dynamic_visible_object ?
-                ((i & 1) == 0 ? float2(0.375f, 0.375f) : float2(0.625f, 0.625f)) :
-                float2(rng.nextFloat(), rng.nextFloat());
+        const uint requested_spp = max(push.spp, 1u);
+        const uint spp = (center_visible_water || dynamic_visible_object) ?
+            max(requested_spp, 2u) :
+            requested_spp;
+
+        float3 colorAccum = float3(0.0f, 0.0f, 0.0f);
+        [loop]
+        for (uint i = 0u; i < spp; ++i) {
+            uint sample_index = push.frame * spp + i;
+            float2 jitter = (dynamic_visible_object && spp == 2u) ?
+                (((i & 1u) == 0u) ? float2(0.375f, 0.375f) : float2(0.625f, 0.625f)) :
+                haltonJitter(sample_index, pixel);
             colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
         }
-        float3 color = sanitizeColor(colorAccum / float(SPP), float3(0.0f, 0.0f, 0.0f));
+
+        float3 color = sanitizeColor(colorAccum / float(spp), float3(0.0f, 0.0f, 0.0f));
         current_color = color;
 
-        // Temporal accumulation — blend current frame into running average
         float3 prev  = sanitizeColor(accum_image[pixel].rgb, color);
-        float  blend = 1.f / float(push.accumulation_frame + 1u);
+        float  blend = 1.f / float(push.frame + 1u);
         if (center_visible_water) {
             waterTemporalInfoForHit(center_water_hit, center_water_motion, blend);
         }
-        if (push.accumulation_frame > 0u && previous_visible_object_id != visible_object_id) {
+        if (push.frame > 0u && previous_visible_object_id != visible_object_id) {
             blend = 1.0f;
         }
-        if (push.accumulation_frame > 0u &&
-            (center_visible_water || dynamic_visible_object)) {
+        if (push.frame > 0u && (center_visible_water || dynamic_visible_object)) {
             center_history_mismatch = historyMismatch(prev, color);
         }
         if (dynamic_visible_object) {
             blend = max(blend, lerp(0.12f, 0.42f, center_history_mismatch));
-        } else if (push.accumulation_frame > 0u && center_visible_water) {
+        } else if (push.frame > 0u && center_visible_water) {
             blend = max(blend, lerp(0.0f, 0.82f, center_history_mismatch));
         }
 
@@ -1111,28 +1288,32 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
 
     uint tile_index = waterTileIndex(group_thread_id.xy);
     g_water_tile_accum[tile_index] = float4(accum, 1.0f);
-    g_water_tile_motion[tile_index] = (valid_pixel && center_visible_water) ? center_water_motion : 0.0f;
+    g_water_tile_motion[tile_index] =
+        (valid_pixel && center_visible_water) ? center_water_motion : 0.0f;
     g_water_tile_mask[tile_index] = (valid_pixel && center_visible_water) ? 1u : 0u;
     g_tile_object_id[tile_index] = valid_pixel ? visible_object_id : -1;
     GroupMemoryBarrierWithGroupSync();
 
     if (!valid_pixel) return;
 
-    float3 display = (push.debug_view_mode == 1) ? debugColorForObjectId(visible_object_id) : accum;
-    if (push.debug_view_mode == 0 && dynamic_visible_object) {
+    float3 display = accum;
+    if (dynamic_visible_object) {
         float3 filtered = filterDynamicObjectTile(group_thread_id.xy, accum, visible_object_id);
         float filter_strength = lerp(0.42f, 0.20f, center_history_mismatch);
         float current_mix = lerp(0.08f, 0.24f, center_history_mismatch);
         display = lerp(accum, filtered, filter_strength);
         display = lerp(display, current_color, current_mix);
     }
-    if (push.debug_view_mode == 0 && center_visible_water) {
+    if (center_visible_water) {
         float3 filtered = filterWaterTile(group_thread_id.xy, accum, center_water_motion);
         float filter_strength = lerp(0.28f, 0.64f, center_water_motion);
         if (revealed_water_after_dynamic) {
             filter_strength = max(filter_strength, 0.82f);
         }
-        display = lerp(accum, filtered, filter_strength);
+        display = lerp(display, filtered, filter_strength);
+    }
+    if (push.enable_tonemapping != 0u) {
+        display = unchartedTonemapFilmic(display, push.exposure_bias);
     }
     if (isSelectionOutline(pixel, dims, visible_object_id)) {
         display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));

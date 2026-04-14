@@ -1,5 +1,7 @@
 #include "tsunami/shapes/mesh.h"
 #include <assimp/material.h>
+#include <cmath>
+#include <glm/geometric.hpp>
 #include <iostream>
 #include <utility>
 
@@ -38,6 +40,20 @@ static glm::mat4 ai_to_glm(const aiMatrix4x4& m) {
 	return out;
 }
 
+static glm::vec3 safe_normalize(const glm::vec3& v, const glm::vec3& fallback) {
+	const float len2 = glm::dot(v, v);
+	if (len2 > 1.0e-12f) {
+		return v * glm::inversesqrt(len2);
+	}
+	return fallback;
+}
+
+static glm::vec3 build_orthonormal_tangent(const glm::vec3& n) {
+	const glm::vec3 axis =
+	    (std::abs(n.y) < 0.999f) ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+	return safe_normalize(glm::cross(axis, n), glm::vec3(1.0f, 0.0f, 0.0f));
+}
+
 static std::string build_gltf_mesh_name(const aiNode* node, const aiMesh* ai_mesh,
                                         unsigned int mesh_idx) {
 	const std::string node_name = (node != nullptr) ? node->mName.C_Str() : "";
@@ -58,7 +74,10 @@ static std::string build_gltf_mesh_name(const aiNode* node, const aiMesh* ai_mes
 static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
                                     const aiMatrix4x4&                  parent_transform,
                                     std::vector<std::unique_ptr<Mesh>>& result) {
-	aiMatrix4x4 world = parent_transform * node->mTransformation;
+	aiMatrix4x4     world         = parent_transform * node->mTransformation;
+	const glm::mat4 glm_transform = ai_to_glm(world);
+	const glm::mat3 linear_transform(glm_transform);
+	const glm::mat3 normal_matrix = glm::transpose(glm::inverse(linear_transform));
 
 	for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
 		const unsigned int mesh_idx = node->mMeshes[i];
@@ -69,37 +88,52 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		if (!ai_mesh)
 			continue;
 
-		const bool has_uv = ai_mesh->HasTextureCoords(0);
+		const bool has_uv       = ai_mesh->HasTextureCoords(0);
+		const bool has_normals  = ai_mesh->HasNormals();
+		const bool has_tangents = ai_mesh->HasTangentsAndBitangents();
 
 		// --- Vertices ---
 		std::vector<GPUVertex> verts;
 		verts.reserve(ai_mesh->mNumVertices);
 		for (unsigned int v = 0; v < ai_mesh->mNumVertices; ++v) {
-			GPUVertex gv{};
-			gv.position = {ai_mesh->mVertices[v].x, ai_mesh->mVertices[v].y,
-			               ai_mesh->mVertices[v].z};
+			GPUVertex       gv{};
+			const glm::vec3 local_pos(ai_mesh->mVertices[v].x, ai_mesh->mVertices[v].y,
+			                          ai_mesh->mVertices[v].z);
+			const glm::vec4 world_pos = glm_transform * glm::vec4(local_pos, 1.0f);
+			gv.position               = glm::vec3(world_pos);
 
-			gv.normal = {ai_mesh->mNormals[v].x, ai_mesh->mNormals[v].y, ai_mesh->mNormals[v].z};
+			if (has_normals) {
+				gv.normal = safe_normalize(normal_matrix * glm::vec3(ai_mesh->mNormals[v].x,
+				                                                     ai_mesh->mNormals[v].y,
+				                                                     ai_mesh->mNormals[v].z),
+				                           glm::vec3(0.0f, 1.0f, 0.0f));
+			} else {
+				gv.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+			}
 
 			gv.uv = has_uv ? glm::vec2(ai_mesh->mTextureCoords[0][v].x,
 			                           ai_mesh->mTextureCoords[0][v].y) :
 			                 glm::vec2(0.0f);
 
 			// --- Tangent ---
-			if (ai_mesh->HasTangentsAndBitangents()) {
+			if (has_tangents) {
 				const auto& t = ai_mesh->mTangents[v];
 				const auto& b = ai_mesh->mBitangents[v];
 
-				glm::vec3 tangent(t.x, t.y, t.z);
-				glm::vec3 bitangent(b.x, b.y, b.z);
-				glm::vec3 normal = gv.normal;
+				glm::vec3 tangent   = safe_normalize(linear_transform * glm::vec3(t.x, t.y, t.z),
+				                                     build_orthonormal_tangent(gv.normal));
+				glm::vec3 bitangent = safe_normalize(linear_transform * glm::vec3(b.x, b.y, b.z),
+				                                     glm::cross(gv.normal, tangent));
+				glm::vec3 normal    = gv.normal;
+				tangent             = safe_normalize(tangent - normal * glm::dot(normal, tangent),
+				                                     build_orthonormal_tangent(normal));
 
 				float handedness =
 				    (glm::dot(glm::cross(normal, tangent), bitangent) < 0.0f) ? -1.0f : 1.0f;
 
 				gv.tangent = glm::vec4(tangent, handedness);
 			} else {
-				gv.tangent = glm::vec4(1, 0, 0, 1);        // fallback
+				gv.tangent = glm::vec4(build_orthonormal_tangent(gv.normal), 1.0f);
 			}
 			verts.push_back(gv);
 		}
@@ -160,19 +194,19 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		material->m_gpu.transmission_depth = 0.f;
 		material->m_gpu.transmission_color =
 		    glm::vec4(albedo, 1.f);        // default to albedo if no transmission color provided
-		glm::mat4 glm_transform = ai_to_glm(world);
 
 		Transform transform{};
-		transform.m_transform        = glm_transform;
-		transform.m_inverseTransform = glm::inverse(glm_transform);
+		// World transform is baked into vertices for glTF meshes.
+		// Using identity here avoids TLAS/shader transform convention mismatches.
+		transform.m_transform        = glm::mat4(1.0f);
+		transform.m_inverseTransform = glm::mat4(1.0f);
 
 		result.push_back(std::make_unique<Mesh>(std::move(verts), std::move(indices), transform,
 		                                        std::move(material),
 		                                        build_gltf_mesh_name(node, ai_mesh, mesh_idx)));
 
 		std::cout << "[Mesh::load_gltf] node=" << node->mName.C_Str() << " mesh_idx=" << mesh_idx
-		          << " pos=(" << glm_transform[3][0] << ", " << glm_transform[3][1] << ", "
-		          << glm_transform[3][2] << ")\n";
+		          << " (transform baked)\n";
 	}
 
 	for (unsigned int c = 0; c < node->mNumChildren; ++c) {
@@ -214,16 +248,39 @@ bool Mesh::load_obj(const std::string& path) {
 		return false;
 	}
 	for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
-		const aiMesh*  mesh     = scene->mMeshes[m];
-		const uint32_t vertBase = static_cast<uint32_t>(gpuVertices.size());
-		const bool     has_uv   = mesh->HasTextureCoords(0);
+		const aiMesh*  mesh         = scene->mMeshes[m];
+		const uint32_t vertBase     = static_cast<uint32_t>(gpuVertices.size());
+		const bool     has_uv       = mesh->HasTextureCoords(0);
+		const bool     has_normals  = mesh->HasNormals();
+		const bool     has_tangents = mesh->HasTangentsAndBitangents();
 
 		for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
 			GPUVertex gv{};
 			gv.position = {mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z};
-			gv.normal   = {mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z};
+			if (has_normals) {
+				gv.normal = safe_normalize(
+				    glm::vec3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z),
+				    glm::vec3(0.0f, 1.0f, 0.0f));
+			} else {
+				gv.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+			}
 			gv.uv = has_uv ? glm::vec2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y) :
 			                 glm::vec2(0.0f);
+			if (has_tangents) {
+				const auto& t = mesh->mTangents[i];
+				const auto& b = mesh->mBitangents[i];
+				glm::vec3   tangent =
+				    safe_normalize(glm::vec3(t.x, t.y, t.z), build_orthonormal_tangent(gv.normal));
+				glm::vec3 bitangent =
+				    safe_normalize(glm::vec3(b.x, b.y, b.z), glm::cross(gv.normal, tangent));
+				tangent = safe_normalize(tangent - gv.normal * glm::dot(gv.normal, tangent),
+				                         build_orthonormal_tangent(gv.normal));
+				const float handedness =
+				    (glm::dot(glm::cross(gv.normal, tangent), bitangent) < 0.0f) ? -1.0f : 1.0f;
+				gv.tangent = glm::vec4(tangent, handedness);
+			} else {
+				gv.tangent = glm::vec4(build_orthonormal_tangent(gv.normal), 1.0f);
+			}
 			gpuVertices.push_back(gv);
 		}
 		for (unsigned int i = 0; i < mesh->mNumFaces; ++i) {

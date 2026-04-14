@@ -6,24 +6,27 @@
 struct GPUCamera;
 
 // ---------------------------------------------------------------------------
-//  FlyCamera  –  first-person fly camera driven by GLFW input
+//  FlyCamera - first-person fly camera driven by GLFW input
 //
 //  Controls (while right-mouse is held to capture the cursor):
-//    Right-click       – toggle mouse capture on/off
-//    ESC               – release mouse capture
-//    WASD              – move forward / backward / strafe
-//    Space / Ctrl      – move up / down
-//    Shift (held)      – 4× speed multiplier
-//    Q / E             – halve / double the base speed
+//    Right-click       - toggle mouse capture on/off
+//    ESC               - release mouse capture
+//    WASD              - move forward / backward / strafe
+//    Space / Ctrl      - move up / down
+//    Shift (held)      - 4x speed multiplier
+//    Q / E             - halve / double the base speed
 // ---------------------------------------------------------------------------
 class FlyCamera {
   public:
-	FlyCamera() = default;
+	// Construct from a camera position and look-at target.
+	// Defaults: position (0, 0.5, 0), target (0, 0, 0), speed 0.5, sensitivity 0.0005,
+	// near 0.1, far 10000, up +Y.
+	FlyCamera(glm::vec3 position = glm::vec3(0.f, 0.5f, 0.f),
+	          glm::vec3 target = glm::vec3(0.f, 0.f, 0.f), float fov_deg = 60.f, float speed = 0.5f,
+	          float sensitivity = 0.0005f, float near_clip = 0.1f, float far_clip = 10000.f,
+	          glm::vec3 up = glm::vec3(0.f, 1.f, 0.f));
 
-	// Construct from an existing scene camera position and look-at target
-	FlyCamera(glm::vec3 position, glm::vec3 target, float fov_deg = 60.f, float speed = 1.f);
-
-	// Call once per frame.  dt is seconds elapsed since last frame.
+	// Call once per frame. dt is seconds elapsed since last frame.
 	// Returns true if the camera moved (so the caller can reset accumulation).
 	bool update(GLFWwindow* window, float dt);
 
@@ -35,14 +38,17 @@ class FlyCamera {
 	}
 
 	// ---- tweakable parameters ----
-	float speed       = 0.1f;           // units / second
-	float sensitivity = 0.0005f;        // radians / pixel
-	float fov         = 60.f;           // vertical field-of-view in degrees
+	float m_speed       = 0.5f;           // units / second
+	float m_sensitivity = 0.0005f;        // radians / pixel
+	float m_fov         = 60.f;           // vertical field-of-view in degrees
+	float m_near_clip   = 0.1f;
+	float m_far_clip    = 10000.f;
 
   private:
-	glm::vec3 m_position{0.f, 10.f, 0.f};
+	glm::vec3 m_position{0.f, 0.5f, 0.f};
+	glm::vec3 m_up{0.f, 1.f, 0.f};
 	float     m_yaw   = 0.f;        // radians, around world-Y
-	float     m_pitch = 0.f;        // radians, clamped to ±89°
+	float     m_pitch = 0.f;        // radians, clamped to +/-89 deg
 
 	bool  m_mouse_captured = false;
 	float m_last_x         = 0.f;

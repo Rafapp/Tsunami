@@ -1,35 +1,21 @@
 #pragma once
 
 #include <memory>
-#include <stdexcept>
-
-#include "tsunami/core/window.h"
-#include "tsunami/scene/scene.h"
-
-namespace audio {
-class MicrophoneInput;
-class ReactiveAudioController;
-}        // namespace audio
-
-namespace simulation {
-class WaterSurfaceSimulation;
-}
+#include <string>
 
 class App {
   public:
-	App();
+	explicit App(const std::string& scene_argument = "");
 	~App();
+
+	App(const App&)            = delete;
+	App& operator=(const App&) = delete;
+	App(App&&) noexcept;
+	App& operator=(App&&) noexcept;
 
 	void run();
 
   private:
-	void                                                createSwapchainResources();
-	void                                                destroySwapchainResources();
-	void                                                recreateSwapchainResources();
-	void                                                MainLoop();
-	std::unique_ptr<audio::ReactiveAudioController>     m_audio_controller;
-	std::unique_ptr<audio::MicrophoneInput>             m_microphone;
-	std::unique_ptr<simulation::WaterSurfaceSimulation> m_water_surface;
-	std::unique_ptr<core::Window>                       m_window;
-	std::unique_ptr<Scene>                              m_scene;
+	class Impl;
+	std::unique_ptr<Impl> m_impl;
 };
