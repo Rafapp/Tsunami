@@ -3,6 +3,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
 #include <utility>
@@ -89,6 +90,170 @@ static uint32_t sanitizeTenStepFrameValue(uint64_t value) {
 	return snapped;
 }
 
+static glm::vec3 rainbowColorFromLoudness(float loudness) {
+	const float level = std::clamp(loudness, 0.0f, 1.0f);
+	float       r     = 0.0f;
+	float       g     = 0.0f;
+	float       b     = 0.0f;
+
+	ImGui::ColorConvertHSVtoRGB((1.0f - level) * 0.75f, 0.95f, 1.0f, r, g, b);
+	return glm::vec3(r, g, b);
+}
+
+static float voiceDrivenScalarValue(VoiceDrivenParameter parameter, float loudness) {
+	const float level = std::clamp(loudness, 0.0f, 1.0f);
+	switch (parameter) {
+		case VoiceDrivenParameter::Metalness:
+			return level;
+		case VoiceDrivenParameter::Roughness:
+			return 0.02f + level * (1.0f - 0.02f);
+		case VoiceDrivenParameter::Transmission:
+			return level;
+		case VoiceDrivenParameter::Ior:
+			return 1.0f + level * (2.5f - 1.0f);
+		case VoiceDrivenParameter::EmissionIntensity:
+			return level * 20.0f;
+		case VoiceDrivenParameter::ObjectScale:
+			return 0.25f + level * (2.0f - 0.25f);
+		case VoiceDrivenParameter::BaseTint:
+		case VoiceDrivenParameter::EmissionColor:
+			return level;
+	}
+
+	return level;
+}
+
+static const char* voiceDrivenParameterLabel(VoiceDrivenParameter parameter) {
+	switch (parameter) {
+		case VoiceDrivenParameter::BaseTint:
+			return "Base tint";
+		case VoiceDrivenParameter::EmissionColor:
+			return "Emission color";
+		case VoiceDrivenParameter::Metalness:
+			return "Metalness";
+		case VoiceDrivenParameter::Roughness:
+			return "Roughness";
+		case VoiceDrivenParameter::Transmission:
+			return "Transmission";
+		case VoiceDrivenParameter::Ior:
+			return "IOR";
+		case VoiceDrivenParameter::EmissionIntensity:
+			return "Emission intensity";
+		case VoiceDrivenParameter::ObjectScale:
+			return "Object scale";
+	}
+
+	return "Unknown";
+}
+
+static bool voiceParameterUsesRainbowColor(VoiceDrivenParameter parameter) {
+	return parameter == VoiceDrivenParameter::BaseTint ||
+	       parameter == VoiceDrivenParameter::EmissionColor;
+}
+
+struct VoiceDrivenSyncResult {
+	bool material_changed  = false;
+	bool transform_changed = false;
+};
+
+static VoiceDrivenSyncResult syncVoiceDrivenSelectionParameter(float loudness) {
+	VoiceDrivenSyncResult result{};
+	if (selection_ctx.material_edit_mode != MaterialEditMode::Voice ||
+	    selection_ctx.selected_mesh_index < 0) {
+		return result;
+	}
+
+	switch (selection_ctx.voice_parameter) {
+		case VoiceDrivenParameter::BaseTint: {
+			const glm::vec3 target_color = rainbowColorFromLoudness(loudness);
+			const glm::vec3 current      = glm::vec3(selection_ctx.editor_material.base_color);
+			if (glm::length(current - target_color) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.base_color =
+			    glm::vec4(target_color, selection_ctx.editor_material.base_color.a);
+			result.material_changed = true;
+			return result;
+		}
+		case VoiceDrivenParameter::EmissionColor: {
+			const glm::vec3 target_color = rainbowColorFromLoudness(loudness);
+			const glm::vec3 current      = glm::vec3(selection_ctx.editor_material.emission_color);
+			if (glm::length(current - target_color) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.emission_color =
+			    glm::vec4(target_color, selection_ctx.editor_material.emission_color.a);
+			result.material_changed = true;
+			return result;
+		}
+		case VoiceDrivenParameter::Metalness: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_material.base_metalness - target_value) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.base_metalness = target_value;
+			result.material_changed                      = true;
+			return result;
+		}
+		case VoiceDrivenParameter::Roughness: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_material.specular_roughness - target_value) <=
+			    1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.specular_roughness = target_value;
+			result.material_changed                          = true;
+			return result;
+		}
+		case VoiceDrivenParameter::Transmission: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_material.transmission_weight - target_value) <=
+			    1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.transmission_weight = target_value;
+			result.material_changed                           = true;
+			return result;
+		}
+		case VoiceDrivenParameter::Ior: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_material.specular_ior - target_value) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.specular_ior = target_value;
+			result.material_changed                    = true;
+			return result;
+		}
+		case VoiceDrivenParameter::EmissionIntensity: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_material.emission_luminance - target_value) <=
+			    1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_material.emission_luminance = target_value;
+			result.material_changed                          = true;
+			return result;
+		}
+		case VoiceDrivenParameter::ObjectScale: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			if (std::abs(selection_ctx.editor_scale - target_value) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_scale = target_value;
+			result.transform_changed   = true;
+			return result;
+		}
+	}
+
+	return result;
+}
+
 bool selectMesh(const Scene* scene, int mesh_index) {
 	const int max_mesh_index =
 	    (scene != nullptr) ? static_cast<int>(scene->m_meshes.size()) - 1 : -1;
@@ -99,6 +264,9 @@ bool selectMesh(const Scene* scene, int mesh_index) {
 
 	selection_ctx.selected_mesh_index = clamped_index;
 	refreshSelectedMaterialEditor(scene);
+	if (clamped_index < 0) {
+		selection_ctx.editor_scale = 1.0f;
+	}
 	return true;
 }
 
@@ -134,8 +302,14 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* mat
 	                         selection_ctx.selected_mesh_index, selection_ctx.editor_material);
 }
 
-SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
+SelectionPanelResult drawSelectionPanel(const Scene* scene,
+                                        const audio::ReactiveAudioDiagnostics& audio,
+                                        bool* is_open) {
 	SelectionPanelResult result{};
+	const float          voice_loudness = audio.smoothed_level;
+	const glm::vec3      voice_color    = rainbowColorFromLoudness(voice_loudness);
+	const float          voice_value =
+	    voiceDrivenScalarValue(selection_ctx.voice_parameter, voice_loudness);
 
 	if (is_open != nullptr && !*is_open) {
 		return result;
@@ -154,6 +328,15 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	const char* edit_items = "GUI\0Voice\0";
 	if (ImGui::Combo("Material input", &edit_mode, edit_items)) {
 		selection_ctx.material_edit_mode = static_cast<MaterialEditMode>(edit_mode);
+	}
+	if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
+		int         voice_parameter = static_cast<int>(selection_ctx.voice_parameter);
+		const char* voice_items =
+		    "Base tint\0Emission color\0Metalness\0Roughness\0Transmission\0IOR\0Emission "
+		    "intensity\0Object scale\0";
+		if (ImGui::Combo("Voice target", &voice_parameter, voice_items)) {
+			selection_ctx.voice_parameter = static_cast<VoiceDrivenParameter>(voice_parameter);
+		}
 	}
 
 	int         debug_view_mode  = static_cast<int>(selection_ctx.debug_view_mode);
@@ -176,6 +359,14 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 		                       &unit_step, "%llu")) {
 			selection_ctx.path_tracing.max_bounces =
 			    static_cast<uint32_t>(std::clamp<uint64_t>(max_bounces, 1ull, 1024ull));
+			result.path_tracing_settings_changed = true;
+		}
+
+		uint64_t water_spp_override = selection_ctx.path_tracing.hipr_water_spp_override;
+		if (ImGui::InputScalar("HiPR water SPP override (0=off)", ImGuiDataType_U64,
+		                       &water_spp_override, &unit_step, &unit_step, "%llu")) {
+			selection_ctx.path_tracing.hipr_water_spp_override =
+			    static_cast<uint32_t>(std::clamp<uint64_t>(water_spp_override, 0ull, 1024ull));
 			result.path_tracing_settings_changed = true;
 		}
 	}
@@ -254,6 +445,19 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	if (!has_selection) {
 		if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
 			ImGui::Separator();
+			ImGui::Text("Voice target: %s",
+			            voiceDrivenParameterLabel(selection_ctx.voice_parameter));
+			ImGui::Text("Voice loudness: %.2f", voice_loudness);
+			if (voiceParameterUsesRainbowColor(selection_ctx.voice_parameter)) {
+				ImGui::ColorButton("Voice preview",
+				                   ImVec4(voice_color.r, voice_color.g, voice_color.b, 1.0f),
+				                   ImGuiColorEditFlags_NoTooltip, ImVec2(52.0f, 20.0f));
+				ImGui::TextWrapped(
+				    "This target uses the rainbow loudness map. Select a mesh to apply it.");
+			} else {
+				ImGui::Text("Mapped value: %.2f", voice_value);
+				ImGui::TextWrapped("Select a mesh to apply the current voice-driven value.");
+			}
 		}
 		ImGui::End();
 		return result;
@@ -262,6 +466,31 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, bool* is_open) {
 	ImGui::Separator();
 
 	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
+	if (!gui_mode_enabled) {
+		const VoiceDrivenSyncResult voice_sync = syncVoiceDrivenSelectionParameter(voice_loudness);
+		result.material_changed |= voice_sync.material_changed;
+		result.transform_changed |= voice_sync.transform_changed;
+
+		ImGui::Text("Voice target: %s",
+		            voiceDrivenParameterLabel(selection_ctx.voice_parameter));
+		ImGui::Text("Voice loudness: %.2f", voice_loudness);
+		if (voiceParameterUsesRainbowColor(selection_ctx.voice_parameter)) {
+			ImGui::ColorButton("Voice preview",
+			                   ImVec4(voice_color.r, voice_color.g, voice_color.b, 1.0f),
+			                   ImGuiColorEditFlags_NoTooltip, ImVec2(52.0f, 20.0f));
+			ImGui::TextWrapped("This parameter is currently driven by the rainbow loudness map.");
+		} else {
+			ImGui::Text("Mapped value: %.2f", voice_value);
+			ImGui::TextWrapped("Only the selected voice target changes with loudness.");
+		}
+	}
+
+	ImGui::SeparatorText("Transform");
+	ImGui::BeginDisabled(!gui_mode_enabled);
+	result.transform_changed |=
+	    ImGui::SliderFloat("Scale", &selection_ctx.editor_scale, 0.10f, 3.00f, "%.2f");
+	ImGui::EndDisabled();
+
 	ImGui::BeginDisabled(!gui_mode_enabled);
 
 	auto record_item_edit_state = [&result]() {

@@ -54,6 +54,21 @@ struct PushConstants {
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> push;
 
+struct WaterSurfaceParams {
+    float4 center_trace_half_height;
+    float4 axis_u_half_extent;
+    float4 axis_v_half_extent;
+    float4 normal;
+    int    water_object_id;
+    uint   water_enabled;
+    int    water_material_index;
+    float  water_height_to_world_scale;
+    int    first_floating_object_id;
+    uint   _pad0;
+    uint   _pad1;
+    uint   _pad2;
+};
+
 // ─── Bindings ─────────────────────────────────────────────────────────────────
 [[vk::binding(0,  0)]] RWTexture2D<float4>             output_image;
 [[vk::binding(1,  0)]] RWTexture2D<float4>             accum_image;
@@ -70,6 +85,9 @@ struct PushConstants {
 [[vk::binding(16, 0)]] RWStructuredBuffer<uint>       hipr_shadow_counts;
 [[vk::binding(17, 0)]] RWStructuredBuffer<float>      hipr_scores;
 [[vk::binding(18, 0)]] RWStructuredBuffer<int>        hipr_order;
+[[vk::binding(19, 0)]] StructuredBuffer<WaterSurfaceParams> water_surface_params_buf;
+[[vk::binding(20, 0)]] RWTexture2D<float>                  water_height_image;
+[[vk::binding(21, 0)]] RWTexture2D<float>                  water_prev_height_image;
 
 // ─── GPU structs — must match C++ layout exactly ──────────────────────────────
 struct GPUCamera {
@@ -247,6 +265,244 @@ float3 buildOrthoTangent(float3 n) {
     return safeNormalize(cross(axis, n), float3(1.0f, 0.0f, 0.0f));
 }
 
+bool intersectAABB(float3 ray_origin, float3 ray_dir, float3 box_min, float3 box_max,
+                   out float t_min, out float t_max) {
+    float3 inv_dir = 1.0f / ray_dir;
+    float3 t0 = (box_min - ray_origin) * inv_dir;
+    float3 t1 = (box_max - ray_origin) * inv_dir;
+
+    float3 t_small = min(t0, t1);
+    float3 t_large = max(t0, t1);
+
+    t_min = max(max(t_small.x, t_small.y), t_small.z);
+    t_max = min(min(t_large.x, t_large.y), t_large.z);
+    return t_max >= max(t_min, 0.0f);
+}
+
+WaterSurfaceParams getWaterSurfaceParams() {
+    return water_surface_params_buf[0];
+}
+
+bool waterEnabled() {
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    return water.water_enabled != 0 &&
+           water.axis_u_half_extent.w > 1e-4f &&
+           water.axis_v_half_extent.w > 1e-4f &&
+           water.water_height_to_world_scale > 1e-5f;
+}
+
+float3 worldToWater(float3 world_pos) {
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    float3 delta = world_pos - water.center_trace_half_height.xyz;
+    return float3(
+        dot(delta, water.axis_u_half_extent.xyz) / max(water.axis_u_half_extent.w, 1e-4f),
+        dot(delta, water.normal.xyz),
+        dot(delta, water.axis_v_half_extent.xyz) / max(water.axis_v_half_extent.w, 1e-4f));
+}
+
+float3 waterToWorld(float3 water_pos) {
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    return water.center_trace_half_height.xyz +
+           water.axis_u_half_extent.xyz * (water_pos.x * water.axis_u_half_extent.w) +
+           water.normal.xyz * water_pos.y +
+           water.axis_v_half_extent.xyz * (water_pos.z * water.axis_v_half_extent.w);
+}
+
+float readWaterHeightRaw(int2 coord, int2 dims) {
+    return water_height_image[clamp(coord, int2(0, 0), dims - 1)];
+}
+
+float sampleWaterHeightRaw(float2 uv, int2 dims) {
+    uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
+
+    float2 texel = uv * float2(dims - 1);
+    int2 p0 = int2(floor(texel));
+    int2 p1 = min(p0 + int2(1, 1), dims - 1);
+    float2 f = texel - float2(p0);
+
+    float h00 = readWaterHeightRaw(p0, dims);
+    float h10 = readWaterHeightRaw(int2(p1.x, p0.y), dims);
+    float h01 = readWaterHeightRaw(int2(p0.x, p1.y), dims);
+    float h11 = readWaterHeightRaw(p1, dims);
+
+    return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+}
+
+float sampleWaterHeight(float2 water_xz, int2 dims) {
+    float2 uv = water_xz * 0.5f + 0.5f;
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
+        return -1.0e6f;
+    }
+
+    return sampleWaterHeightRaw(uv, dims) * getWaterSurfaceParams().water_height_to_world_scale;
+}
+
+float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
+    float dx = 2.0f / max(float(dims.x), 1.0f);
+    float dz = 2.0f / max(float(dims.y), 1.0f);
+
+    float hL = sampleWaterHeight(water_xz - float2(dx, 0.0f), dims);
+    float hR = sampleWaterHeight(water_xz + float2(dx, 0.0f), dims);
+    float hD = sampleWaterHeight(water_xz - float2(0.0f, dz), dims);
+    float hU = sampleWaterHeight(water_xz + float2(0.0f, dz), dims);
+
+    float3 pL = waterToWorld(float3(water_xz.x - dx, hL, water_xz.y));
+    float3 pR = waterToWorld(float3(water_xz.x + dx, hR, water_xz.y));
+    float3 pD = waterToWorld(float3(water_xz.x, hD, water_xz.y - dz));
+    float3 pU = waterToWorld(float3(water_xz.x, hU, water_xz.y + dz));
+
+    float3 normal = normalize(cross(pR - pL, pU - pD));
+    if (dot(normal, getWaterSurfaceParams().normal.xyz) < 0.0f) {
+        normal = -normal;
+    }
+    return normal;
+}
+
+GPUMaterial makeWaterMaterial() {
+    GPUMaterial water = (GPUMaterial)0;
+    water.base_color = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    water.base_metalness = 0.0f;
+    water.base_diffuse_roughness = 0.0f;
+    water.specular_color = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    water.specular_roughness = 0.0125f;
+    water.specular_ior = 1.333f;
+    water.specular_anisotropy = 0.0f;
+    water.transmission_weight = 1.0f;
+    water.transmission_depth = 2.2f;
+    water.transmission_scatter_anisotropy = 0.0f;
+    water.geometry_opacity = 1.0f;
+    water.transmission_color = float4(0.92f, 0.97f, 1.0f, 1.0f);
+    water.transmission_scatter = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.emission_color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.emission_luminance = 0.0f;
+    water.geometry_thin_walled = 0.0f;
+    water.transmission_dispersion_scale = 0.0f;
+    water.transmission_dispersion_abbe_number = 0.0f;
+    water.coat_weight = 0.0f;
+    water.coat_roughness = 0.0f;
+    water.coat_ior = 1.0f;
+    water.coat_color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.fuzz_weight = 0.0f;
+    water.fuzz_roughness = 0.0f;
+    water.fuzz_color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    water.thin_film_weight = 0.0f;
+    water.thin_film_ior = 1.0f;
+    water.thin_film_thickness = 0.0f;
+    water.albedo_tex_index = NO_TEXTURE;
+    water.normal_tex_index = NO_TEXTURE;
+    water.roughness_tex_index = NO_TEXTURE;
+    water.emissive_tex_index = NO_TEXTURE;
+    return water;
+}
+
+GPUMaterial loadWaterMaterial() {
+    GPUMaterial water = makeWaterMaterial();
+    const int water_material_index = getWaterSurfaceParams().water_material_index;
+    if (water_material_index >= 0 && uint(water_material_index) < push.material_count) {
+        water = materials_buf[NonUniformResourceIndex(water_material_index)];
+    }
+
+    water.base_color.a = max(water.base_color.a, 1.0f);
+    water.transmission_color.rgb *= water.base_color.rgb;
+    return water;
+}
+
+bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
+    hit = (Hit)0;
+    mat = (GPUMaterial)0;
+
+    if (!waterEnabled()) return false;
+
+    uint width = 0;
+    uint height = 0;
+    water_height_image.GetDimensions(width, height);
+    int2 dims = int2(int(width), int(height));
+    if (dims.x <= 1 || dims.y <= 1) return false;
+
+    WaterSurfaceParams water = getWaterSurfaceParams();
+    float3 local_origin = worldToWater(ray.origin);
+    float3 local_dir = float3(
+        dot(ray.dir, water.axis_u_half_extent.xyz) / max(water.axis_u_half_extent.w, 1e-4f),
+        dot(ray.dir, water.normal.xyz),
+        dot(ray.dir, water.axis_v_half_extent.xyz) / max(water.axis_v_half_extent.w, 1e-4f));
+
+    float t_min;
+    float t_max;
+    if (!intersectAABB(local_origin, local_dir,
+                       float3(-1.04f, -water.center_trace_half_height.w, -1.04f),
+                       float3(1.04f, water.center_trace_half_height.w, 1.04f),
+                       t_min, t_max)) {
+        return false;
+    }
+
+    t_min = max(t_min, T_MIN);
+    float grazing = 1.0f - saturate(abs(local_dir.y));
+    int coarse_steps = clamp(int(round(lerp(18.0f, 44.0f, grazing))), 18, 44);
+
+    float prev_t = t_min;
+    float3 prev_pos = ray.origin + ray.dir * prev_t;
+    float3 prev_local = worldToWater(prev_pos);
+    float prev_delta = prev_local.y - sampleWaterHeight(prev_local.xz, dims);
+
+    [loop]
+    for (int step = 1; step <= coarse_steps; ++step) {
+        float t = lerp(t_min, t_max, float(step) / float(coarse_steps));
+        float3 pos = ray.origin + ray.dir * t;
+        float3 local = worldToWater(pos);
+        float delta = local.y - sampleWaterHeight(local.xz, dims);
+
+        if (prev_delta == 0.0f || delta == 0.0f || prev_delta * delta <= 0.0f) {
+            float lo = prev_t;
+            float hi = t;
+            float lo_delta = prev_delta;
+
+            [unroll]
+            for (int refine = 0; refine < 5; ++refine) {
+                float mid = 0.5f * (lo + hi);
+                float3 mid_local = worldToWater(ray.origin + ray.dir * mid);
+                float mid_delta = mid_local.y - sampleWaterHeight(mid_local.xz, dims);
+                if (lo_delta == 0.0f || lo_delta * mid_delta <= 0.0f) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                    lo_delta = mid_delta;
+                }
+            }
+
+            hit.t = 0.5f * (lo + hi);
+            float3 hit_local = worldToWater(ray.origin + ray.dir * hit.t);
+            hit_local.y = sampleWaterHeight(hit_local.xz, dims);
+
+            float3 geometric_normal = waterSurfaceNormal(hit_local.xz, dims);
+            float3 tangent = normalize(
+                water.axis_u_half_extent.xyz -
+                geometric_normal * dot(geometric_normal, water.axis_u_half_extent.xyz));
+            float3 bitangent = normalize(cross(geometric_normal, tangent));
+            if (dot(bitangent, water.axis_v_half_extent.xyz) < 0.0f) {
+                bitangent = -bitangent;
+            }
+
+            bool front_face = dot(ray.dir, geometric_normal) < 0.0f;
+            hit.normal = front_face ? geometric_normal : -geometric_normal;
+            hit.geom_normal = hit.normal;
+            hit.tangent = tangent;
+            hit.bitangent = bitangent;
+            hit.uv = hit_local.xz * 0.5f + 0.5f;
+            hit.front_face = front_face;
+            hit.matIndex = water.water_material_index;
+            hit.instanceID = water.water_object_id;
+            hit.primID = -1;
+            mat = loadWaterMaterial();
+            return true;
+        }
+
+        prev_t = t;
+        prev_delta = delta;
+    }
+
+    return false;
+}
+
 VertexAttribs fetchAttribs(uint instanceID, uint primID, float2 bary) {
     uint voff = (uint)meshes_buf[NonUniformResourceIndex(instanceID)].vertexOffset;
     uint ioff = (uint)meshes_buf[NonUniformResourceIndex(instanceID)].indexOffset;
@@ -302,7 +558,10 @@ int traceOccluderInstance(float3 origin, float3 normal, float3 dir, float tmax) 
     return -1;
 }
 
-int traceVisibleInstance(Ray ray) {
+bool traceVisibleMeshHit(Ray ray, out float hit_t, out int instance_id) {
+    hit_t = T_MAX;
+    instance_id = -1;
+
     RayDesc rd;
     rd.Origin    = ray.origin;
     rd.Direction = ray.dir;
@@ -317,12 +576,29 @@ int traceVisibleInstance(Ray ray) {
             q.CommitNonOpaqueTriangleHit();
     }
 
-    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return -1;
-    return int(q.CommittedInstanceID());
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
+    hit_t = q.CommittedRayT();
+    instance_id = int(q.CommittedInstanceID());
+    return true;
+}
+
+int traceVisibleInstance(Ray ray) {
+    float mesh_hit_t = T_MAX;
+    int mesh_instance_id = -1;
+    bool hit_mesh = traceVisibleMeshHit(ray, mesh_hit_t, mesh_instance_id);
+
+    Hit water_hit;
+    GPUMaterial water_mat;
+    bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
+    if (hit_water && (!hit_mesh || water_hit.t < mesh_hit_t)) {
+        return water_hit.instanceID;
+    }
+
+    return hit_mesh ? mesh_instance_id : -1;
 }
 
 // ─── Scene intersection ───────────────────────────────────────────────────────
-bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
+bool intersectMeshScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     hit = (Hit)0;
     mat = (GPUMaterial)0;
 
@@ -431,6 +707,32 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
 }
 
 // ─── Texture sampling ─────────────────────────────────────────────────────────
+bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
+    Hit mesh_hit;
+    GPUMaterial mesh_mat;
+    bool hit_mesh = intersectMeshScene(ray, mesh_hit, mesh_mat);
+
+    Hit water_hit;
+    GPUMaterial water_mat;
+    bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
+
+    if (hit_water && (!hit_mesh || water_hit.t < mesh_hit.t)) {
+        hit = water_hit;
+        mat = water_mat;
+        return true;
+    }
+
+    if (hit_mesh) {
+        hit = mesh_hit;
+        mat = mesh_mat;
+        return true;
+    }
+
+    hit = (Hit)0;
+    mat = (GPUMaterial)0;
+    return false;
+}
+
 float4 sample_tex(uint index, float2 uv, float4 fallback) {
     if (index == NO_TEXTURE) return fallback;
     return material_textures[NonUniformResourceIndex(index)].SampleLevel(
@@ -953,7 +1255,13 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     // Path trace this pixel and accumulate into the running average.
     RNG rng = RNG::make(pixel, push.frame);
     float3 colorAccum = float3(0, 0, 0);
-    const uint spp = max(push.spp, 1u);
+    const uint requested_spp = max(push.spp, 1u);
+    uint spp = requested_spp;
+    const uint water_spp_override = push.hipr_reserved0;
+    const int water_object_id = getWaterSurfaceParams().water_object_id;
+    if (water_spp_override > 0u && visible_object_id == water_object_id) {
+        spp = max(requested_spp, water_spp_override);
+    }
     [loop]
     for (uint i = 0u; i < spp; ++i) {
         uint sample_index = push.frame * spp + i;

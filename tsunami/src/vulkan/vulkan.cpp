@@ -125,6 +125,8 @@ struct VulkanContext {
 	vkb::PhysicalDevice phys_device{};
 	vkb::Device         log_device{};
 	uint32_t            scratch_alignment;
+	float               timestamp_period_ns  = 0.0f;
+	bool                supports_timestamps  = false;
 	VkDevice            device                = VK_NULL_HANDLE;
 	VkSurfaceKHR        surface               = VK_NULL_HANDLE;
 	VkQueue             graphics_queue        = VK_NULL_HANDLE;
@@ -203,6 +205,13 @@ struct OverlayContext {
 	bool                          show_control_panel = true;
 } overlay_ctx{};
 
+struct GpuTimingContext {
+	VkQueryPool query_pool = VK_NULL_HANDLE;
+	bool        has_submission = false;
+	float       simulation_pass_time_ms = 0.0f;
+	float       render_pass_time_ms     = 0.0f;
+} gpu_timing_ctx{};
+
 struct PathTracerPushConstants {
 	uint32_t  frame               = 0;
 	uint32_t  material_count      = 0;
@@ -278,10 +287,15 @@ struct Bounds3 {
 };
 
 WaterSurfaceRenderPlacement                 water_surface_render_ctx{};
+std::vector<glm::mat4>                      mesh_pose_transforms;
 std::vector<glm::mat4>                      mesh_base_transforms;
+std::vector<float>                          mesh_user_scales;
 std::vector<int>                            mesh_floating_group_index;
 std::vector<FloatingMeshGroup>              floating_mesh_groups;
+std::vector<float>                          floating_group_user_scales;
+std::vector<simulation::FloatingObjectSettings> floating_group_base_settings;
 std::vector<simulation::FloatingObjectSettings> floating_simulation_settings;
+bool                                        floating_settings_dirty = false;
 bool                                        tlas_update_pending = false;
 
 constexpr int              kRequestedPoolWaterMeshIndex     = 98;
@@ -289,6 +303,15 @@ constexpr std::string_view kRequestedPoolWaterMeshName      = "Pool F.017 / Pool
 constexpr float            kPoolWaterPlanarInsetWorld       = 0.08f;
 constexpr float            kPoolWaterSurfaceDepthInsetWorld = 0.02f;
 constexpr float            kPoolWaterTraceHalfHeightWorld   = 0.45f;
+
+constexpr glm::vec3 kWaterBaseColor             = glm::vec3(0.02f, 0.12f, 0.16f);
+constexpr glm::vec3 kWaterTransmissionColor     = glm::vec3(0.72f, 0.92f, 0.98f);
+constexpr float     kWaterSpecularRoughness     = 0.015f;
+constexpr float     kWaterTransmissionWeight    = 1.0f;
+constexpr float     kWaterTransmissionDepth     = 6.0f;
+constexpr float     kWaterTransmissionScatter   = 0.004f;
+constexpr float     kWaterTransmissionAnisotropy = 0.0f;
+constexpr float     kWaterIor                   = 1.333f;
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -616,6 +639,36 @@ bool intersectRayTriangle(const CpuRay& ray, const glm::vec3& v0, const glm::vec
 	return true;
 }
 
+bool intersectRayWaterSelectionSurface(const CpuRay& ray, float& out_t) {
+	if (!water_surface_render_ctx.enabled) {
+		return false;
+	}
+
+	const float denom = glm::dot(ray.direction, water_surface_render_ctx.normal);
+	if (std::abs(denom) < 1.0e-6f) {
+		return false;
+	}
+
+	const float t =
+	    glm::dot(water_surface_render_ctx.center - ray.origin, water_surface_render_ctx.normal) /
+	    denom;
+	if (t <= 1.0e-4f) {
+		return false;
+	}
+
+	const glm::vec3 hit_point = ray.origin + ray.direction * t;
+	const glm::vec3 delta     = hit_point - water_surface_render_ctx.center;
+	const float     u         = glm::dot(delta, water_surface_render_ctx.axis_u);
+	const float     v         = glm::dot(delta, water_surface_render_ctx.axis_v);
+	if (std::abs(u) > water_surface_render_ctx.half_extent_u ||
+	    std::abs(v) > water_surface_render_ctx.half_extent_v) {
+		return false;
+	}
+
+	out_t = t;
+	return true;
+}
+
 int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& camera,
                      uint32_t framebuffer_width, uint32_t framebuffer_height) {
 	if (scene == nullptr || window == nullptr || framebuffer_width == 0 ||
@@ -630,9 +683,15 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 		return -1;
 	}
 
-	const CpuRay world_ray    = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
-	float        best_t       = std::numeric_limits<float>::infinity();
+	const CpuRay world_ray = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
+	float        best_t    = std::numeric_limits<float>::infinity();
 	int          best_mesh_id = -1;
+
+	float water_hit_t = 0.0f;
+	if (intersectRayWaterSelectionSurface(world_ray, water_hit_t)) {
+		best_t       = water_hit_t;
+		best_mesh_id = water_surface_render_ctx.mesh_index;
+	}
 
 	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
 		const auto& mesh = scene->m_meshes[mesh_index];
@@ -653,8 +712,7 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 		float aabb_t_min = 0.0f;
 		float aabb_t_max = 0.0f;
 		if (!intersectRayAabb(local_ray.origin, local_ray.direction, mesh->m_local_bounds_min,
-		                      mesh->m_local_bounds_max, aabb_t_min, aabb_t_max) ||
-		    aabb_t_min > best_t) {
+		                      mesh->m_local_bounds_max, aabb_t_min, aabb_t_max)) {
 			continue;
 		}
 
@@ -664,8 +722,16 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 			const glm::vec3& v2 = mesh->gpuVertices[mesh->gpuIndices[index + 2]].position;
 
 			float hit_t = 0.0f;
-			if (intersectRayTriangle(local_ray, v0, v1, v2, hit_t) && hit_t < best_t) {
-				best_t       = hit_t;
+			if (!intersectRayTriangle(local_ray, v0, v1, v2, hit_t)) {
+				continue;
+			}
+
+			const glm::vec3 local_hit = local_ray.origin + local_ray.direction * hit_t;
+			const glm::vec3 world_hit =
+			    glm::vec3(mesh->m_transform.m_transform * glm::vec4(local_hit, 1.0f));
+			const float world_t = glm::dot(world_hit - world_ray.origin, world_ray.direction);
+			if (world_t > 1.0e-4f && world_t < best_t) {
+				best_t       = world_t;
 				best_mesh_id = mesh_index;
 			}
 		}
@@ -690,6 +756,15 @@ void updateRenderDiagnostics(float delta_time_seconds) {
 	render.average_frame_time_ms          = frame_timing_history.average_frame_ms;
 	render.min_frame_time_ms              = frame_timing_history.min_frame_ms;
 	render.max_frame_time_ms              = frame_timing_history.max_frame_ms;
+	render.simulation_pass_time_ms        = gpu_timing_ctx.simulation_pass_time_ms;
+	render.render_pass_time_ms            = gpu_timing_ctx.render_pass_time_ms;
+	render.total_pass_time_ms             = frame_timing_history.current_frame_ms;
+	render.simulation_pass_fps =
+	    render.simulation_pass_time_ms > 1.0e-4f ? 1000.0f / render.simulation_pass_time_ms : 0.0f;
+	render.render_pass_fps =
+	    render.render_pass_time_ms > 1.0e-4f ? 1000.0f / render.render_pass_time_ms : 0.0f;
+	render.total_pass_fps =
+	    render.total_pass_time_ms > 1.0e-4f ? 1000.0f / render.total_pass_time_ms : 0.0f;
 	render.frame_sample_count    = static_cast<uint32_t>(frame_timing_history.sample_count);
 	render.render_width          = swapchain_ctx.extent.width;
 	render.render_height         = swapchain_ctx.extent.height;
@@ -782,17 +857,50 @@ static Bounds3 computeSceneMeshRangeBounds(const Scene* scene, int start_mesh_in
 }
 
 static void ensureMeshTransformMetadataSize(size_t mesh_count) {
+	mesh_pose_transforms.resize(mesh_count, glm::mat4(1.0f));
 	mesh_base_transforms.resize(mesh_count, glm::mat4(1.0f));
+	mesh_user_scales.resize(mesh_count, 1.0f);
 	mesh_floating_group_index.resize(mesh_count, -1);
 }
 
-static void writeMeshTransformToSceneAndGpu(Scene* scene, int mesh_index,
-                                            const glm::mat4& transform) {
+static float meshScaleForTransform(int mesh_index) {
+	if (mesh_index < 0) {
+		return 1.0f;
+	}
+
+	if (mesh_index < static_cast<int>(mesh_floating_group_index.size())) {
+		const int floating_group_index = mesh_floating_group_index[mesh_index];
+		if (floating_group_index >= 0 &&
+		    floating_group_index < static_cast<int>(floating_group_user_scales.size())) {
+			return std::max(floating_group_user_scales[floating_group_index], 0.05f);
+		}
+	}
+
+	if (mesh_index < static_cast<int>(mesh_user_scales.size())) {
+		return std::max(mesh_user_scales[mesh_index], 0.05f);
+	}
+
+	return 1.0f;
+}
+
+static glm::mat4 composeMeshTransform(int mesh_index) {
+	if (mesh_index < 0 || mesh_index >= static_cast<int>(mesh_pose_transforms.size()) ||
+	    mesh_index >= static_cast<int>(mesh_base_transforms.size())) {
+		return glm::mat4(1.0f);
+	}
+
+	return mesh_pose_transforms[mesh_index] *
+	       glm::scale(glm::mat4(1.0f), glm::vec3(meshScaleForTransform(mesh_index))) *
+	       mesh_base_transforms[mesh_index];
+}
+
+static void writeMeshTransformToSceneAndGpu(Scene* scene, int mesh_index) {
 	if (scene == nullptr || mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
 	    scene->m_meshes[mesh_index] == nullptr) {
 		return;
 	}
 
+	const glm::mat4 transform = composeMeshTransform(mesh_index);
 	auto& mesh                           = scene->m_meshes[mesh_index];
 	mesh->m_transform.m_transform        = transform;
 	mesh->m_transform.m_inverseTransform = glm::inverse(transform);
@@ -812,6 +920,33 @@ static void flushMeshTransforms(VmaAllocator allocator) {
 
 	vmaFlushAllocation(allocator, scene_ctx.mesh_alloc, 0,
 	                   sizeof(GPUMesh) * static_cast<VkDeviceSize>(scene_ctx.mesh_count));
+}
+
+static void initializeMeshTransformMetadata(const Scene* scene) {
+	mesh_pose_transforms.clear();
+	mesh_base_transforms.clear();
+	mesh_user_scales.clear();
+	mesh_floating_group_index.clear();
+	floating_mesh_groups.clear();
+	floating_group_user_scales.clear();
+	floating_group_base_settings.clear();
+	floating_simulation_settings.clear();
+	floating_settings_dirty = false;
+	tlas_update_pending     = false;
+
+	if (scene == nullptr) {
+		return;
+	}
+
+	ensureMeshTransformMetadataSize(scene->m_meshes.size());
+	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
+		const auto& mesh = scene->m_meshes[mesh_index];
+		mesh_pose_transforms[mesh_index] =
+		    mesh != nullptr ? mesh->m_transform.m_transform : glm::mat4(1.0f);
+		mesh_base_transforms[mesh_index]       = glm::mat4(1.0f);
+		mesh_user_scales[mesh_index]           = 1.0f;
+		mesh_floating_group_index[mesh_index]  = -1;
+	}
 }
 
 static int waterSurfaceObjectId(const Scene* scene) {
@@ -965,6 +1100,44 @@ static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene
 	placement.half_extent_v     = half_extent_v;
 	placement.normal            = normal;
 	return placement;
+}
+
+static void applyDedicatedWaterMaterial(Scene* scene) {
+	if (scene == nullptr || !water_surface_render_ctx.enabled) {
+		return;
+	}
+
+	const int mesh_index = water_surface_render_ctx.mesh_index;
+	if (mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	    scene->m_meshes[mesh_index] == nullptr || scene->m_meshes[mesh_index]->m_material == nullptr) {
+		return;
+	}
+
+	GPUMaterial& water_material = scene->m_meshes[mesh_index]->m_material->m_gpu;
+	water_material.base_color                     = glm::vec4(kWaterBaseColor, 1.0f);
+	water_material.base_metalness                 = 0.0f;
+	water_material.base_diffuse_roughness         = 0.0f;
+	water_material.specular_color                 = glm::vec4(1.0f);
+	water_material.specular_roughness             = kWaterSpecularRoughness;
+	water_material.specular_ior                   = kWaterIor;
+	water_material.specular_anisotropy            = 0.0f;
+	water_material.transmission_weight            = kWaterTransmissionWeight;
+	water_material.transmission_depth             = kWaterTransmissionDepth;
+	water_material.transmission_color             = glm::vec4(kWaterTransmissionColor, 1.0f);
+	water_material.transmission_scatter           =
+	    glm::vec4(kWaterTransmissionScatter, kWaterTransmissionScatter,
+	              kWaterTransmissionScatter, 0.0f);
+	water_material.transmission_scatter_anisotropy = kWaterTransmissionAnisotropy;
+	water_material.geometry_opacity               = 1.0f;
+	water_material.emission_color                 = glm::vec4(0.0f);
+	water_material.emission_luminance             = 0.0f;
+	water_material.coat_weight                    = 0.0f;
+	water_material.fuzz_weight                    = 0.0f;
+	water_material.thin_film_weight               = 0.0f;
+	water_material.albedo_tex_index               = std::numeric_limits<uint32_t>::max();
+	water_material.normal_tex_index               = std::numeric_limits<uint32_t>::max();
+	water_material.roughness_tex_index            = std::numeric_limits<uint32_t>::max();
+	water_material.emissive_tex_index             = std::numeric_limits<uint32_t>::max();
 }
 
 static glm::vec2 floatingAnchorForIndex(uint32_t index) {
@@ -1162,6 +1335,8 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 		    makeFloatingObjectSettings(asset_name, asset_world_size, default_scale,
 		                               static_cast<uint32_t>(group.simulation_index));
 		floating_simulation_settings.push_back(settings);
+		floating_group_base_settings.push_back(settings);
+		floating_group_user_scales.push_back(1.0f);
 		const glm::mat4 pose = makeFloatingWorldPose(settings);
 
 		for (int mesh_index = mesh_start; mesh_index < mesh_end; ++mesh_index) {
@@ -1172,11 +1347,12 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 
 			const glm::mat4 centered_transform =
 			    glm::translate(glm::mat4(1.0f), -asset_center) * mesh->m_transform.m_transform;
+			mesh_pose_transforms[mesh_index] = pose;
 			mesh_base_transforms[mesh_index] =
 			    glm::scale(glm::mat4(1.0f), glm::vec3(default_scale)) * centered_transform;
 			mesh_floating_group_index[mesh_index] = static_cast<int>(floating_mesh_groups.size());
 			group.mesh_indices.push_back(mesh_index);
-			writeMeshTransformToSceneAndGpu(scene, mesh_index, pose * mesh_base_transforms[mesh_index]);
+			writeMeshTransformToSceneAndGpu(scene, mesh_index);
 		}
 
 		floating_mesh_groups.push_back(std::move(group));
@@ -1214,16 +1390,17 @@ static bool updateFloatingMeshTransformsFromSimulation(
 		const glm::mat4 pose = makeFloatingWorldPose(object_render_data);
 		for (int mesh_index : group.mesh_indices) {
 			if (mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+			    mesh_index >= static_cast<int>(mesh_pose_transforms.size()) ||
 			    scene->m_meshes[mesh_index] == nullptr) {
 				continue;
 			}
 
-			const glm::mat4 transform = pose * mesh_base_transforms[mesh_index];
-			if (matricesNearlyEqual(scene->m_meshes[mesh_index]->m_transform.m_transform, transform)) {
+			if (matricesNearlyEqual(mesh_pose_transforms[mesh_index], pose)) {
 				continue;
 			}
 
-			writeMeshTransformToSceneAndGpu(scene, mesh_index, transform);
+			mesh_pose_transforms[mesh_index] = pose;
+			writeMeshTransformToSceneAndGpu(scene, mesh_index);
 			any_pose_changed = true;
 		}
 	}
@@ -1234,6 +1411,97 @@ static bool updateFloatingMeshTransformsFromSimulation(
 	}
 
 	return any_pose_changed;
+}
+
+static float selectedMeshScale() {
+	const int selected_mesh_index = ui::selection_ctx.selected_mesh_index;
+	if (selected_mesh_index < 0) {
+		return 1.0f;
+	}
+
+	if (selected_mesh_index < static_cast<int>(mesh_floating_group_index.size())) {
+		const int floating_group_index = mesh_floating_group_index[selected_mesh_index];
+		if (floating_group_index >= 0 &&
+		    floating_group_index < static_cast<int>(floating_group_user_scales.size())) {
+			return floating_group_user_scales[floating_group_index];
+		}
+	}
+
+	if (selected_mesh_index < static_cast<int>(mesh_user_scales.size())) {
+		return mesh_user_scales[selected_mesh_index];
+	}
+
+	return 1.0f;
+}
+
+static void refreshSelectedScaleEditor() {
+	ui::selection_ctx.editor_scale = selectedMeshScale();
+}
+
+static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
+	if (scene == nullptr) {
+		return false;
+	}
+
+	const int selected_mesh_index = ui::selection_ctx.selected_mesh_index;
+	if (selected_mesh_index < 0 || selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+		ui::selection_ctx.editor_scale = 1.0f;
+		return false;
+	}
+
+	const float clamped_scale = std::clamp(ui::selection_ctx.editor_scale, 0.10f, 3.00f);
+	ui::selection_ctx.editor_scale = clamped_scale;
+
+	std::vector<int> mesh_indices_to_update;
+	if (selected_mesh_index < static_cast<int>(mesh_floating_group_index.size())) {
+		const int floating_group_index = mesh_floating_group_index[selected_mesh_index];
+		if (floating_group_index >= 0 &&
+		    floating_group_index < static_cast<int>(floating_mesh_groups.size()) &&
+		    floating_group_index < static_cast<int>(floating_group_user_scales.size())) {
+			if (std::abs(floating_group_user_scales[floating_group_index] - clamped_scale) <=
+			    1.0e-4f) {
+				return false;
+			}
+
+			floating_group_user_scales[floating_group_index] = clamped_scale;
+			mesh_indices_to_update = floating_mesh_groups[floating_group_index].mesh_indices;
+
+			const int simulation_index = floating_mesh_groups[floating_group_index].simulation_index;
+			if (simulation_index >= 0 &&
+			    simulation_index < static_cast<int>(floating_simulation_settings.size()) &&
+			    floating_group_index < static_cast<int>(floating_group_base_settings.size())) {
+				simulation::FloatingObjectSettings scaled_settings =
+				    floating_group_base_settings[floating_group_index];
+				scaled_settings.size *= clamped_scale;
+				scaled_settings.mass *= clamped_scale * clamped_scale * clamped_scale;
+				scaled_settings.drift_radius *=
+				    std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
+				scaled_settings.waterline_offset *= clamped_scale;
+				floating_simulation_settings[simulation_index] = scaled_settings;
+				floating_settings_dirty                        = true;
+			}
+		}
+	}
+
+	if (mesh_indices_to_update.empty()) {
+		if (selected_mesh_index >= static_cast<int>(mesh_user_scales.size())) {
+			return false;
+		}
+		if (std::abs(mesh_user_scales[selected_mesh_index] - clamped_scale) <= 1.0e-4f) {
+			return false;
+		}
+
+		mesh_user_scales[selected_mesh_index] = clamped_scale;
+		mesh_indices_to_update.push_back(selected_mesh_index);
+	}
+
+	for (int mesh_index : mesh_indices_to_update) {
+		writeMeshTransformToSceneAndGpu(scene, mesh_index);
+	}
+	flushMeshTransforms(allocator);
+	tlas_update_pending      = true;
+	water_surface_render_ctx = buildWaterSurfacePlacement(scene);
+	return true;
 }
 
 static void updateWaterSurfaceParamsBuffer(Scene* scene,
@@ -1253,7 +1521,11 @@ static void updateWaterSurfaceParamsBuffer(Scene* scene,
 	params.water_object_id          = waterSurfaceObjectId(scene);
 	params.water_enabled            =
 	    (water_surface != nullptr && water_surface_render_ctx.enabled) ? 1u : 0u;
-	params.water_material_index     = -1;
+	params.water_material_index =
+	    (scene != nullptr && water_surface_render_ctx.mesh_index >= 0 &&
+	     water_surface_render_ctx.mesh_index < static_cast<int>(scene->m_meshes.size())) ?
+	        water_surface_render_ctx.mesh_index :
+	        -1;
 	params.water_height_to_world_scale =
 	    water_surface != nullptr ? water_surface->heightToWorldScale() : 1.0f;
 	params.first_floating_object_id = firstFloatingObjectId();
@@ -2653,14 +2925,9 @@ Runtime::Runtime(const std::string& scene_argument) {
 	if (m_scene->m_meshes.empty()) {
 		throw std::runtime_error("failed to load scene: " + scene_path);
 	}
-	water_surface_render_ctx      = {};
-	mesh_base_transforms.clear();
-	mesh_floating_group_index.clear();
-	floating_mesh_groups.clear();
-	floating_simulation_settings.clear();
-	tlas_update_pending = false;
 	water_surface_render_ctx = buildWaterSurfacePlacement(m_scene.get());
-	ensureMeshTransformMetadataSize(m_scene->m_meshes.size());
+	applyDedicatedWaterMaterial(m_scene.get());
+	initializeMeshTransformMetadata(m_scene.get());
 	addFloatingMeshesFromResources(m_scene.get());
 	ui::rebuildObjectIdMap(m_scene.get());
 
@@ -2711,6 +2978,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 		vulkan_ctx.phys_device = r.value();
 		VkPhysicalDeviceProperties p{};
 		vkGetPhysicalDeviceProperties(vulkan_ctx.phys_device.physical_device, &p);
+		vulkan_ctx.timestamp_period_ns = p.limits.timestampPeriod;
 		std::cout << "[INFO] GPU: " << p.deviceName << "\n";
 	}
 	{
@@ -2753,6 +3021,17 @@ Runtime::Runtime(const std::string& scene_argument) {
 		if (!fr)
 			throw std::runtime_error("no graphics queue family");
 		vulkan_ctx.graphics_queue_family = fr.value();
+		uint32_t queue_family_count = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties(vulkan_ctx.phys_device.physical_device,
+		                                         &queue_family_count, nullptr);
+		std::vector<VkQueueFamilyProperties> queue_family_properties(queue_family_count);
+		vkGetPhysicalDeviceQueueFamilyProperties(vulkan_ctx.phys_device.physical_device,
+		                                         &queue_family_count,
+		                                         queue_family_properties.data());
+		vulkan_ctx.supports_timestamps =
+		    vulkan_ctx.graphics_queue_family < queue_family_properties.size() &&
+		    queue_family_properties[vulkan_ctx.graphics_queue_family].timestampValidBits > 0 &&
+		    vulkan_ctx.timestamp_period_ns > 0.0f;
 	}
 
 	// ==========================
@@ -3390,6 +3669,19 @@ Runtime::Runtime(const std::string& scene_argument) {
 			throw std::runtime_error("failed to create fence");
 		std::cout << "[INFO] Sync objects created\n";
 	}
+
+	if (vulkan_ctx.supports_timestamps) {
+		VkQueryPoolCreateInfo query_pool_info{};
+		query_pool_info.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+		query_pool_info.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+		query_pool_info.queryCount = 4;
+		if (vkCreateQueryPool(vulkan_ctx.device, &query_pool_info, nullptr,
+		                      &gpu_timing_ctx.query_pool) != VK_SUCCESS) {
+			std::cout << "[WARN] Failed to create GPU timestamp query pool. Pass timing disabled.\n";
+		} else {
+			std::cout << "[INFO] GPU timestamp pass timing enabled\n";
+		}
+	}
 }
 
 Runtime::~Runtime() {
@@ -3635,6 +3927,11 @@ Runtime::~Runtime() {
 	for (auto s : sync_ctx.image_available)
 		vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
 
+	if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
+		vkDestroyQueryPool(vulkan_ctx.device, gpu_timing_ctx.query_pool, nullptr);
+		gpu_timing_ctx.query_pool = VK_NULL_HANDLE;
+	}
+
 	if (command_ctx.command_pool != VK_NULL_HANDLE) {
 		vkDestroyCommandPool(vulkan_ctx.device, command_ctx.command_pool, nullptr);
 	}
@@ -3792,7 +4089,9 @@ void Runtime::MainLoop() {
 
 		ui::SelectionPanelResult selection_panel_result{};
 		if (show_all_gui && show_selection_panel) {
-			selection_panel_result = ui::drawSelectionPanel(m_scene.get(), &show_selection_panel);
+			selection_panel_result =
+			    ui::drawSelectionPanel(m_scene.get(), overlay_ctx.diagnostics.audio,
+			                           &show_selection_panel);
 		}
 		{
 			const uint32_t sanitized_rank_count =
@@ -3803,6 +4102,8 @@ void Runtime::MainLoop() {
 			    std::clamp(ui::selection_ctx.path_tracing.spp, 1u, 1024u);
 			const uint32_t sanitized_max_bounces =
 			    std::clamp(ui::selection_ctx.path_tracing.max_bounces, 1u, 1024u);
+			const uint32_t sanitized_water_spp_override =
+			    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u);
 
 			if (sanitized_rank_count != ui::selection_ctx.hipr_debug.rank_count) {
 				ui::selection_ctx.hipr_debug.rank_count      = sanitized_rank_count;
@@ -3818,6 +4119,12 @@ void Runtime::MainLoop() {
 			}
 			if (sanitized_max_bounces != ui::selection_ctx.path_tracing.max_bounces) {
 				ui::selection_ctx.path_tracing.max_bounces           = sanitized_max_bounces;
+				selection_panel_result.path_tracing_settings_changed = true;
+			}
+			if (sanitized_water_spp_override !=
+			    ui::selection_ctx.path_tracing.hipr_water_spp_override) {
+				ui::selection_ctx.path_tracing.hipr_water_spp_override =
+				    sanitized_water_spp_override;
 				selection_panel_result.path_tracing_settings_changed = true;
 			}
 		}
@@ -3855,6 +4162,14 @@ void Runtime::MainLoop() {
 			frame_number = 0;
 			restart_hipr_object_sampling();
 		}
+		if (selection_panel_result.transform_changed) {
+			if (applySelectedScaleEditor(m_scene.get(), render_target_ctx.allocator)) {
+				frame_number           = 0;
+				needs_visibility_pass  = true;
+				hipr_force_clear_order = true;
+				reset_hipr_object_sampling();
+			}
+		}
 
 		if (selection_panel_result.material_edit_just_finished) {
 			// Leaving edit mode: restart full-screen accumulation.
@@ -3867,6 +4182,7 @@ void Runtime::MainLoop() {
 			needs_visibility_pass  = true;
 			material_edit_mode     = false;
 			hipr_force_clear_order = true;
+			refreshSelectedScaleEditor();
 			reset_hipr_object_sampling();
 		}
 		if (selection_panel_result.hipr_settings_changed) {
@@ -3889,6 +4205,10 @@ void Runtime::MainLoop() {
 			} else {
 				reset_hipr_object_sampling();
 			}
+		}
+		if (floating_settings_dirty && m_water_surface != nullptr) {
+			syncFloatingSimulationSettings(m_water_surface.get());
+			floating_settings_dirty = false;
 		}
 
 		{
@@ -4002,6 +4322,7 @@ void Runtime::MainLoop() {
 				frame_number          = 0;
 				needs_visibility_pass = true;
 				material_edit_mode    = false;
+				refreshSelectedScaleEditor();
 				reset_hipr_object_sampling();
 			}
 		}
@@ -4028,6 +4349,29 @@ void Runtime::MainLoop() {
 				break;
 			}
 			continue;
+		}
+		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE && gpu_timing_ctx.has_submission &&
+		    vulkan_ctx.timestamp_period_ns > 0.0f) {
+			uint64_t timestamp_results[4] = {0, 0, 0, 0};
+			const VkResult query_result = vkGetQueryPoolResults(
+			    vulkan_ctx.device, gpu_timing_ctx.query_pool, 0, 4, sizeof(timestamp_results),
+			    timestamp_results, sizeof(uint64_t),
+			    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+			if (query_result == VK_SUCCESS) {
+				const float ns_to_ms = 1.0e-6f;
+				const float tick_ms  = vulkan_ctx.timestamp_period_ns * ns_to_ms;
+				const uint64_t sim_ticks =
+				    timestamp_results[1] >= timestamp_results[0] ?
+				        (timestamp_results[1] - timestamp_results[0]) :
+				        0ull;
+				const uint64_t render_ticks =
+				    timestamp_results[3] >= timestamp_results[2] ?
+				        (timestamp_results[3] - timestamp_results[2]) :
+				        0ull;
+				gpu_timing_ctx.simulation_pass_time_ms =
+				    static_cast<float>(sim_ticks) * tick_ms;
+				gpu_timing_ctx.render_pass_time_ms = static_cast<float>(render_ticks) * tick_ms;
+			}
 		}
 
 		auto drain_acquire_semaphore = [&](uint32_t sem_index) {
@@ -4088,9 +4432,22 @@ void Runtime::MainLoop() {
 		}
 
 		VkCommandBuffer cmd = command_ctx.command_buffer;
+		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
+			vkCmdResetQueryPool(cmd, gpu_timing_ctx.query_pool, 0, 4);
+		}
 
-		updateFloatingMeshTransformsFromSimulation(m_scene.get(), m_water_surface.get(),
-		                                           render_target_ctx.allocator);
+		const bool floating_meshes_moved =
+		    updateFloatingMeshTransformsFromSimulation(m_scene.get(), m_water_surface.get(),
+		                                               render_target_ctx.allocator);
+		if (floating_meshes_moved) {
+			needs_visibility_pass = true;
+			if (ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::HiPR ||
+			    ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::HiPRVis) {
+				frame_number           = 0;
+				hipr_force_clear_order = true;
+				reset_hipr_object_sampling();
+			}
+		}
 		if (tlas_update_pending) {
 			if (as_ctx.tlas != VK_NULL_HANDLE) {
 				upload_tlas_instances(render_target_ctx.allocator, as_ctx.blases,
@@ -4099,9 +4456,17 @@ void Runtime::MainLoop() {
 			}
 			tlas_update_pending = false;
 		}
+		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
+			vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                    gpu_timing_ctx.query_pool, 0);
+		}
 		if (m_water_surface != nullptr) {
 			m_water_surface->record(cmd);
 			updateWaterSurfaceImageDescriptors(m_water_surface.get());
+		}
+		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
+			vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                    gpu_timing_ctx.query_pool, 1);
 		}
 
 		VkImageLayout storage_old = render_target_ctx.storage_image_initialized ?
@@ -4121,6 +4486,10 @@ void Runtime::MainLoop() {
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, active_pipeline);
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout, 0,
 		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
+		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
+			vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                    gpu_timing_ctx.query_pool, 2);
+		}
 
 		if (needs_visibility_pass) {
 			frame_number = 0;
@@ -4148,6 +4517,8 @@ void Runtime::MainLoop() {
 		pc.hipr_clear_order      = hipr_force_clear_order ? 1u : 0u;
 		pc.hipr_vis_enable_tint  = ui::selection_ctx.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
 		pc.hipr_vis_rainbow_tint = ui::selection_ctx.hipr_debug.vis_rainbow_tint ? 1u : 0u;
+		pc.hipr_reserved0 =
+		    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u);
 		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
@@ -4432,6 +4803,10 @@ void Runtime::MainLoop() {
 		if (hipr_full_scene_sampling) {
 			++hipr_full_scene_frame;
 		}
+		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
+			vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                    gpu_timing_ctx.query_pool, 3);
+		}
 
 		// Make compute writes visible to transfer
 		VkMemoryBarrier compute_to_transfer{};
@@ -4538,6 +4913,7 @@ void Runtime::MainLoop() {
 			}
 			continue;
 		}
+		gpu_timing_ctx.has_submission = (gpu_timing_ctx.query_pool != VK_NULL_HANDLE);
 
 		VkPresentInfoKHR present_info{};
 		present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;

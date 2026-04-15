@@ -88,6 +88,40 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 			ImGui::EndTable();
 		}
 		ImGui::Text("Timing window: %u frames", diagnostics.render.frame_sample_count);
+
+		if (ImGui::BeginTable("render_pass_breakdown", 3,
+		                      ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
+			ImGui::TableSetupColumn("Pass");
+			ImGui::TableSetupColumn("MS");
+			ImGui::TableSetupColumn("FPS");
+			ImGui::TableHeadersRow();
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextUnformatted("Sim");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("%7.2f", diagnostics.render.simulation_pass_time_ms);
+			ImGui::TableSetColumnIndex(2);
+			ImGui::Text("%7.2f", diagnostics.render.simulation_pass_fps);
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextUnformatted("Render");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("%7.2f", diagnostics.render.render_pass_time_ms);
+			ImGui::TableSetColumnIndex(2);
+			ImGui::Text("%7.2f", diagnostics.render.render_pass_fps);
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextUnformatted("Total");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("%7.2f", diagnostics.render.total_pass_time_ms);
+			ImGui::TableSetColumnIndex(2);
+			ImGui::Text("%7.2f", diagnostics.render.total_pass_fps);
+
+			ImGui::EndTable();
+		}
 	}
 
 	if (ImGui::CollapsingHeader("Advanced Stats")) {
