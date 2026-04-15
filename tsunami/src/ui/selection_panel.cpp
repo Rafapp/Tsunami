@@ -302,14 +302,13 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* mat
 	                         selection_ctx.selected_mesh_index, selection_ctx.editor_material);
 }
 
-SelectionPanelResult drawSelectionPanel(const Scene* scene,
+SelectionPanelResult drawSelectionPanel(const Scene*                           scene,
                                         const audio::ReactiveAudioDiagnostics& audio,
-                                        bool* is_open) {
+                                        bool*                                  is_open) {
 	SelectionPanelResult result{};
 	const float          voice_loudness = audio.smoothed_level;
 	const glm::vec3      voice_color    = rainbowColorFromLoudness(voice_loudness);
-	const float          voice_value =
-	    voiceDrivenScalarValue(selection_ctx.voice_parameter, voice_loudness);
+	const float voice_value = voiceDrivenScalarValue(selection_ctx.voice_parameter, voice_loudness);
 
 	if (is_open != nullptr && !*is_open) {
 		return result;
@@ -471,8 +470,7 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene,
 		result.material_changed |= voice_sync.material_changed;
 		result.transform_changed |= voice_sync.transform_changed;
 
-		ImGui::Text("Voice target: %s",
-		            voiceDrivenParameterLabel(selection_ctx.voice_parameter));
+		ImGui::Text("Voice target: %s", voiceDrivenParameterLabel(selection_ctx.voice_parameter));
 		ImGui::Text("Voice loudness: %.2f", voice_loudness);
 		if (voiceParameterUsesRainbowColor(selection_ctx.voice_parameter)) {
 			ImGui::ColorButton("Voice preview",

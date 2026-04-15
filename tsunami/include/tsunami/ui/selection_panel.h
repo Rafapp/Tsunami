@@ -66,8 +66,8 @@ struct CameraSettings {
 };
 
 struct PathTracingSettings {
-	uint32_t spp         = 1;
-	uint32_t max_bounces = 8;
+	uint32_t spp                     = 1;
+	uint32_t max_bounces             = 8;
 	uint32_t hipr_water_spp_override = 0;
 };
 
@@ -81,7 +81,7 @@ struct SelectionContext {
 	CameraSettings             camera{};
 	PathTracingSettings        path_tracing{};
 	GPUMaterial                editor_material{};
-	float                      editor_scale = 1.0f;
+	float                      editor_scale  = 1.0f;
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;
 	std::vector<ObjectIdEntry> object_id_map;
@@ -106,8 +106,8 @@ void        rebuildObjectIdMap(const Scene* scene);
 bool        selectMesh(const Scene* scene, int mesh_index);
 void        applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* material_mapped,
                                         uint32_t material_count, VmaAllocation material_alloc);
-SelectionPanelResult drawSelectionPanel(const Scene* scene,
+SelectionPanelResult drawSelectionPanel(const Scene*                           scene,
                                         const audio::ReactiveAudioDiagnostics& audio,
-                                        bool* is_open = nullptr);
+                                        bool*                                  is_open = nullptr);
 
 }        // namespace ui

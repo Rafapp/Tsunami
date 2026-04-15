@@ -2,8 +2,8 @@
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -125,8 +125,8 @@ struct VulkanContext {
 	vkb::PhysicalDevice phys_device{};
 	vkb::Device         log_device{};
 	uint32_t            scratch_alignment;
-	float               timestamp_period_ns  = 0.0f;
-	bool                supports_timestamps  = false;
+	float               timestamp_period_ns   = 0.0f;
+	bool                supports_timestamps   = false;
 	VkDevice            device                = VK_NULL_HANDLE;
 	VkSurfaceKHR        surface               = VK_NULL_HANDLE;
 	VkQueue             graphics_queue        = VK_NULL_HANDLE;
@@ -206,8 +206,8 @@ struct OverlayContext {
 } overlay_ctx{};
 
 struct GpuTimingContext {
-	VkQueryPool query_pool = VK_NULL_HANDLE;
-	bool        has_submission = false;
+	VkQueryPool query_pool              = VK_NULL_HANDLE;
+	bool        has_submission          = false;
 	float       simulation_pass_time_ms = 0.0f;
 	float       render_pass_time_ms     = 0.0f;
 } gpu_timing_ctx{};
@@ -246,18 +246,18 @@ struct PathTracerPushConstants {
 static_assert(sizeof(PathTracerPushConstants) == 124);
 
 struct WaterSurfaceParamsGpu {
-	glm::vec4 center_trace_half_height = glm::vec4(0.0f);
-	glm::vec4 axis_u_half_extent       = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-	glm::vec4 axis_v_half_extent       = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
-	glm::vec4 normal                   = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-	int32_t   water_object_id          = -1;
-	uint32_t  water_enabled            = 0;
-	int32_t   water_material_index     = -1;
+	glm::vec4 center_trace_half_height    = glm::vec4(0.0f);
+	glm::vec4 axis_u_half_extent          = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+	glm::vec4 axis_v_half_extent          = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+	glm::vec4 normal                      = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+	int32_t   water_object_id             = -1;
+	uint32_t  water_enabled               = 0;
+	int32_t   water_material_index        = -1;
 	float     water_height_to_world_scale = 1.0f;
-	int32_t   first_floating_object_id = -1;
-	uint32_t  _pad0                    = 0;
-	uint32_t  _pad1                    = 0;
-	uint32_t  _pad2                    = 0;
+	int32_t   first_floating_object_id    = -1;
+	uint32_t  _pad0                       = 0;
+	uint32_t  _pad1                       = 0;
+	uint32_t  _pad2                       = 0;
 };
 
 static_assert(sizeof(WaterSurfaceParamsGpu) == 96);
@@ -286,17 +286,17 @@ struct Bounds3 {
 	bool      valid = false;
 };
 
-WaterSurfaceRenderPlacement                 water_surface_render_ctx{};
-std::vector<glm::mat4>                      mesh_pose_transforms;
-std::vector<glm::mat4>                      mesh_base_transforms;
-std::vector<float>                          mesh_user_scales;
-std::vector<int>                            mesh_floating_group_index;
-std::vector<FloatingMeshGroup>              floating_mesh_groups;
-std::vector<float>                          floating_group_user_scales;
+WaterSurfaceRenderPlacement                     water_surface_render_ctx{};
+std::vector<glm::mat4>                          mesh_pose_transforms;
+std::vector<glm::mat4>                          mesh_base_transforms;
+std::vector<float>                              mesh_user_scales;
+std::vector<int>                                mesh_floating_group_index;
+std::vector<FloatingMeshGroup>                  floating_mesh_groups;
+std::vector<float>                              floating_group_user_scales;
 std::vector<simulation::FloatingObjectSettings> floating_group_base_settings;
 std::vector<simulation::FloatingObjectSettings> floating_simulation_settings;
-bool                                        floating_settings_dirty = false;
-bool                                        tlas_update_pending = false;
+bool                                            floating_settings_dirty = false;
+bool                                            tlas_update_pending     = false;
 
 constexpr int              kRequestedPoolWaterMeshIndex     = 98;
 constexpr std::string_view kRequestedPoolWaterMeshName      = "Pool F.017 / Pool F";
@@ -304,14 +304,14 @@ constexpr float            kPoolWaterPlanarInsetWorld       = 0.08f;
 constexpr float            kPoolWaterSurfaceDepthInsetWorld = 0.02f;
 constexpr float            kPoolWaterTraceHalfHeightWorld   = 0.45f;
 
-constexpr glm::vec3 kWaterBaseColor             = glm::vec3(0.02f, 0.12f, 0.16f);
-constexpr glm::vec3 kWaterTransmissionColor     = glm::vec3(0.72f, 0.92f, 0.98f);
-constexpr float     kWaterSpecularRoughness     = 0.015f;
-constexpr float     kWaterTransmissionWeight    = 1.0f;
-constexpr float     kWaterTransmissionDepth     = 6.0f;
-constexpr float     kWaterTransmissionScatter   = 0.004f;
+constexpr glm::vec3 kWaterBaseColor              = glm::vec3(0.02f, 0.12f, 0.16f);
+constexpr glm::vec3 kWaterTransmissionColor      = glm::vec3(0.72f, 0.92f, 0.98f);
+constexpr float     kWaterSpecularRoughness      = 0.015f;
+constexpr float     kWaterTransmissionWeight     = 1.0f;
+constexpr float     kWaterTransmissionDepth      = 6.0f;
+constexpr float     kWaterTransmissionScatter    = 0.004f;
 constexpr float     kWaterTransmissionAnisotropy = 0.0f;
-constexpr float     kWaterIor                   = 1.333f;
+constexpr float     kWaterIor                    = 1.333f;
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -548,7 +548,7 @@ CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
 	const glm::vec3 up     = glm::normalize(glm::vec3(camera.up));
 	const float     fov    = camera.fov_near_far.x;
 	const float     aspect = static_cast<float>(framebuffer_width) /
-	                     static_cast<float>(std::max(framebuffer_height, 1u));
+	                         static_cast<float>(std::max(framebuffer_height, 1u));
 
 	const float half_height = std::tan(glm::radians(fov) * 0.5f);
 	const float half_width  = aspect * half_height;
@@ -683,8 +683,8 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 		return -1;
 	}
 
-	const CpuRay world_ray = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
-	float        best_t    = std::numeric_limits<float>::infinity();
+	const CpuRay world_ray    = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
+	float        best_t       = std::numeric_limits<float>::infinity();
 	int          best_mesh_id = -1;
 
 	float water_hit_t = 0.0f;
@@ -701,9 +701,9 @@ int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& ca
 
 		const glm::mat4& inverse_transform = mesh->m_transform.m_inverseTransform;
 		const CpuRay     local_ray{
-            glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
-            glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
-        };
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
+		    glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
+		};
 
 		if (glm::dot(local_ray.direction, local_ray.direction) < 1.0e-12f) {
 			continue;
@@ -795,8 +795,7 @@ static glm::vec3 transformPoint(const glm::mat4& transform, const glm::vec3& poi
 	return glm::vec3(transform * glm::vec4(point, 1.0f));
 }
 
-static bool matricesNearlyEqual(const glm::mat4& a, const glm::mat4& b,
-                                float epsilon = 1.0e-4f) {
+static bool matricesNearlyEqual(const glm::mat4& a, const glm::mat4& b, float epsilon = 1.0e-4f) {
 	for (int column = 0; column < 4; ++column) {
 		if (glm::length(a[column] - b[column]) > epsilon) {
 			return false;
@@ -895,13 +894,14 @@ static glm::mat4 composeMeshTransform(int mesh_index) {
 }
 
 static void writeMeshTransformToSceneAndGpu(Scene* scene, int mesh_index) {
-	if (scene == nullptr || mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	if (scene == nullptr || mesh_index < 0 ||
+	    mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
 	    scene->m_meshes[mesh_index] == nullptr) {
 		return;
 	}
 
-	const glm::mat4 transform = composeMeshTransform(mesh_index);
-	auto& mesh                           = scene->m_meshes[mesh_index];
+	const glm::mat4 transform            = composeMeshTransform(mesh_index);
+	auto&           mesh                 = scene->m_meshes[mesh_index];
 	mesh->m_transform.m_transform        = transform;
 	mesh->m_transform.m_inverseTransform = glm::inverse(transform);
 
@@ -943,9 +943,9 @@ static void initializeMeshTransformMetadata(const Scene* scene) {
 		const auto& mesh = scene->m_meshes[mesh_index];
 		mesh_pose_transforms[mesh_index] =
 		    mesh != nullptr ? mesh->m_transform.m_transform : glm::mat4(1.0f);
-		mesh_base_transforms[mesh_index]       = glm::mat4(1.0f);
-		mesh_user_scales[mesh_index]           = 1.0f;
-		mesh_floating_group_index[mesh_index]  = -1;
+		mesh_base_transforms[mesh_index]      = glm::mat4(1.0f);
+		mesh_user_scales[mesh_index]          = 1.0f;
+		mesh_floating_group_index[mesh_index] = -1;
 	}
 }
 
@@ -1109,35 +1109,35 @@ static void applyDedicatedWaterMaterial(Scene* scene) {
 
 	const int mesh_index = water_surface_render_ctx.mesh_index;
 	if (mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
-	    scene->m_meshes[mesh_index] == nullptr || scene->m_meshes[mesh_index]->m_material == nullptr) {
+	    scene->m_meshes[mesh_index] == nullptr ||
+	    scene->m_meshes[mesh_index]->m_material == nullptr) {
 		return;
 	}
 
-	GPUMaterial& water_material = scene->m_meshes[mesh_index]->m_material->m_gpu;
-	water_material.base_color                     = glm::vec4(kWaterBaseColor, 1.0f);
-	water_material.base_metalness                 = 0.0f;
-	water_material.base_diffuse_roughness         = 0.0f;
-	water_material.specular_color                 = glm::vec4(1.0f);
-	water_material.specular_roughness             = kWaterSpecularRoughness;
-	water_material.specular_ior                   = kWaterIor;
-	water_material.specular_anisotropy            = 0.0f;
-	water_material.transmission_weight            = kWaterTransmissionWeight;
-	water_material.transmission_depth             = kWaterTransmissionDepth;
-	water_material.transmission_color             = glm::vec4(kWaterTransmissionColor, 1.0f);
-	water_material.transmission_scatter           =
-	    glm::vec4(kWaterTransmissionScatter, kWaterTransmissionScatter,
-	              kWaterTransmissionScatter, 0.0f);
+	GPUMaterial& water_material           = scene->m_meshes[mesh_index]->m_material->m_gpu;
+	water_material.base_color             = glm::vec4(kWaterBaseColor, 1.0f);
+	water_material.base_metalness         = 0.0f;
+	water_material.base_diffuse_roughness = 0.0f;
+	water_material.specular_color         = glm::vec4(1.0f);
+	water_material.specular_roughness     = kWaterSpecularRoughness;
+	water_material.specular_ior           = kWaterIor;
+	water_material.specular_anisotropy    = 0.0f;
+	water_material.transmission_weight    = kWaterTransmissionWeight;
+	water_material.transmission_depth     = kWaterTransmissionDepth;
+	water_material.transmission_color     = glm::vec4(kWaterTransmissionColor, 1.0f);
+	water_material.transmission_scatter   = glm::vec4(
+	    kWaterTransmissionScatter, kWaterTransmissionScatter, kWaterTransmissionScatter, 0.0f);
 	water_material.transmission_scatter_anisotropy = kWaterTransmissionAnisotropy;
-	water_material.geometry_opacity               = 1.0f;
-	water_material.emission_color                 = glm::vec4(0.0f);
-	water_material.emission_luminance             = 0.0f;
-	water_material.coat_weight                    = 0.0f;
-	water_material.fuzz_weight                    = 0.0f;
-	water_material.thin_film_weight               = 0.0f;
-	water_material.albedo_tex_index               = std::numeric_limits<uint32_t>::max();
-	water_material.normal_tex_index               = std::numeric_limits<uint32_t>::max();
-	water_material.roughness_tex_index            = std::numeric_limits<uint32_t>::max();
-	water_material.emissive_tex_index             = std::numeric_limits<uint32_t>::max();
+	water_material.geometry_opacity                = 1.0f;
+	water_material.emission_color                  = glm::vec4(0.0f);
+	water_material.emission_luminance              = 0.0f;
+	water_material.coat_weight                     = 0.0f;
+	water_material.fuzz_weight                     = 0.0f;
+	water_material.thin_film_weight                = 0.0f;
+	water_material.albedo_tex_index                = std::numeric_limits<uint32_t>::max();
+	water_material.normal_tex_index                = std::numeric_limits<uint32_t>::max();
+	water_material.roughness_tex_index             = std::numeric_limits<uint32_t>::max();
+	water_material.emissive_tex_index              = std::numeric_limits<uint32_t>::max();
 }
 
 static glm::vec2 floatingAnchorForIndex(uint32_t index) {
@@ -1184,9 +1184,9 @@ static float floatingDesiredDraftFraction(const std::string& asset_name_lower) {
 	return 0.28f;
 }
 
-static simulation::FloatingObjectSettings makeFloatingObjectSettings(
-    const std::string& asset_name, const glm::vec3& asset_world_size, float default_scale,
-    uint32_t simulation_index) {
+static simulation::FloatingObjectSettings
+    makeFloatingObjectSettings(const std::string& asset_name, const glm::vec3& asset_world_size,
+                               float default_scale, uint32_t simulation_index) {
 	const std::string asset_name_lower = toLowerCopy(asset_name);
 	const bool        is_ring          = asset_name_lower.find("ring") != std::string::npos;
 	const bool        is_duck          = asset_name_lower.find("duck") != std::string::npos;
@@ -1367,8 +1367,8 @@ static bool updateFloatingMeshTransformsFromSimulation(
 
 	const std::vector<simulation::FloatingObjectRenderData> render_data =
 	    water_surface->floatingObjectRenderData();
-	bool any_pose_changed = false;
-	const auto has_valid_axis = [](const glm::vec4& axis) {
+	bool       any_pose_changed = false;
+	const auto has_valid_axis   = [](const glm::vec4& axis) {
 		const float length = glm::length(glm::vec3(axis));
 		return std::isfinite(length) && length > 1.0e-4f;
 	};
@@ -1444,12 +1444,13 @@ static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
 	}
 
 	const int selected_mesh_index = ui::selection_ctx.selected_mesh_index;
-	if (selected_mesh_index < 0 || selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+	if (selected_mesh_index < 0 ||
+	    selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
 		ui::selection_ctx.editor_scale = 1.0f;
 		return false;
 	}
 
-	const float clamped_scale = std::clamp(ui::selection_ctx.editor_scale, 0.10f, 3.00f);
+	const float clamped_scale      = std::clamp(ui::selection_ctx.editor_scale, 0.10f, 3.00f);
 	ui::selection_ctx.editor_scale = clamped_scale;
 
 	std::vector<int> mesh_indices_to_update;
@@ -1466,7 +1467,8 @@ static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
 			floating_group_user_scales[floating_group_index] = clamped_scale;
 			mesh_indices_to_update = floating_mesh_groups[floating_group_index].mesh_indices;
 
-			const int simulation_index = floating_mesh_groups[floating_group_index].simulation_index;
+			const int simulation_index =
+			    floating_mesh_groups[floating_group_index].simulation_index;
 			if (simulation_index >= 0 &&
 			    simulation_index < static_cast<int>(floating_simulation_settings.size()) &&
 			    floating_group_index < static_cast<int>(floating_group_base_settings.size())) {
@@ -1474,8 +1476,7 @@ static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
 				    floating_group_base_settings[floating_group_index];
 				scaled_settings.size *= clamped_scale;
 				scaled_settings.mass *= clamped_scale * clamped_scale * clamped_scale;
-				scaled_settings.drift_radius *=
-				    std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
+				scaled_settings.drift_radius *= std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
 				scaled_settings.waterline_offset *= clamped_scale;
 				floating_simulation_settings[simulation_index] = scaled_settings;
 				floating_settings_dirty                        = true;
@@ -1504,8 +1505,9 @@ static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
 	return true;
 }
 
-static void updateWaterSurfaceParamsBuffer(Scene* scene,
-                                           const simulation::WaterSurfaceSimulation* water_surface) {
+static void
+    updateWaterSurfaceParamsBuffer(Scene*                                    scene,
+                                   const simulation::WaterSurfaceSimulation* water_surface) {
 	if (render_target_ctx.water_surface_params_mapped == nullptr) {
 		return;
 	}
@@ -1517,10 +1519,9 @@ static void updateWaterSurfaceParamsBuffer(Scene* scene,
 	    glm::vec4(water_surface_render_ctx.axis_u, water_surface_render_ctx.half_extent_u);
 	params.axis_v_half_extent =
 	    glm::vec4(water_surface_render_ctx.axis_v, water_surface_render_ctx.half_extent_v);
-	params.normal = glm::vec4(water_surface_render_ctx.normal, 0.0f);
-	params.water_object_id          = waterSurfaceObjectId(scene);
-	params.water_enabled            =
-	    (water_surface != nullptr && water_surface_render_ctx.enabled) ? 1u : 0u;
+	params.normal          = glm::vec4(water_surface_render_ctx.normal, 0.0f);
+	params.water_object_id = waterSurfaceObjectId(scene);
+	params.water_enabled = (water_surface != nullptr && water_surface_render_ctx.enabled) ? 1u : 0u;
 	params.water_material_index =
 	    (scene != nullptr && water_surface_render_ctx.mesh_index >= 0 &&
 	     water_surface_render_ctx.mesh_index < static_cast<int>(scene->m_meshes.size())) ?
@@ -1535,8 +1536,8 @@ static void updateWaterSurfaceParamsBuffer(Scene* scene,
 	                   sizeof(params));
 }
 
-static void updateWaterSurfaceImageDescriptors(
-    const simulation::WaterSurfaceSimulation* water_surface) {
+static void
+    updateWaterSurfaceImageDescriptors(const simulation::WaterSurfaceSimulation* water_surface) {
 	if (render_target_ctx.descriptor_set == VK_NULL_HANDLE || water_surface == nullptr) {
 		return;
 	}
@@ -1800,17 +1801,17 @@ struct BLAS {
 };
 struct AccelerationStructureContext {
 	std::vector<BLAS>          blases;
-	VkAccelerationStructureKHR tlas              = VK_NULL_HANDLE;
-	VkBuffer                   tlas_buffer       = VK_NULL_HANDLE;
-	VmaAllocation              tlas_buffer_alloc = VK_NULL_HANDLE;
+	VkAccelerationStructureKHR tlas                  = VK_NULL_HANDLE;
+	VkBuffer                   tlas_buffer           = VK_NULL_HANDLE;
+	VmaAllocation              tlas_buffer_alloc     = VK_NULL_HANDLE;
 	VkBuffer                   instance_buffer       = VK_NULL_HANDLE;
 	VmaAllocation              instance_buffer_alloc = VK_NULL_HANDLE;
 	void*                      instance_mapped       = nullptr;
-	VkBuffer                   scratch_buffer       = VK_NULL_HANDLE;
-	VmaAllocation              scratch_buffer_alloc = VK_NULL_HANDLE;
-	VkDeviceSize               scratch_size         = 0;
-	uint32_t                   instance_count       = 0;
-	VkDeviceAddress            tlas_address      = 0;
+	VkBuffer                   scratch_buffer        = VK_NULL_HANDLE;
+	VmaAllocation              scratch_buffer_alloc  = VK_NULL_HANDLE;
+	VkDeviceSize               scratch_size          = 0;
+	uint32_t                   instance_count        = 0;
+	VkDeviceAddress            tlas_address          = 0;
 } as_ctx;
 
 // ============================================================
@@ -2007,195 +2008,195 @@ static void upload_rgba32f_3d(VmaAllocator alloc, VkDevice dev, VkCommandPool po
 // =======================
 static uint32_t g_frame_number_ref = 0;
 static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb_h) {
-    vkDeviceWaitIdle(vulkan_ctx.device);
+	vkDeviceWaitIdle(vulkan_ctx.device);
 
-    uint32_t new_w = fb_w;
-    uint32_t new_h = fb_h;
-    if (new_w == 0 || new_h == 0)
-        return;        // minimised – skip
+	uint32_t new_w = fb_w;
+	uint32_t new_h = fb_h;
+	if (new_w == 0 || new_h == 0)
+		return;        // minimised – skip
 
-    VmaAllocator allocator = render_target_ctx.allocator;
+	VmaAllocator allocator = render_target_ctx.allocator;
 
-    // -- Destroy old swapchain image views --
-    for (auto v : swapchain_ctx.image_views)
-        vkDestroyImageView(vulkan_ctx.device, v, nullptr);
-    swapchain_ctx.image_views.clear();
+	// -- Destroy old swapchain image views --
+	for (auto v : swapchain_ctx.image_views)
+		vkDestroyImageView(vulkan_ctx.device, v, nullptr);
+	swapchain_ctx.image_views.clear();
 
-    // -- Destroy old render-target images --
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.storage_image,
-	                    render_target_ctx.storage_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.object_id_image,
-	                    render_target_ctx.object_id_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	// -- Destroy old render-target images --
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.storage_image,
+	                render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+	                render_target_ctx.object_id_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
-    // -- Rebuild swapchain --
-    vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
-    auto           swap_ret =
-        vkb::SwapchainBuilder{vulkan_ctx.log_device}
-            .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-            .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-            .set_desired_extent(new_w, new_h)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-	                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-            .set_old_swapchain(old_swapchain.swapchain)
-            .build();
-    vkb::destroy_swapchain(old_swapchain);
+	// -- Rebuild swapchain --
+	vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
+	auto           swap_ret =
+	    vkb::SwapchainBuilder{vulkan_ctx.log_device}
+	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+	        .set_desired_extent(new_w, new_h)
+	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+	                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+	        .set_old_swapchain(old_swapchain.swapchain)
+	        .build();
+	vkb::destroy_swapchain(old_swapchain);
 
-    if (!swap_ret) {
-        std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
-        return;
-    }
-    swapchain_ctx.swapchain    = swap_ret.value();
-    swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
-    swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
-    auto images_ret            = swapchain_ctx.swapchain.get_images();
-    if (!images_ret)
-        return;
-    swapchain_ctx.images = images_ret.value();
-    auto views_ret       = swapchain_ctx.swapchain.get_image_views();
-    if (!views_ret)
-        return;
-    swapchain_ctx.image_views = views_ret.value();
-    swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
+	if (!swap_ret) {
+		std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
+		return;
+	}
+	swapchain_ctx.swapchain    = swap_ret.value();
+	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
+	auto images_ret            = swapchain_ctx.swapchain.get_images();
+	if (!images_ret)
+		return;
+	swapchain_ctx.images = images_ret.value();
+	auto views_ret       = swapchain_ctx.swapchain.get_image_views();
+	if (!views_ret)
+		return;
+	swapchain_ctx.image_views = views_ret.value();
+	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
 
-    // -- Recreate render-target images at new size --
-    // Use the actual swapchain extent (Vulkan may adjust from the requested size)
-    const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+	// -- Recreate render-target images at new size --
+	// Use the actual swapchain extent (Vulkan may adjust from the requested size)
+	const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
 
-    auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
-                            VkImageUsageFlags extra) {
-        VkImageCreateInfo ii{};
-        ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ii.imageType     = VK_IMAGE_TYPE_2D;
-        ii.format        = format;
-        ii.extent        = ext;
-        ii.mipLevels     = 1;
-        ii.arrayLayers   = 1;
-        ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-        vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
-    };
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
+		VkImageCreateInfo ii{};
+		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ii.imageType     = VK_IMAGE_TYPE_2D;
+		ii.format        = format;
+		ii.extent        = ext;
+		ii.mipLevels     = 1;
+		ii.arrayLayers   = 1;
+		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+	};
 
-    make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
-	                 VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, 0);
+	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, 0);
 
-    render_target_ctx.storage_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.object_id_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
-	                          VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.accum_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.storage_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.object_id_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	                      VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.accum_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 
-    // Transition accum → GENERAL
-    {
-        VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
-        transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
-		                     cmd);
-    }
+	// Transition accum → GENERAL
+	{
+		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                 cmd);
+	}
 
-    // Update the two storage-image descriptors (bindings 0 and 1)
-    {
-        VkDescriptorImageInfo out_img{};
-        out_img.imageView   = render_target_ctx.storage_image_view;
-        out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo object_id_img{};
-        object_id_img.imageView   = render_target_ctx.object_id_image_view;
-        object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo accum_img{};
-        accum_img.imageView   = render_target_ctx.accum_image_view;
-        accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	// Update the two storage-image descriptors (bindings 0 and 1)
+	{
+		VkDescriptorImageInfo out_img{};
+		out_img.imageView   = render_target_ctx.storage_image_view;
+		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo accum_img{};
+		accum_img.imageView   = render_target_ctx.accum_image_view;
+		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkWriteDescriptorSet writes[3]{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 0,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &out_img};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 13,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &object_id_img};
-        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 1,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &accum_img};
-        vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
-    }
+		VkWriteDescriptorSet writes[3]{};
+		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             0,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &out_img};
+		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             1,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &accum_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+	}
 
-    // Reset sync semaphores if the swapchain image count changed
-    {
-        const uint32_t n = (uint32_t) swapchain_ctx.images.size();
-        if (n != (uint32_t) sync_ctx.image_available.size()) {
-            for (auto s : sync_ctx.image_available)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            for (auto s : sync_ctx.render_finished)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            sync_ctx.image_available.resize(n);
-            sync_ctx.render_finished.resize(n);
-            VkSemaphoreCreateInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            for (uint32_t i = 0; i < n; ++i) {
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
-            }
-        }
-    }
+	// Reset sync semaphores if the swapchain image count changed
+	{
+		const uint32_t n = (uint32_t) swapchain_ctx.images.size();
+		if (n != (uint32_t) sync_ctx.image_available.size()) {
+			for (auto s : sync_ctx.image_available)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			for (auto s : sync_ctx.render_finished)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			sync_ctx.image_available.resize(n);
+			sync_ctx.render_finished.resize(n);
+			VkSemaphoreCreateInfo si{};
+			si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+			for (uint32_t i = 0; i < n; ++i) {
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
+			}
+		}
+	}
 
-    // Recreate overlay framebuffers for the new swapchain image views / extent
-    for (VkFramebuffer fb : overlay_ctx.framebuffers)
-        vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
-    overlay_ctx.framebuffers.clear();
-    overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-    for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-        VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
-        VkFramebufferCreateInfo framebuffer_info{};
-        framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass      = overlay_ctx.render_pass;
-        framebuffer_info.attachmentCount = 1;
-        framebuffer_info.pAttachments    = attachments;
-        framebuffer_info.width           = swapchain_ctx.extent.width;
-        framebuffer_info.height          = swapchain_ctx.extent.height;
-        framebuffer_info.layers          = 1;
-        vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                        &overlay_ctx.framebuffers[i]);
-    }
+	// Recreate overlay framebuffers for the new swapchain image views / extent
+	for (VkFramebuffer fb : overlay_ctx.framebuffers)
+		vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
+	overlay_ctx.framebuffers.clear();
+	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
+	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
+		VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
+		VkFramebufferCreateInfo framebuffer_info{};
+		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.renderPass      = overlay_ctx.render_pass;
+		framebuffer_info.attachmentCount = 1;
+		framebuffer_info.pAttachments    = attachments;
+		framebuffer_info.width           = swapchain_ctx.extent.width;
+		framebuffer_info.height          = swapchain_ctx.extent.height;
+		framebuffer_info.layers          = 1;
+		vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
+		                    &overlay_ctx.framebuffers[i]);
+	}
 
-    render_target_ctx.storage_image_initialized = false;
-    frame_number                                = 0;        // reset temporal accumulation
+	render_target_ctx.storage_image_initialized = false;
+	frame_number                                = 0;        // reset temporal accumulation
 
-    std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
-              << "\n";
+	std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
+	          << "\n";
 }
 
 // ============================================================
@@ -2833,8 +2834,8 @@ static void build_tlas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQ
 	vkGetAccelerationStructureBuildSizesKHR(dev, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
 	                                        &build, &instance_count, &sizes);
 
-	as_ctx.tlas_buffer = create_gpu_buffer(alloc, sizes.accelerationStructureSize, AS_BUFFER_USAGE,
-	                                       as_ctx.tlas_buffer_alloc);
+	as_ctx.tlas_buffer  = create_gpu_buffer(alloc, sizes.accelerationStructureSize, AS_BUFFER_USAGE,
+	                                        as_ctx.tlas_buffer_alloc);
 	as_ctx.scratch_size = std::max(sizes.buildScratchSize, sizes.updateScratchSize);
 	as_ctx.scratch_buffer =
 	    create_gpu_buffer(alloc, as_ctx.scratch_size, SCRATCH_BUFFER_USAGE,
@@ -2951,10 +2952,10 @@ Runtime::Runtime(const std::string& scene_argument) {
 	{
 		vkb::InstanceBuilder b;
 		auto                 r = b.set_app_name("tsunami")
-		             .request_validation_layers()
-		             .use_default_debug_messenger()
-		             .require_api_version(1, 3, 0)
-		             .build();
+		                             .request_validation_layers()
+		                             .use_default_debug_messenger()
+		                             .require_api_version(1, 3, 0)
+		                             .build();
 		if (!r)
 			throw std::runtime_error("failed to create Vulkan instance");
 		vulkan_ctx.instance = r.value();
@@ -2969,10 +2970,10 @@ Runtime::Runtime(const std::string& scene_argument) {
 		                                 VK_KHR_RAY_QUERY_EXTENSION_NAME,
 		                                 VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 		auto                     r    = vkb::PhysicalDeviceSelector(vulkan_ctx.instance)
-		             .set_surface(vulkan_ctx.surface)
-		             .set_minimum_version(1, 3)
-		             .add_required_extensions(exts)
-		             .select();
+		                                    .set_surface(vulkan_ctx.surface)
+		                                    .set_minimum_version(1, 3)
+		                                    .add_required_extensions(exts)
+		                                    .select();
 		if (!r)
 			throw std::runtime_error("failed to select physical device");
 		vulkan_ctx.phys_device = r.value();
@@ -2992,10 +2993,10 @@ Runtime::Runtime(const std::string& scene_argument) {
 		bf.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 		bf.bufferDeviceAddress = VK_TRUE;
 		auto r                 = vkb::DeviceBuilder{vulkan_ctx.phys_device}
-		             .add_pNext(&af)
-		             .add_pNext(&rf)
-		             .add_pNext(&bf)
-		             .build();
+		                             .add_pNext(&af)
+		                             .add_pNext(&rf)
+		                             .add_pNext(&bf)
+		                             .build();
 		if (!r)
 			throw std::runtime_error("failed to create logical device");
 		vulkan_ctx.log_device = r.value();
@@ -3021,7 +3022,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 		if (!fr)
 			throw std::runtime_error("no graphics queue family");
 		vulkan_ctx.graphics_queue_family = fr.value();
-		uint32_t queue_family_count = 0;
+		uint32_t queue_family_count      = 0;
 		vkGetPhysicalDeviceQueueFamilyProperties(vulkan_ctx.phys_device.physical_device,
 		                                         &queue_family_count, nullptr);
 		std::vector<VkQueueFamilyProperties> queue_family_properties(queue_family_count);
@@ -3065,22 +3066,22 @@ Runtime::Runtime(const std::string& scene_argument) {
 	{
 		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
 		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
-                                      VkImageUsageFlags extra) {
-            VkImageCreateInfo ii{};
-            ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ii.imageType     = VK_IMAGE_TYPE_2D;
-            ii.format        = format;
-            ii.extent        = ext;
-            ii.mipLevels     = 1;
-            ii.arrayLayers   = 1;
-            ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-            ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VmaAllocationCreateInfo ai{};
-            ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-            if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
-                throw std::runtime_error("failed to create storage image");
+		                                    VkImageUsageFlags extra) {
+			VkImageCreateInfo ii{};
+			ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+			ii.imageType     = VK_IMAGE_TYPE_2D;
+			ii.format        = format;
+			ii.extent        = ext;
+			ii.mipLevels     = 1;
+			ii.arrayLayers   = 1;
+			ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+			ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+			ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
+			ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VmaAllocationCreateInfo ai{};
+			ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+			if (vmaCreateImage(allocator, &ii, &ai, &img, &a, nullptr) != VK_SUCCESS)
+				throw std::runtime_error("failed to create storage image");
 		};
 		auto make_dummy = [&](VkImageType itype, VkExtent3D e, VkImage& img, VmaAllocation& a) {
 			VkImageCreateInfo ii{};
@@ -3276,10 +3277,9 @@ Runtime::Runtime(const std::string& scene_argument) {
 
 	{
 		WaterSurfaceParamsGpu initial_water_params{};
-		render_target_ctx.water_surface_params_buffer =
-		    create_and_upload_buffer(allocator, sizeof(initial_water_params),
-		                             &initial_water_params, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		                             render_target_ctx.water_surface_params_alloc);
+		render_target_ctx.water_surface_params_buffer = create_and_upload_buffer(
+		    allocator, sizeof(initial_water_params), &initial_water_params,
+		    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, render_target_ctx.water_surface_params_alloc);
 		VmaAllocationInfo water_params_info{};
 		vmaGetAllocationInfo(allocator, render_target_ctx.water_surface_params_alloc,
 		                     &water_params_info);
@@ -3677,7 +3677,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 		query_pool_info.queryCount = 4;
 		if (vkCreateQueryPool(vulkan_ctx.device, &query_pool_info, nullptr,
 		                      &gpu_timing_ctx.query_pool) != VK_SUCCESS) {
-			std::cout << "[WARN] Failed to create GPU timestamp query pool. Pass timing disabled.\n";
+			std::cout
+			    << "[WARN] Failed to create GPU timestamp query pool. Pass timing disabled.\n";
 		} else {
 			std::cout << "[INFO] GPU timestamp pass timing enabled\n";
 		}
@@ -4089,9 +4090,8 @@ void Runtime::MainLoop() {
 
 		ui::SelectionPanelResult selection_panel_result{};
 		if (show_all_gui && show_selection_panel) {
-			selection_panel_result =
-			    ui::drawSelectionPanel(m_scene.get(), overlay_ctx.diagnostics.audio,
-			                           &show_selection_panel);
+			selection_panel_result = ui::drawSelectionPanel(
+			    m_scene.get(), overlay_ctx.diagnostics.audio, &show_selection_panel);
 		}
 		{
 			const uint32_t sanitized_rank_count =
@@ -4272,7 +4272,7 @@ void Runtime::MainLoop() {
 		if (fb_w != swapchain_ctx.swapchain.extent.width ||
 		    fb_h != swapchain_ctx.swapchain.extent.height) {
 			recreateSwapchainResources();
-			frame_number = 0;
+			frame_number          = 0;
 			needs_visibility_pass = true;
 			reset_hipr_object_sampling();
 		}
@@ -4352,25 +4352,22 @@ void Runtime::MainLoop() {
 		}
 		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE && gpu_timing_ctx.has_submission &&
 		    vulkan_ctx.timestamp_period_ns > 0.0f) {
-			uint64_t timestamp_results[4] = {0, 0, 0, 0};
-			const VkResult query_result = vkGetQueryPoolResults(
+			uint64_t       timestamp_results[4] = {0, 0, 0, 0};
+			const VkResult query_result         = vkGetQueryPoolResults(
 			    vulkan_ctx.device, gpu_timing_ctx.query_pool, 0, 4, sizeof(timestamp_results),
 			    timestamp_results, sizeof(uint64_t),
 			    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
 			if (query_result == VK_SUCCESS) {
-				const float ns_to_ms = 1.0e-6f;
-				const float tick_ms  = vulkan_ctx.timestamp_period_ns * ns_to_ms;
-				const uint64_t sim_ticks =
-				    timestamp_results[1] >= timestamp_results[0] ?
-				        (timestamp_results[1] - timestamp_results[0]) :
-				        0ull;
-				const uint64_t render_ticks =
-				    timestamp_results[3] >= timestamp_results[2] ?
-				        (timestamp_results[3] - timestamp_results[2]) :
-				        0ull;
-				gpu_timing_ctx.simulation_pass_time_ms =
-				    static_cast<float>(sim_ticks) * tick_ms;
-				gpu_timing_ctx.render_pass_time_ms = static_cast<float>(render_ticks) * tick_ms;
+				const float    ns_to_ms     = 1.0e-6f;
+				const float    tick_ms      = vulkan_ctx.timestamp_period_ns * ns_to_ms;
+				const uint64_t sim_ticks    = timestamp_results[1] >= timestamp_results[0] ?
+				                                  (timestamp_results[1] - timestamp_results[0]) :
+				                                  0ull;
+				const uint64_t render_ticks = timestamp_results[3] >= timestamp_results[2] ?
+				                                  (timestamp_results[3] - timestamp_results[2]) :
+				                                  0ull;
+				gpu_timing_ctx.simulation_pass_time_ms = static_cast<float>(sim_ticks) * tick_ms;
+				gpu_timing_ctx.render_pass_time_ms     = static_cast<float>(render_ticks) * tick_ms;
 			}
 		}
 
@@ -4402,7 +4399,7 @@ void Runtime::MainLoop() {
 		const bool acquire_suboptimal = (acquire_result == VK_SUBOPTIMAL_KHR);
 		if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR) {
 			recreateSwapchainResources();
-			frame_number = 0;
+			frame_number          = 0;
 			needs_visibility_pass = true;
 			reset_hipr_object_sampling();
 			continue;
@@ -4436,9 +4433,8 @@ void Runtime::MainLoop() {
 			vkCmdResetQueryPool(cmd, gpu_timing_ctx.query_pool, 0, 4);
 		}
 
-		const bool floating_meshes_moved =
-		    updateFloatingMeshTransformsFromSimulation(m_scene.get(), m_water_surface.get(),
-		                                               render_target_ctx.allocator);
+		const bool floating_meshes_moved = updateFloatingMeshTransformsFromSimulation(
+		    m_scene.get(), m_water_surface.get(), render_target_ctx.allocator);
 		if (floating_meshes_moved) {
 			needs_visibility_pass = true;
 			if (ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::HiPR ||
@@ -4704,9 +4700,9 @@ void Runtime::MainLoop() {
 		if (run_stage1) {
 			pc.stage            = 1;
 			pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
-			pc.frame            = hipr_object_sampling_enabled ?
-			                          hipr_object_sampling_frame :
-			                          (hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number);
+			pc.frame = hipr_object_sampling_enabled ?
+			               hipr_object_sampling_frame :
+			               (hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number);
 			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
@@ -4927,7 +4923,7 @@ void Runtime::MainLoop() {
 		if (acquire_suboptimal || present_result == VK_ERROR_OUT_OF_DATE_KHR ||
 		    present_result == VK_SUBOPTIMAL_KHR) {
 			recreateSwapchainResources();
-			frame_number = 0;
+			frame_number          = 0;
 			needs_visibility_pass = true;
 			reset_hipr_object_sampling();
 			continue;
