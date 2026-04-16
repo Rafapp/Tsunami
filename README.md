@@ -8,7 +8,7 @@ The core innovation in this project is **HiPR**: a targeted path-tracing strateg
 
 Traditional uniform path tracing spreads budget across the full frame every update. In interactive workflows, this can waste samples on regions that are not currently important for the user's focus object.
 
-**HiPR (Hierarchical Progressive Rendering )** addresses this by ranking objects according to their estimated contribution to the selected object and then spending a configurable sample budget on that ranked set.
+**HiPR (Hierarchical Progressive Rendering)** addresses this by ranking objects according to their estimated contribution to the selected object and then spending a configurable sample budget on that ranked set.
 
 At a high level, HiPR in Tsunami does the following:
 
