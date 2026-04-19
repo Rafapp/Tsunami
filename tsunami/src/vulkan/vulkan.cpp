@@ -148,6 +148,7 @@ struct RenderResourcesContext {
 
 struct RenderTargetContext {
 	VmaAllocator                       allocator;
+	VkExtent2D                         extent = {};
 	VkImage                            storage_image;
 	VmaAllocation                      storage_image_alloc;
 	VkImageView                        storage_image_view;
@@ -155,9 +156,15 @@ struct RenderTargetContext {
 	VkImage                            object_id_image           = VK_NULL_HANDLE;
 	VmaAllocation                      object_id_image_alloc     = VK_NULL_HANDLE;
 	VkImageView                        object_id_image_view      = VK_NULL_HANDLE;
+	VkImage                            object_id_history_image       = VK_NULL_HANDLE;
+	VmaAllocation                      object_id_history_image_alloc = VK_NULL_HANDLE;
+	VkImageView                        object_id_history_image_view  = VK_NULL_HANDLE;
 	VkImage                            accum_image;
 	VmaAllocation                      accum_image_alloc;
 	VkImageView                        accum_image_view;
+	VkImage                            accum_history_image       = VK_NULL_HANDLE;
+	VmaAllocation                      accum_history_image_alloc = VK_NULL_HANDLE;
+	VkImageView                        accum_history_image_view  = VK_NULL_HANDLE;
 	VkImage                            dummy_image_2d;
 	VmaAllocation                      dummy_image_2d_alloc;
 	VkImageView                        dummy_image_2d_view;
@@ -244,6 +251,8 @@ struct PathTracerPushConstants {
 };
 
 static_assert(sizeof(PathTracerPushConstants) == 124);
+static constexpr uint32_t kWaterPauseBit = 0x80000000u;
+static constexpr uint32_t kWaterSppMask  = 0x7FFFFFFFu;
 
 struct WaterSurfaceParamsGpu {
 	glm::vec4 center_trace_half_height    = glm::vec4(0.0f);
@@ -272,6 +281,8 @@ struct WaterSurfaceRenderPlacement {
 	glm::vec3 axis_v            = glm::vec3(0.0f, 0.0f, 1.0f);
 	float     half_extent_v     = 1.0f;
 	glm::vec3 normal            = glm::vec3(0.0f, 1.0f, 0.0f);
+	float     floating_surface_bounds        = 0.94f;
+	float     floating_boundary_exponent     = 2.0f;
 };
 
 struct FloatingMeshGroup {
@@ -290,19 +301,28 @@ WaterSurfaceRenderPlacement                     water_surface_render_ctx{};
 std::vector<glm::mat4>                          mesh_pose_transforms;
 std::vector<glm::mat4>                          mesh_base_transforms;
 std::vector<float>                              mesh_user_scales;
+std::vector<glm::vec3>                          mesh_user_translations;
+std::vector<glm::vec3>                          mesh_user_rotations_deg;
+std::vector<glm::vec3>                          mesh_user_rotation_pivots;
 std::vector<int>                                mesh_floating_group_index;
 std::vector<FloatingMeshGroup>                  floating_mesh_groups;
 std::vector<float>                              floating_group_user_scales;
+std::vector<glm::vec3>                          floating_group_user_translations;
+std::vector<glm::vec3>                          floating_group_user_rotations_deg;
 std::vector<simulation::FloatingObjectSettings> floating_group_base_settings;
 std::vector<simulation::FloatingObjectSettings> floating_simulation_settings;
 bool                                            floating_settings_dirty = false;
 bool                                            tlas_update_pending     = false;
 
-constexpr int              kRequestedPoolWaterMeshIndex     = 98;
-constexpr std::string_view kRequestedPoolWaterMeshName      = "Pool F.017 / Pool F";
-constexpr float            kPoolWaterPlanarInsetWorld       = 0.08f;
-constexpr float            kPoolWaterSurfaceDepthInsetWorld = 0.02f;
-constexpr float            kPoolWaterTraceHalfHeightWorld   = 0.45f;
+constexpr std::string_view kWaterMeshLabel          = "water";
+constexpr float            kWaterTraceHalfHeightWorld = 0.45f;
+constexpr float            kWaterBoundaryInsetWorld = 0.02f;
+constexpr float            kWaterBoundaryExponentCircle = 2.0f;
+constexpr float            kWaterBoundaryExponentSquare = 16.0f;
+constexpr float            kEditorTranslationMin            = -2.0f;
+constexpr float            kEditorTranslationMax            = 2.0f;
+constexpr float            kEditorRotationMinDeg            = -180.0f;
+constexpr float            kEditorRotationMaxDeg            = 180.0f;
 
 constexpr glm::vec3 kWaterBaseColor              = glm::vec3(0.02f, 0.12f, 0.16f);
 constexpr glm::vec3 kWaterTransmissionColor      = glm::vec3(0.72f, 0.92f, 0.98f);
@@ -744,6 +764,25 @@ bool isSwapchainRecreationResult(VkResult result) {
 	return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
 }
 
+VkExtent2D computeRenderExtent(VkExtent2D swapchain_extent, float render_scale) {
+	const float clamped_scale = std::clamp(render_scale, 0.50f, 1.0f);
+	if (swapchain_extent.width == 0 || swapchain_extent.height == 0) {
+		return swapchain_extent;
+	}
+	if (clamped_scale >= 0.999f) {
+		return swapchain_extent;
+	}
+
+	return VkExtent2D{
+	    std::max(1u, static_cast<uint32_t>(
+	                     std::lround(static_cast<double>(swapchain_extent.width) *
+	                                 static_cast<double>(clamped_scale)))),
+	    std::max(1u, static_cast<uint32_t>(
+	                     std::lround(static_cast<double>(swapchain_extent.height) *
+	                                 static_cast<double>(clamped_scale)))),
+	};
+}
+
 void updateRenderDiagnostics(float delta_time_seconds) {
 	frame_timing_history.pushFrame(delta_time_seconds);
 
@@ -766,8 +805,8 @@ void updateRenderDiagnostics(float delta_time_seconds) {
 	render.total_pass_fps =
 	    render.total_pass_time_ms > 1.0e-4f ? 1000.0f / render.total_pass_time_ms : 0.0f;
 	render.frame_sample_count    = static_cast<uint32_t>(frame_timing_history.sample_count);
-	render.render_width          = swapchain_ctx.extent.width;
-	render.render_height         = swapchain_ctx.extent.height;
+	render.render_width          = render_target_ctx.extent.width;
+	render.render_height         = render_target_ctx.extent.height;
 	render.swapchain_image_count = static_cast<uint32_t>(swapchain_ctx.images.size());
 
 	if (ImGui::GetCurrentContext() == nullptr) {
@@ -789,6 +828,15 @@ static std::string toLowerCopy(std::string value) {
 	std::transform(value.begin(), value.end(), value.begin(),
 	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 	return value;
+}
+
+static std::string trimAsciiWhitespace(std::string value) {
+	const size_t first = value.find_first_not_of(" \t\r\n");
+	if (first == std::string::npos) {
+		return {};
+	}
+	const size_t last = value.find_last_not_of(" \t\r\n");
+	return value.substr(first, last - first + 1);
 }
 
 static glm::vec3 transformPoint(const glm::mat4& transform, const glm::vec3& point) {
@@ -859,6 +907,9 @@ static void ensureMeshTransformMetadataSize(size_t mesh_count) {
 	mesh_pose_transforms.resize(mesh_count, glm::mat4(1.0f));
 	mesh_base_transforms.resize(mesh_count, glm::mat4(1.0f));
 	mesh_user_scales.resize(mesh_count, 1.0f);
+	mesh_user_translations.resize(mesh_count, glm::vec3(0.0f));
+	mesh_user_rotations_deg.resize(mesh_count, glm::vec3(0.0f));
+	mesh_user_rotation_pivots.resize(mesh_count, glm::vec3(0.0f));
 	mesh_floating_group_index.resize(mesh_count, -1);
 }
 
@@ -882,13 +933,93 @@ static float meshScaleForTransform(int mesh_index) {
 	return 1.0f;
 }
 
+static glm::vec3 clampVec3(const glm::vec3& value, float min_value, float max_value) {
+	return glm::vec3(std::clamp(value.x, min_value, max_value),
+	                 std::clamp(value.y, min_value, max_value),
+	                 std::clamp(value.z, min_value, max_value));
+}
+
+static glm::mat4 rotationDegreesMatrix(const glm::vec3& rotation_deg) {
+	glm::mat4 rotation(1.0f);
+	rotation = glm::rotate(rotation, glm::radians(rotation_deg.x), glm::vec3(1.0f, 0.0f, 0.0f));
+	rotation = glm::rotate(rotation, glm::radians(rotation_deg.y), glm::vec3(0.0f, 1.0f, 0.0f));
+	rotation = glm::rotate(rotation, glm::radians(rotation_deg.z), glm::vec3(0.0f, 0.0f, 1.0f));
+	return rotation;
+}
+
+static int floatingGroupIndexForMesh(int mesh_index) {
+	if (mesh_index < 0 || mesh_index >= static_cast<int>(mesh_floating_group_index.size())) {
+		return -1;
+	}
+
+	const int floating_group_index = mesh_floating_group_index[mesh_index];
+	return floating_group_index >= 0 &&
+	               floating_group_index < static_cast<int>(floating_mesh_groups.size()) ?
+	           floating_group_index :
+	           -1;
+}
+
+static glm::vec3 meshTranslationForTransform(int mesh_index) {
+	const int floating_group_index = floatingGroupIndexForMesh(mesh_index);
+	if (floating_group_index >= 0 &&
+	    floating_group_index < static_cast<int>(floating_group_user_translations.size())) {
+		return floating_group_user_translations[floating_group_index];
+	}
+
+	if (mesh_index >= 0 && mesh_index < static_cast<int>(mesh_user_translations.size())) {
+		return mesh_user_translations[mesh_index];
+	}
+
+	return glm::vec3(0.0f);
+}
+
+static glm::vec3 meshRotationForTransform(int mesh_index) {
+	const int floating_group_index = floatingGroupIndexForMesh(mesh_index);
+	if (floating_group_index >= 0 &&
+	    floating_group_index < static_cast<int>(floating_group_user_rotations_deg.size())) {
+		return floating_group_user_rotations_deg[floating_group_index];
+	}
+
+	if (mesh_index >= 0 && mesh_index < static_cast<int>(mesh_user_rotations_deg.size())) {
+		return mesh_user_rotations_deg[mesh_index];
+	}
+
+	return glm::vec3(0.0f);
+}
+
+static glm::vec3 meshRotationPivotForTransform(int mesh_index) {
+	if (floatingGroupIndexForMesh(mesh_index) >= 0) {
+		return glm::vec3(0.0f);
+	}
+
+	if (mesh_index >= 0 && mesh_index < static_cast<int>(mesh_user_rotation_pivots.size())) {
+		return mesh_user_rotation_pivots[mesh_index];
+	}
+
+	return glm::vec3(0.0f);
+}
+
+static glm::mat4 meshUserOffsetTransform(int mesh_index) {
+	const glm::vec3 translation =
+	    clampVec3(meshTranslationForTransform(mesh_index), kEditorTranslationMin,
+	              kEditorTranslationMax);
+	const glm::vec3 rotation_deg =
+	    clampVec3(meshRotationForTransform(mesh_index), kEditorRotationMinDeg,
+	              kEditorRotationMaxDeg);
+	const glm::vec3 pivot = meshRotationPivotForTransform(mesh_index);
+
+	return glm::translate(glm::mat4(1.0f), translation) *
+	       glm::translate(glm::mat4(1.0f), pivot) * rotationDegreesMatrix(rotation_deg) *
+	       glm::translate(glm::mat4(1.0f), -pivot);
+}
+
 static glm::mat4 composeMeshTransform(int mesh_index) {
 	if (mesh_index < 0 || mesh_index >= static_cast<int>(mesh_pose_transforms.size()) ||
 	    mesh_index >= static_cast<int>(mesh_base_transforms.size())) {
 		return glm::mat4(1.0f);
 	}
 
-	return mesh_pose_transforms[mesh_index] *
+	return mesh_pose_transforms[mesh_index] * meshUserOffsetTransform(mesh_index) *
 	       glm::scale(glm::mat4(1.0f), glm::vec3(meshScaleForTransform(mesh_index))) *
 	       mesh_base_transforms[mesh_index];
 }
@@ -926,9 +1057,14 @@ static void initializeMeshTransformMetadata(const Scene* scene) {
 	mesh_pose_transforms.clear();
 	mesh_base_transforms.clear();
 	mesh_user_scales.clear();
+	mesh_user_translations.clear();
+	mesh_user_rotations_deg.clear();
+	mesh_user_rotation_pivots.clear();
 	mesh_floating_group_index.clear();
 	floating_mesh_groups.clear();
 	floating_group_user_scales.clear();
+	floating_group_user_translations.clear();
+	floating_group_user_rotations_deg.clear();
 	floating_group_base_settings.clear();
 	floating_simulation_settings.clear();
 	floating_settings_dirty = false;
@@ -951,7 +1087,7 @@ static void initializeMeshTransformMetadata(const Scene* scene) {
 
 static int waterSurfaceObjectId(const Scene* scene) {
 	return (scene != nullptr && water_surface_render_ctx.enabled) ?
-	           static_cast<int>(scene->m_meshes.size()) :
+	           water_surface_render_ctx.mesh_index :
 	           -1;
 }
 
@@ -974,37 +1110,45 @@ static int resolveWaterSurfaceMeshIndex(const Scene* scene) {
 		return -1;
 	}
 
-	const auto name_matches = [&](int mesh_index) {
-		return mesh_index >= 0 && mesh_index < static_cast<int>(scene->m_meshes.size()) &&
-		       scene->m_meshes[mesh_index] != nullptr &&
-		       scene->m_meshes[mesh_index]->m_name == kRequestedPoolWaterMeshName;
+	const auto name_matches = [&](const std::string& mesh_name) {
+		const std::string lowered = toLowerCopy(mesh_name);
+		size_t            start   = 0;
+		while (start <= lowered.size()) {
+			const size_t slash = lowered.find('/', start);
+			std::string  part  = (slash == std::string::npos) ?
+			                         lowered.substr(start) :
+			                         lowered.substr(start, slash - start);
+			part               = trimAsciiWhitespace(part);
+			if (part == kWaterMeshLabel) {
+				return true;
+			}
+			if (slash == std::string::npos) {
+				break;
+			}
+			start = slash + 1;
+		}
+		return false;
 	};
 
-	if (name_matches(kRequestedPoolWaterMeshIndex)) {
-		return kRequestedPoolWaterMeshIndex;
-	}
-
+	int  resolved_mesh_index = -1;
+	bool warned_multi_match  = false;
 	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
-		if (name_matches(mesh_index)) {
-			if (mesh_index != kRequestedPoolWaterMeshIndex) {
-				std::cout << "[WARN] Pool water mesh name matched object " << mesh_index
-				          << " instead of requested object " << kRequestedPoolWaterMeshIndex
-				          << "\n";
-			}
-			return mesh_index;
+		const auto& mesh = scene->m_meshes[mesh_index];
+		if (mesh == nullptr || !name_matches(mesh->m_name)) {
+			continue;
+		}
+		if (resolved_mesh_index < 0) {
+			resolved_mesh_index = mesh_index;
+			continue;
+		}
+		if (!warned_multi_match) {
+			std::cout << "[WARN] Multiple meshes named '" << kWaterMeshLabel
+			          << "' found. Using first match at object " << resolved_mesh_index << "\n";
+			warned_multi_match = true;
 		}
 	}
 
-	if (kRequestedPoolWaterMeshIndex >= 0 &&
-	    kRequestedPoolWaterMeshIndex < static_cast<int>(scene->m_meshes.size()) &&
-	    scene->m_meshes[kRequestedPoolWaterMeshIndex] != nullptr) {
-		std::cout << "[WARN] Falling back to requested pool water mesh index "
-		          << kRequestedPoolWaterMeshIndex << " with unexpected name \""
-		          << scene->m_meshes[kRequestedPoolWaterMeshIndex]->m_name << "\"\n";
-		return kRequestedPoolWaterMeshIndex;
-	}
-
-	return -1;
+	return resolved_mesh_index;
 }
 
 static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
@@ -1014,7 +1158,8 @@ static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene
 	if (mesh_index < 0 || scene == nullptr ||
 	    mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
 	    scene->m_meshes[mesh_index] == nullptr) {
-		std::cout << "[WARN] Unable to resolve pool water mesh placement\n";
+		std::cout << "[WARN] Unable to resolve water mesh placement. "
+		             "Add a mesh named 'water' in the scene.\n";
 		return placement;
 	}
 
@@ -1053,7 +1198,7 @@ static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene
 
 	for (int axis = 0; axis < 3; ++axis) {
 		if (world_axis_scales[axis] <= 1.0e-5f) {
-			std::cout << "[WARN] Pool water mesh has a degenerate transform axis at object "
+			std::cout << "[WARN] Water mesh has a degenerate transform axis at object "
 			          << mesh_index << "\n";
 			return placement;
 		}
@@ -1073,13 +1218,11 @@ static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene
 	}
 
 	const float half_extent_u =
-	    0.5f * local_size[surface_axes[0]] * world_axis_scales[surface_axes[0]] -
-	    kPoolWaterPlanarInsetWorld;
+	    0.5f * local_size[surface_axes[0]] * world_axis_scales[surface_axes[0]];
 	const float half_extent_v =
-	    0.5f * local_size[surface_axes[1]] * world_axis_scales[surface_axes[1]] -
-	    kPoolWaterPlanarInsetWorld;
+	    0.5f * local_size[surface_axes[1]] * world_axis_scales[surface_axes[1]];
 	if (half_extent_u <= 1.0e-4f || half_extent_v <= 1.0e-4f) {
-		std::cout << "[WARN] Pool water mesh produced invalid half-extents for object "
+		std::cout << "[WARN] Water mesh produced invalid half-extents for object "
 		          << mesh_index << "\n";
 		return placement;
 	}
@@ -1088,18 +1231,208 @@ static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene
 	surface_local[normal_axis] =
 	    normal_axis_points_up ? local_max[normal_axis] : local_min[normal_axis];
 	glm::vec3 center_world = transformPoint(transform, surface_local);
-	center_world -= normal * kPoolWaterSurfaceDepthInsetWorld;
+
+	int   corner_vertex_count = 0;
+	float max_l1_span         = 0.0f;
+	for (const GPUVertex& vertex : mesh.gpuVertices) {
+		const glm::vec3 world_position = transformPoint(transform, vertex.position);
+		const glm::vec3 delta          = world_position - center_world;
+		const float     u_norm = std::abs(
+	        glm::dot(delta, axis_u) / std::max(half_extent_u, 1.0e-4f));
+		const float v_norm = std::abs(glm::dot(delta, axis_v) / std::max(half_extent_v, 1.0e-4f));
+		max_l1_span        = std::max(max_l1_span, u_norm + v_norm);
+		if (u_norm > 0.85f && v_norm > 0.85f) {
+			++corner_vertex_count;
+		}
+	}
+
+	const bool  likely_square_boundary = corner_vertex_count >= 4 || max_l1_span > 1.70f;
+	const float min_half_extent        = std::max(std::min(half_extent_u, half_extent_v), 1.0e-4f);
+	const float boundary_inset_world =
+	    std::min(kWaterBoundaryInsetWorld, min_half_extent * 0.25f);
+	const float floating_surface_bounds = std::clamp(
+	    1.0f - boundary_inset_world / min_half_extent, 0.70f, 0.99f);
+	const float floating_boundary_exponent =
+	    likely_square_boundary ? kWaterBoundaryExponentSquare : kWaterBoundaryExponentCircle;
 
 	placement.enabled           = true;
 	placement.mesh_index        = mesh_index;
 	placement.center            = center_world;
-	placement.trace_half_height = kPoolWaterTraceHalfHeightWorld;
+	placement.trace_half_height = kWaterTraceHalfHeightWorld;
 	placement.axis_u            = axis_u;
 	placement.half_extent_u     = half_extent_u;
 	placement.axis_v            = axis_v;
 	placement.half_extent_v     = half_extent_v;
 	placement.normal            = normal;
+	placement.floating_surface_bounds    = floating_surface_bounds;
+	placement.floating_boundary_exponent = floating_boundary_exponent;
 	return placement;
+}
+
+static float signedTriangleArea2D(const glm::vec2& a, const glm::vec2& b, const glm::vec2& c) {
+	return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+}
+
+static void rasterizeTriangleMask(std::vector<float>& mask, uint32_t width, uint32_t height,
+                                  const glm::vec2& p0, const glm::vec2& p1,
+                                  const glm::vec2& p2) {
+	if (width == 0 || height == 0) {
+		return;
+	}
+
+	const float area = signedTriangleArea2D(p0, p1, p2);
+	if (std::abs(area) <= 1.0e-8f) {
+		return;
+	}
+
+	const float min_xf = std::min({p0.x, p1.x, p2.x});
+	const float max_xf = std::max({p0.x, p1.x, p2.x});
+	const float min_yf = std::min({p0.y, p1.y, p2.y});
+	const float max_yf = std::max({p0.y, p1.y, p2.y});
+
+	const int min_x =
+	    std::max(0, static_cast<int>(std::floor(min_xf - 0.5f)));
+	const int max_x =
+	    std::min(static_cast<int>(width) - 1, static_cast<int>(std::ceil(max_xf - 0.5f)));
+	const int min_y =
+	    std::max(0, static_cast<int>(std::floor(min_yf - 0.5f)));
+	const int max_y =
+	    std::min(static_cast<int>(height) - 1, static_cast<int>(std::ceil(max_yf - 0.5f)));
+	if (min_x > max_x || min_y > max_y) {
+		return;
+	}
+
+	const bool positive_area = area > 0.0f;
+	for (int y = min_y; y <= max_y; ++y) {
+		for (int x = min_x; x <= max_x; ++x) {
+			const glm::vec2 sample(static_cast<float>(x) + 0.5f,
+			                       static_cast<float>(y) + 0.5f);
+			const float e0 = signedTriangleArea2D(p1, p2, sample);
+			const float e1 = signedTriangleArea2D(p2, p0, sample);
+			const float e2 = signedTriangleArea2D(p0, p1, sample);
+			const bool  inside =
+			    positive_area ? (e0 >= 0.0f && e1 >= 0.0f && e2 >= 0.0f) :
+			                    (e0 <= 0.0f && e1 <= 0.0f && e2 <= 0.0f);
+			if (!inside) {
+				continue;
+			}
+			mask[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] =
+			    1.0f;
+		}
+	}
+}
+
+static glm::vec2 projectWaterVertexToDomainPixel(const glm::vec3& world_position,
+                                                 const WaterSurfaceRenderPlacement& placement,
+                                                 VkExtent2D extent) {
+	const glm::vec3 delta = world_position - placement.center;
+	const float u = 0.5f * (glm::dot(delta, placement.axis_u) /
+	                            std::max(placement.half_extent_u, 1.0e-4f) +
+	                        1.0f);
+	const float v = 0.5f * (glm::dot(delta, placement.axis_v) /
+	                            std::max(placement.half_extent_v, 1.0e-4f) +
+	                        1.0f);
+	return glm::vec2(u * static_cast<float>(extent.width), v * static_cast<float>(extent.height));
+}
+
+static std::vector<float> buildWaterSurfaceDomainMask(const Scene* scene,
+                                                      const WaterSurfaceRenderPlacement& placement,
+                                                      VkExtent2D extent) {
+	const size_t texel_count = static_cast<size_t>(extent.width) * extent.height;
+	if (texel_count == 0) {
+		return {};
+	}
+
+	std::vector<float> mask(texel_count, 1.0f);
+	if (scene == nullptr || !placement.enabled || placement.mesh_index < 0 ||
+	    placement.mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	    scene->m_meshes[placement.mesh_index] == nullptr) {
+		return mask;
+	}
+
+	mask.assign(texel_count, 0.0f);
+	const Mesh& mesh = *scene->m_meshes[placement.mesh_index];
+
+	if (mesh.gpuVertices.empty()) {
+		return std::vector<float>(texel_count, 1.0f);
+	}
+
+	const auto project_vertex = [&](uint32_t vertex_index) {
+		const glm::vec3 world_position =
+		    transformPoint(mesh.m_transform.m_transform, mesh.gpuVertices[vertex_index].position);
+		return projectWaterVertexToDomainPixel(world_position, placement, extent);
+	};
+
+	bool had_triangle = false;
+	if (!mesh.gpuIndices.empty()) {
+		for (size_t index = 0; index + 2 < mesh.gpuIndices.size(); index += 3) {
+			const uint32_t i0 = mesh.gpuIndices[index + 0];
+			const uint32_t i1 = mesh.gpuIndices[index + 1];
+			const uint32_t i2 = mesh.gpuIndices[index + 2];
+			if (i0 >= mesh.gpuVertices.size() || i1 >= mesh.gpuVertices.size() ||
+			    i2 >= mesh.gpuVertices.size()) {
+				continue;
+			}
+			rasterizeTriangleMask(mask, extent.width, extent.height, project_vertex(i0),
+			                      project_vertex(i1), project_vertex(i2));
+			had_triangle = true;
+		}
+	} else {
+		for (size_t index = 0; index + 2 < mesh.gpuVertices.size(); index += 3) {
+			rasterizeTriangleMask(mask, extent.width, extent.height,
+			                      project_vertex(static_cast<uint32_t>(index + 0)),
+			                      project_vertex(static_cast<uint32_t>(index + 1)),
+			                      project_vertex(static_cast<uint32_t>(index + 2)));
+			had_triangle = true;
+		}
+	}
+
+	if (!had_triangle) {
+		return std::vector<float>(texel_count, 1.0f);
+	}
+
+	size_t active_texels = 0;
+	for (float value : mask) {
+		if (value > 0.5f) {
+			++active_texels;
+		}
+	}
+	if (active_texels == 0) {
+		return std::vector<float>(texel_count, 1.0f);
+	}
+
+	// Dilate one texel to avoid tiny raster gaps around triangle edges.
+	std::vector<float> dilated = mask;
+	for (uint32_t y = 0; y < extent.height; ++y) {
+		for (uint32_t x = 0; x < extent.width; ++x) {
+			const size_t index = static_cast<size_t>(y) * extent.width + x;
+			if (mask[index] > 0.5f) {
+				continue;
+			}
+			bool neighbor_active = false;
+			for (int oy = -1; oy <= 1 && !neighbor_active; ++oy) {
+				for (int ox = -1; ox <= 1; ++ox) {
+					const int nx = static_cast<int>(x) + ox;
+					const int ny = static_cast<int>(y) + oy;
+					if (nx < 0 || ny < 0 || nx >= static_cast<int>(extent.width) ||
+					    ny >= static_cast<int>(extent.height)) {
+						continue;
+					}
+					const size_t neighbor_index =
+					    static_cast<size_t>(ny) * extent.width + static_cast<size_t>(nx);
+					if (mask[neighbor_index] > 0.5f) {
+						neighbor_active = true;
+						break;
+					}
+				}
+			}
+			if (neighbor_active) {
+				dilated[index] = 1.0f;
+			}
+		}
+	}
+
+	return dilated;
 }
 
 static void applyDedicatedWaterMaterial(Scene* scene) {
@@ -1282,6 +1615,15 @@ static void syncFloatingSimulationSettings(simulation::WaterSurfaceSimulation* w
 	water_surface->setFloatingObjects(floating_simulation_settings);
 }
 
+static void syncFloatingSimulationBoundary(simulation::WaterSurfaceSimulation* water_surface) {
+	if (water_surface == nullptr || !water_surface_render_ctx.enabled) {
+		return;
+	}
+	water_surface->setFloatingSurfaceBoundary(
+	    water_surface_render_ctx.floating_surface_bounds,
+	    water_surface_render_ctx.floating_boundary_exponent);
+}
+
 static void addFloatingMeshesFromResources(Scene* scene) {
 	if (scene == nullptr || !water_surface_render_ctx.enabled) {
 		return;
@@ -1340,7 +1682,13 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 		const glm::mat4 pose = makeFloatingWorldPose(settings);
 
 		for (int mesh_index = mesh_start; mesh_index < mesh_end; ++mesh_index) {
-			auto& mesh = scene->m_meshes[mesh_index];
+			floating_simulation_settings.push_back(settings);
+			floating_group_base_settings.push_back(settings);
+			floating_group_user_scales.push_back(1.0f);
+			floating_group_user_translations.push_back(glm::vec3(0.0f));
+			floating_group_user_rotations_deg.push_back(glm::vec3(0.0f));
+			const glm::mat4 pose = makeFloatingWorldPose(settings);
+			auto&           mesh = scene->m_meshes[mesh_index];
 			if (mesh == nullptr) {
 				continue;
 			}
@@ -1351,6 +1699,7 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 			mesh_base_transforms[mesh_index] =
 			    glm::scale(glm::mat4(1.0f), glm::vec3(default_scale)) * centered_transform;
 			mesh_floating_group_index[mesh_index] = static_cast<int>(floating_mesh_groups.size());
+			mesh_user_rotation_pivots[mesh_index] = glm::vec3(0.0f);
 			group.mesh_indices.push_back(mesh_index);
 			writeMeshTransformToSceneAndGpu(scene, mesh_index);
 		}
@@ -1419,12 +1768,10 @@ static float selectedMeshScale() {
 		return 1.0f;
 	}
 
-	if (selected_mesh_index < static_cast<int>(mesh_floating_group_index.size())) {
-		const int floating_group_index = mesh_floating_group_index[selected_mesh_index];
-		if (floating_group_index >= 0 &&
-		    floating_group_index < static_cast<int>(floating_group_user_scales.size())) {
-			return floating_group_user_scales[floating_group_index];
-		}
+	const int floating_group_index = floatingGroupIndexForMesh(selected_mesh_index);
+	if (floating_group_index >= 0 &&
+	    floating_group_index < static_cast<int>(floating_group_user_scales.size())) {
+		return floating_group_user_scales[floating_group_index];
 	}
 
 	if (selected_mesh_index < static_cast<int>(mesh_user_scales.size())) {
@@ -1434,11 +1781,35 @@ static float selectedMeshScale() {
 	return 1.0f;
 }
 
-static void refreshSelectedScaleEditor() {
-	ui::selection_ctx.editor_scale = selectedMeshScale();
+static glm::vec3 selectedMeshTranslation() {
+	const int selected_mesh_index = ui::selection_ctx.selected_mesh_index;
+	if (selected_mesh_index < 0) {
+		return glm::vec3(0.0f);
+	}
+
+	return meshTranslationForTransform(selected_mesh_index);
 }
 
-static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
+static glm::vec3 selectedMeshRotation() {
+	const int selected_mesh_index = ui::selection_ctx.selected_mesh_index;
+	if (selected_mesh_index < 0) {
+		return glm::vec3(0.0f);
+	}
+
+	return meshRotationForTransform(selected_mesh_index);
+}
+
+static void refreshSelectedTransformEditor() {
+	ui::selection_ctx.editor_scale        = selectedMeshScale();
+	ui::selection_ctx.editor_translation  = selectedMeshTranslation();
+	ui::selection_ctx.editor_rotation_deg = selectedMeshRotation();
+}
+
+static bool vec3NearlyEqual(const glm::vec3& a, const glm::vec3& b, float epsilon = 1.0e-4f) {
+	return glm::length(a - b) <= epsilon;
+}
+
+static bool applySelectedTransformEditor(Scene* scene, VmaAllocator allocator) {
 	if (scene == nullptr) {
 		return false;
 	}
@@ -1446,53 +1817,82 @@ static bool applySelectedScaleEditor(Scene* scene, VmaAllocator allocator) {
 	const int selected_mesh_index = ui::selection_ctx.selected_mesh_index;
 	if (selected_mesh_index < 0 ||
 	    selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
-		ui::selection_ctx.editor_scale = 1.0f;
+		ui::selection_ctx.editor_scale        = 1.0f;
+		ui::selection_ctx.editor_translation  = glm::vec3(0.0f);
+		ui::selection_ctx.editor_rotation_deg = glm::vec3(0.0f);
 		return false;
 	}
 
-	const float clamped_scale      = std::clamp(ui::selection_ctx.editor_scale, 0.10f, 3.00f);
-	ui::selection_ctx.editor_scale = clamped_scale;
+	const float     clamped_scale = std::clamp(ui::selection_ctx.editor_scale, 0.10f, 3.00f);
+	const glm::vec3 clamped_translation =
+	    clampVec3(ui::selection_ctx.editor_translation, kEditorTranslationMin,
+	              kEditorTranslationMax);
+	const glm::vec3 clamped_rotation =
+	    clampVec3(ui::selection_ctx.editor_rotation_deg, kEditorRotationMinDeg,
+	              kEditorRotationMaxDeg);
+	ui::selection_ctx.editor_scale        = clamped_scale;
+	ui::selection_ctx.editor_translation  = clamped_translation;
+	ui::selection_ctx.editor_rotation_deg = clamped_rotation;
 
 	std::vector<int> mesh_indices_to_update;
-	if (selected_mesh_index < static_cast<int>(mesh_floating_group_index.size())) {
-		const int floating_group_index = mesh_floating_group_index[selected_mesh_index];
-		if (floating_group_index >= 0 &&
-		    floating_group_index < static_cast<int>(floating_mesh_groups.size()) &&
-		    floating_group_index < static_cast<int>(floating_group_user_scales.size())) {
-			if (std::abs(floating_group_user_scales[floating_group_index] - clamped_scale) <=
-			    1.0e-4f) {
-				return false;
-			}
+	const int        floating_group_index = floatingGroupIndexForMesh(selected_mesh_index);
+	if (floating_group_index >= 0 &&
+	    floating_group_index < static_cast<int>(floating_mesh_groups.size()) &&
+	    floating_group_index < static_cast<int>(floating_group_user_scales.size()) &&
+	    floating_group_index < static_cast<int>(floating_group_user_translations.size()) &&
+	    floating_group_index < static_cast<int>(floating_group_user_rotations_deg.size())) {
+		const bool scale_changed =
+		    std::abs(floating_group_user_scales[floating_group_index] - clamped_scale) > 1.0e-4f;
+		const bool translation_changed =
+		    !vec3NearlyEqual(floating_group_user_translations[floating_group_index],
+		                     clamped_translation);
+		const bool rotation_changed =
+		    !vec3NearlyEqual(floating_group_user_rotations_deg[floating_group_index],
+		                     clamped_rotation);
+		if (!scale_changed && !translation_changed && !rotation_changed) {
+			return false;
+		}
 
-			floating_group_user_scales[floating_group_index] = clamped_scale;
-			mesh_indices_to_update = floating_mesh_groups[floating_group_index].mesh_indices;
+		floating_group_user_scales[floating_group_index]        = clamped_scale;
+		floating_group_user_translations[floating_group_index]  = clamped_translation;
+		floating_group_user_rotations_deg[floating_group_index] = clamped_rotation;
+		mesh_indices_to_update = floating_mesh_groups[floating_group_index].mesh_indices;
 
-			const int simulation_index =
-			    floating_mesh_groups[floating_group_index].simulation_index;
-			if (simulation_index >= 0 &&
-			    simulation_index < static_cast<int>(floating_simulation_settings.size()) &&
-			    floating_group_index < static_cast<int>(floating_group_base_settings.size())) {
-				simulation::FloatingObjectSettings scaled_settings =
-				    floating_group_base_settings[floating_group_index];
-				scaled_settings.size *= clamped_scale;
-				scaled_settings.mass *= clamped_scale * clamped_scale * clamped_scale;
-				scaled_settings.drift_radius *= std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
-				scaled_settings.waterline_offset *= clamped_scale;
-				floating_simulation_settings[simulation_index] = scaled_settings;
-				floating_settings_dirty                        = true;
-			}
+		const int simulation_index = floating_mesh_groups[floating_group_index].simulation_index;
+		if (scale_changed && simulation_index >= 0 &&
+		    simulation_index < static_cast<int>(floating_simulation_settings.size()) &&
+		    floating_group_index < static_cast<int>(floating_group_base_settings.size())) {
+			simulation::FloatingObjectSettings scaled_settings =
+			    floating_group_base_settings[floating_group_index];
+			scaled_settings.size *= clamped_scale;
+			scaled_settings.mass *= clamped_scale * clamped_scale * clamped_scale;
+			scaled_settings.drift_radius *= std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
+			scaled_settings.waterline_offset *= clamped_scale;
+			floating_simulation_settings[simulation_index] = scaled_settings;
+			floating_settings_dirty                        = true;
 		}
 	}
 
 	if (mesh_indices_to_update.empty()) {
-		if (selected_mesh_index >= static_cast<int>(mesh_user_scales.size())) {
-			return false;
-		}
-		if (std::abs(mesh_user_scales[selected_mesh_index] - clamped_scale) <= 1.0e-4f) {
+		if (selected_mesh_index >= static_cast<int>(mesh_user_scales.size()) ||
+		    selected_mesh_index >= static_cast<int>(mesh_user_translations.size()) ||
+		    selected_mesh_index >= static_cast<int>(mesh_user_rotations_deg.size())) {
 			return false;
 		}
 
-		mesh_user_scales[selected_mesh_index] = clamped_scale;
+		const bool scale_changed =
+		    std::abs(mesh_user_scales[selected_mesh_index] - clamped_scale) > 1.0e-4f;
+		const bool translation_changed =
+		    !vec3NearlyEqual(mesh_user_translations[selected_mesh_index], clamped_translation);
+		const bool rotation_changed =
+		    !vec3NearlyEqual(mesh_user_rotations_deg[selected_mesh_index], clamped_rotation);
+		if (!scale_changed && !translation_changed && !rotation_changed) {
+				return false;
+			}
+
+		mesh_user_scales[selected_mesh_index]        = clamped_scale;
+		mesh_user_translations[selected_mesh_index]  = clamped_translation;
+		mesh_user_rotations_deg[selected_mesh_index] = clamped_rotation;
 		mesh_indices_to_update.push_back(selected_mesh_index);
 	}
 
@@ -1607,15 +2007,23 @@ void Runtime::createSwapchainResources() {
 
 	create_overlay_render_pass();
 
+	render_target_ctx.extent =
+	    computeRenderExtent(swapchain_ctx.extent, overlay_ctx.controls.render_scale);
+	std::vector<float> water_domain_mask =
+	    buildWaterSurfaceDomainMask(m_scene.get(), water_surface_render_ctx, render_target_ctx.extent);
 	m_water_surface =
 	    std::make_unique<simulation::WaterSurfaceSimulation>(simulation::WaterSurfaceCreateInfo{
 	        .device        = vulkan_ctx.device,
 	        .allocator     = render_target_ctx.allocator,
-	        .output_extent = swapchain_ctx.extent,
+	        .output_extent = render_target_ctx.extent,
+	        .domain_mask   = std::move(water_domain_mask),
 	    });
+	syncFloatingSimulationBoundary(m_water_surface.get());
 	syncFloatingSimulationSettings(m_water_surface.get());
 	m_water_surface->requestObjectReset();
-	std::cout << "[INFO] Created water surface simulation resources\n";
+	std::cout << "[INFO] Created water surface simulation resources at "
+	          << render_target_ctx.extent.width << "x" << render_target_ctx.extent.height
+	          << "\n";
 }
 
 void Runtime::destroySwapchainResources() {
@@ -1645,6 +2053,67 @@ static void transition_layout(VkCommandBuffer, VkImage, VkImageLayout, VkImageLa
                               VkAccessFlags, VkPipelineStageFlags, VkPipelineStageFlags);
 static VkCommandBuffer begin_one_time_cmd(VkDevice, VkCommandPool);
 static void            end_one_time_cmd(VkDevice, VkCommandPool, VkQueue, VkCommandBuffer);
+static void copyNaiveHistoryImages(VkCommandBuffer cmd) {
+	if (render_target_ctx.accum_image == VK_NULL_HANDLE ||
+	    render_target_ctx.accum_history_image == VK_NULL_HANDLE ||
+	    render_target_ctx.object_id_image == VK_NULL_HANDLE ||
+	    render_target_ctx.object_id_history_image == VK_NULL_HANDLE) {
+		return;
+	}
+
+	transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+	transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+	transition_layout(cmd, render_target_ctx.accum_history_image, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+	transition_layout(cmd, render_target_ctx.object_id_history_image, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+	VkImageCopy copy_region{};
+	copy_region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	copy_region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	copy_region.extent = {render_target_ctx.extent.width, render_target_ctx.extent.height, 1};
+
+	vkCmdCopyImage(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	               render_target_ctx.accum_history_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+	               &copy_region);
+	vkCmdCopyImage(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	               render_target_ctx.object_id_history_image,
+	               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+
+	transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	                  VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_READ_BIT,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	transition_layout(cmd, render_target_ctx.object_id_image,
+	                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_ACCESS_TRANSFER_READ_BIT,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	transition_layout(cmd, render_target_ctx.accum_history_image,
+	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_ACCESS_TRANSFER_WRITE_BIT,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	transition_layout(cmd, render_target_ctx.object_id_history_image,
+	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_ACCESS_TRANSFER_WRITE_BIT,
+	                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+}
 
 void Runtime::recreateSwapchainResources() {
 	uint32_t framebuffer_width  = m_window->width();
@@ -1689,7 +2158,7 @@ void Runtime::recreateSwapchainResources() {
 		}
 	}
 
-	// Recreate pathtracer storage/accum/object_id images at the new swapchain extent
+	// Recreate pathtracer storage/accum/object_id (+ history) images at the current render extent.
 	VmaAllocator allocator = render_target_ctx.allocator;
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.storage_image,
@@ -1697,10 +2166,16 @@ void Runtime::recreateSwapchainResources() {
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
 	                render_target_ctx.object_id_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_history_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_history_image,
+	                render_target_ctx.object_id_history_image_alloc);
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_history_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_history_image,
+	                render_target_ctx.accum_history_image_alloc);
 
-	const VkExtent3D new_ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
+	const VkExtent3D new_ext = {render_target_ctx.extent.width, render_target_ctx.extent.height, 1};
 
 	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat fmt,
 	                        VkImageUsageFlags extra) {
@@ -1722,9 +2197,14 @@ void Runtime::recreateSwapchainResources() {
 	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
 	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
-	             VK_FORMAT_R32_SINT, 0);
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_history_image,
+	             render_target_ctx.object_id_history_image_alloc, VK_FORMAT_R32_SINT,
+	             VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	             VK_FORMAT_R8G8B8A8_UNORM, 0);
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_history_image, render_target_ctx.accum_history_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
 	render_target_ctx.storage_image_view = create_image_view(
 	    vulkan_ctx.device, render_target_ctx.storage_image, VK_FORMAT_R8G8B8A8_UNORM,
@@ -1732,24 +2212,39 @@ void Runtime::recreateSwapchainResources() {
 	render_target_ctx.object_id_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
 	                      VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.object_id_history_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_history_image,
+	                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D,
+	                      VK_IMAGE_ASPECT_COLOR_BIT);
 	render_target_ctx.accum_image_view = create_image_view(
 	    vulkan_ctx.device, render_target_ctx.accum_image, VK_FORMAT_R8G8B8A8_UNORM,
 	    VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT);
+	render_target_ctx.accum_history_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_history_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D,
+	                      VK_IMAGE_ASPECT_COLOR_BIT);
 
-	// Transition object_id and accum → GENERAL so the shader can read/write them
+	// Transition object_id/accum (+ history) → GENERAL so the shader can read/write them.
 	{
 		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
 		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.object_id_history_image,
+		                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+		                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_history_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
 		                 cmd);
 	}
 
-	// Update descriptor set bindings 0 (output), 1 (accum), 13 (object_id)
+	// Update descriptor set bindings 0 (output), 1 (accum), 13 (object_id), 22/23 (history).
 	{
 		VkDescriptorImageInfo out_img{};
 		out_img.imageView   = render_target_ctx.storage_image_view;
@@ -1760,7 +2255,13 @@ void Runtime::recreateSwapchainResources() {
 		VkDescriptorImageInfo object_id_img{};
 		object_id_img.imageView   = render_target_ctx.object_id_image_view;
 		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-		VkWriteDescriptorSet writes[3]{};
+		VkDescriptorImageInfo accum_history_img{};
+		accum_history_img.imageView   = render_target_ctx.accum_history_image_view;
+		accum_history_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_history_img{};
+		object_id_history_img.imageView   = render_target_ctx.object_id_history_image_view;
+		object_id_history_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkWriteDescriptorSet writes[5]{};
 		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
@@ -1785,7 +2286,23 @@ void Runtime::recreateSwapchainResources() {
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &object_id_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+		writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             22,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &accum_history_img};
+		writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             23,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_history_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 5, writes, 0, nullptr);
 	}
 	updateWaterSurfaceImageDescriptors(m_water_surface.get());
 	updateWaterSurfaceParamsBuffer(m_scene.get(), m_water_surface.get());
@@ -2029,8 +2546,14 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
 	                render_target_ctx.object_id_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_history_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_history_image,
+	                render_target_ctx.object_id_history_image_alloc);
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_history_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_history_image,
+	                render_target_ctx.accum_history_image_alloc);
 
 	// -- Rebuild swapchain --
 	vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
@@ -2088,8 +2611,13 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
 	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_history_image,
+	             render_target_ctx.object_id_history_image_alloc, VK_FORMAT_R32_SINT,
+	             VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	             VK_FORMAT_R8G8B8A8_UNORM, 0);
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_history_image, render_target_ctx.accum_history_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
 	render_target_ctx.storage_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
@@ -2097,8 +2625,14 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	render_target_ctx.object_id_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
 	                      VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.object_id_history_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_history_image,
+	                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
 	render_target_ctx.accum_image_view =
 	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.accum_history_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_history_image,
 	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 
 	// Transition accum → GENERAL
@@ -2107,9 +2641,17 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.object_id_history_image,
+		                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+		                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_history_image,
+		                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+		                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
 		                 cmd);
 	}
@@ -2125,8 +2667,14 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		VkDescriptorImageInfo accum_img{};
 		accum_img.imageView   = render_target_ctx.accum_image_view;
 		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo accum_history_img{};
+		accum_history_img.imageView   = render_target_ctx.accum_history_image_view;
+		accum_history_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_history_img{};
+		object_id_history_img.imageView   = render_target_ctx.object_id_history_image_view;
+		object_id_history_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-		VkWriteDescriptorSet writes[3]{};
+		VkWriteDescriptorSet writes[5]{};
 		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		             nullptr,
 		             render_target_ctx.descriptor_set,
@@ -2151,7 +2699,23 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 		             1,
 		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 		             &accum_img};
-		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
+		writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             22,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &accum_history_img};
+		writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             23,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_history_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 5, writes, 0, nullptr);
 	}
 
 	// Reset sync semaphores if the swapchain image count changed
@@ -2880,6 +3444,10 @@ static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
 	if (scene_key == "pool") {
 		return "resources/scenes/poolHouse/poolHouse_optimized.glb";
 	}
+	if (scene_key == "pool_and_water" || scene_key == "poolandwater" ||
+	    scene_key == "inflatable_pool" || scene_key == "inflatablepool") {
+		return "resources/scenes/inflatable_pool/pool_and_water.glb";
+	}
 	if (scene_key == "chess") {
 		return "resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb";
 	}
@@ -2898,8 +3466,8 @@ static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
 	if (ext != ".gltf" && ext != ".glb") {
 		throw std::runtime_error(
 		    "unknown scene alias '" + scene_argument +
-		    "'. Use one of: pool, chess, cornell, cornellsimple, sponza, or provide a .gltf/.glb "
-		    "file path.");
+		    "'. Use one of: pool, pool_and_water, chess, cornell, cornellsimple, sponza, or "
+		    "provide a .gltf/.glb file path.");
 	}
 
 	std::error_code ec;
@@ -3064,7 +3632,10 @@ Runtime::Runtime(const std::string& scene_argument) {
 	// === VI. Render target images
 	// ========================================
 	{
-		VkExtent3D ext = {(uint32_t) m_window->width(), (uint32_t) m_window->height(), 1};
+		if (render_target_ctx.extent.width == 0 || render_target_ctx.extent.height == 0) {
+			render_target_ctx.extent = swapchain_ctx.extent;
+		}
+		VkExtent3D ext = {render_target_ctx.extent.width, render_target_ctx.extent.height, 1};
 		auto       make_storage_image = [&](VkImage& img, VmaAllocation& a, VkFormat format,
 		                                    VkImageUsageFlags extra) {
 			VkImageCreateInfo ii{};
@@ -3105,16 +3676,28 @@ Runtime::Runtime(const std::string& scene_argument) {
 		make_storage_image(render_target_ctx.object_id_image,
 		                   render_target_ctx.object_id_image_alloc, VK_FORMAT_R32_SINT,
 		                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+		make_storage_image(render_target_ctx.object_id_history_image,
+		                   render_target_ctx.object_id_history_image_alloc, VK_FORMAT_R32_SINT,
+		                   VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 		make_storage_image(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-		                   VK_FORMAT_R8G8B8A8_UNORM, 0);
+		                   VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+		make_storage_image(render_target_ctx.accum_history_image,
+		                   render_target_ctx.accum_history_image_alloc, VK_FORMAT_R8G8B8A8_UNORM,
+		                   VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 		render_target_ctx.storage_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
 		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 		render_target_ctx.object_id_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image,
 		                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
+		render_target_ctx.object_id_history_image_view =
+		    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_history_image,
+		                      VK_FORMAT_R32_SINT, VK_IMAGE_VIEW_TYPE_2D);
 		render_target_ctx.accum_image_view =
 		    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+		render_target_ctx.accum_history_image_view =
+		    create_image_view(vulkan_ctx.device, render_target_ctx.accum_history_image,
 		                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 		make_dummy(VK_IMAGE_TYPE_2D, {1, 1, 1}, render_target_ctx.dummy_image_2d,
 		           render_target_ctx.dummy_image_2d_alloc);
@@ -3165,14 +3748,15 @@ Runtime::Runtime(const std::string& scene_argument) {
 		cam_alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 		VkBufferCreateInfo cam_buf_info{};
 		cam_buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		cam_buf_info.size  = sizeof(GPUCamera);
+		cam_buf_info.size  = sizeof(GPUCamera) * 2u;
 		cam_buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 		VmaAllocationInfo cam_info;
 		vmaCreateBuffer(allocator, &cam_buf_info, &cam_alloc_info, &scene_ctx.camera_buffer,
 		                &scene_ctx.camera_alloc, &cam_info);
 		scene_ctx.camera_mapped = cam_info.pMappedData;
 		GPUCamera initial_cam   = m_scene->m_camera.pack();
-		memcpy(scene_ctx.camera_mapped, &initial_cam, sizeof(GPUCamera));
+		GPUCamera initial_cameras[2] = {initial_cam, initial_cam};
+		memcpy(scene_ctx.camera_mapped, initial_cameras, sizeof(initial_cameras));
 		std::vector<GPUMaterial> gms;
 
 		for (auto& mesh : m_scene->m_meshes)
@@ -3324,6 +3908,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 	//  19  = water params            STORAGE_BUFFER
 	//  20  = water height            STORAGE_IMAGE
 	//  21  = water previous height   STORAGE_IMAGE
+	//  22  = accum history           STORAGE_IMAGE
+	//  23  = object-id history       STORAGE_IMAGE
 	{
 		std::vector<VkDescriptorSetLayoutBinding> bindings = {
 		    make_binding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
@@ -3347,6 +3933,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 		    make_binding(19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
 		    make_binding(20, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
 		    make_binding(21, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+		    make_binding(22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+		    make_binding(23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
 		};
 		if (as_ctx.tlas != VK_NULL_HANDLE)
 			bindings.push_back(make_binding(5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
@@ -3361,7 +3949,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 	}
 	{
 		std::vector<VkDescriptorPoolSize> ps = {
-		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5},
+		    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 7},
 		    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11},
 		    {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
 		    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * NUM_LUTS + MAX_MATERIAL_TEXTURES},
@@ -3437,6 +4025,18 @@ Runtime::Runtime(const std::string& scene_argument) {
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 13, 0, 1,
 		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &object_id_info});
+		VkDescriptorImageInfo accum_history_info{};
+		accum_history_info.imageView   = render_target_ctx.accum_history_image_view;
+		accum_history_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 22, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &accum_history_info});
+		VkDescriptorImageInfo object_id_history_info{};
+		object_id_history_info.imageView   = render_target_ctx.object_id_history_image_view;
+		object_id_history_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+		                  render_target_ctx.descriptor_set, 23, 0, 1,
+		                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &object_id_history_info});
 		VkDescriptorBufferInfo cb{scene_ctx.camera_buffer, 0, VK_WHOLE_SIZE};
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
 		                  render_target_ctx.descriptor_set, 2, 0, 1,
@@ -3637,9 +4237,17 @@ Runtime::Runtime(const std::string& scene_argument) {
 		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.object_id_history_image,
+		                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+		                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
 		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_history_image,
+		                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+		                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
 		                 cmd);
 		std::cout << "[INFO] Accum image → GENERAL\n";
@@ -3779,6 +4387,18 @@ Runtime::~Runtime() {
 		render_target_ctx.object_id_image       = VK_NULL_HANDLE;
 		render_target_ctx.object_id_image_alloc = VK_NULL_HANDLE;
 	}
+	if (render_target_ctx.object_id_history_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_history_image_view,
+		                   nullptr);
+		render_target_ctx.object_id_history_image_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.object_id_history_image != VK_NULL_HANDLE &&
+	    render_target_ctx.object_id_history_image_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.object_id_history_image,
+		                render_target_ctx.object_id_history_image_alloc);
+		render_target_ctx.object_id_history_image       = VK_NULL_HANDLE;
+		render_target_ctx.object_id_history_image_alloc = VK_NULL_HANDLE;
+	}
 	if (render_target_ctx.accum_image_view != VK_NULL_HANDLE) {
 		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
 		render_target_ctx.accum_image_view = VK_NULL_HANDLE;
@@ -3789,6 +4409,17 @@ Runtime::~Runtime() {
 		                render_target_ctx.accum_image_alloc);
 		render_target_ctx.accum_image       = VK_NULL_HANDLE;
 		render_target_ctx.accum_image_alloc = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.accum_history_image_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_history_image_view, nullptr);
+		render_target_ctx.accum_history_image_view = VK_NULL_HANDLE;
+	}
+	if (render_target_ctx.accum_history_image != VK_NULL_HANDLE &&
+	    render_target_ctx.accum_history_image_alloc != VK_NULL_HANDLE) {
+		vmaDestroyImage(render_target_ctx.allocator, render_target_ctx.accum_history_image,
+		                render_target_ctx.accum_history_image_alloc);
+		render_target_ctx.accum_history_image       = VK_NULL_HANDLE;
+		render_target_ctx.accum_history_image_alloc = VK_NULL_HANDLE;
 	}
 	if (render_target_ctx.water_surface_params_buffer != VK_NULL_HANDLE &&
 	    render_target_ctx.water_surface_params_alloc != VK_NULL_HANDLE) {
@@ -3986,6 +4617,7 @@ void Runtime::MainLoop() {
 
 	double   last_time    = glfwGetTime();
 	uint32_t frame_number = 0;
+	GPUCamera previous_gpu_camera = fly_cam.pack();
 
 	// Visibility pass must run before the first path-trace dispatch and
 	// whenever the camera moves, resizes, or a new object is selected.
@@ -3998,6 +4630,10 @@ void Runtime::MainLoop() {
 	ui::RenderDebugViewMode last_render_mode       = ui::selection_ctx.debug_view_mode;
 	bool                    show_all_gui           = true;
 	bool                    show_selection_panel   = true;
+	bool 				  	last_water_paused      = overlay_ctx.controls.water_paused;
+	float                   applied_render_scale =
+	    std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
+	overlay_ctx.controls.render_scale = applied_render_scale;
 
 	// One-shot key-press trackers
 	int prev_f6  = GLFW_RELEASE;
@@ -4059,7 +4695,7 @@ void Runtime::MainLoop() {
 		    buildAudioInputFrame(m_microphone.get(), time_seconds);
 
 		const auto update_water_and_floaters = [&](float water_audio_level) {
-			if (m_water_surface != nullptr) {
+			if (m_water_surface != nullptr && !overlay_ctx.controls.water_paused) {
 				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
 				    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
 			}
@@ -4072,6 +4708,7 @@ void Runtime::MainLoop() {
 		}
 		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 		applyOverlayLevel(audio_level);
+		syncFloatingSimulationBoundary(m_water_surface.get());
 		update_water_and_floaters(water_audio_level);
 
 		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
@@ -4086,6 +4723,28 @@ void Runtime::MainLoop() {
 		if (show_all_gui && overlay_ctx.show_control_panel) {
 			controls_changed = ui::drawAudienceControlPanel(
 			    &overlay_ctx.show_control_panel, overlay_ctx.controls, overlay_ctx.diagnostics);
+		}
+		const float clamped_render_scale =
+		    std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
+		if (std::abs(clamped_render_scale - overlay_ctx.controls.render_scale) > 1.0e-4f) {
+			overlay_ctx.controls.render_scale = clamped_render_scale;
+			controls_changed                  = true;
+		}
+		if (std::abs(clamped_render_scale - applied_render_scale) > 1.0e-4f) {
+			applied_render_scale = clamped_render_scale;
+			recreateSwapchainResources();
+			frame_number           = 0;
+			needs_visibility_pass  = true;
+			hipr_force_clear_order = true;
+			reset_hipr_object_sampling();
+			continue;
+		}
+		if (overlay_ctx.controls.water_paused != last_water_paused) {
+			frame_number           = 0;
+			needs_visibility_pass  = true;
+			hipr_force_clear_order = true;
+			last_water_paused      = overlay_ctx.controls.water_paused;
+			reset_hipr_object_sampling();
 		}
 
 		ui::SelectionPanelResult selection_panel_result{};
@@ -4144,6 +4803,7 @@ void Runtime::MainLoop() {
 			}
 			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 			applyOverlayLevel(audio_level);
+			syncFloatingSimulationBoundary(m_water_surface.get());
 			update_water_and_floaters(updated_water_audio_level);
 		}
 
@@ -4163,7 +4823,7 @@ void Runtime::MainLoop() {
 			restart_hipr_object_sampling();
 		}
 		if (selection_panel_result.transform_changed) {
-			if (applySelectedScaleEditor(m_scene.get(), render_target_ctx.allocator)) {
+			if (applySelectedTransformEditor(m_scene.get(), render_target_ctx.allocator)) {
 				frame_number           = 0;
 				needs_visibility_pass  = true;
 				hipr_force_clear_order = true;
@@ -4182,7 +4842,7 @@ void Runtime::MainLoop() {
 			needs_visibility_pass  = true;
 			material_edit_mode     = false;
 			hipr_force_clear_order = true;
-			refreshSelectedScaleEditor();
+			refreshSelectedTransformEditor();
 			reset_hipr_object_sampling();
 		}
 		if (selection_panel_result.hipr_settings_changed) {
@@ -4312,6 +4972,10 @@ void Runtime::MainLoop() {
 
 		// Upload camera to GPU (persistent mapping – no staging needed)
 		const GPUCamera gpu_camera = fly_cam.pack();
+		GPUCamera       previous_for_upload = previous_gpu_camera;
+		if (frame_number == 0u) {
+			previous_for_upload = gpu_camera;
+		}
 
 		const int current_lmb = glfwGetMouseButton(m_window->handle(), GLFW_MOUSE_BUTTON_LEFT);
 		if (current_lmb == GLFW_PRESS && prev_lmb == GLFW_RELEASE && !fly_cam.isMouseCaptured() &&
@@ -4322,13 +4986,15 @@ void Runtime::MainLoop() {
 				frame_number          = 0;
 				needs_visibility_pass = true;
 				material_edit_mode    = false;
-				refreshSelectedScaleEditor();
+				refreshSelectedTransformEditor();
 				reset_hipr_object_sampling();
 			}
 		}
 		prev_lmb = current_lmb;
 
-		memcpy(scene_ctx.camera_mapped, &gpu_camera, sizeof(GPUCamera));
+		GPUCamera gpu_cameras[2] = {gpu_camera, previous_for_upload};
+		memcpy(scene_ctx.camera_mapped, gpu_cameras, sizeof(gpu_cameras));
+		previous_gpu_camera = gpu_camera;
 
 		const auto       active_render_mode = ui::selection_ctx.debug_view_mode;
 		const VkPipeline active_pipeline =
@@ -4456,7 +5122,8 @@ void Runtime::MainLoop() {
 			vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			                    gpu_timing_ctx.query_pool, 0);
 		}
-		if (m_water_surface != nullptr) {
+		if (m_water_surface != nullptr &&
+		    (!overlay_ctx.controls.water_paused || !m_water_surface->hasRecordedFrame())) {
 			m_water_surface->record(cmd);
 			updateWaterSurfaceImageDescriptors(m_water_surface.get());
 		}
@@ -4479,6 +5146,15 @@ void Runtime::MainLoop() {
 		                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
+		const auto current_render_mode = ui::selection_ctx.debug_view_mode;
+		const bool mode_uses_temporal_history =
+		    current_render_mode == ui::RenderDebugViewMode::Naive ||
+		    current_render_mode == ui::RenderDebugViewMode::HiPR ||
+		    current_render_mode == ui::RenderDebugViewMode::HiPRVis;
+		if (mode_uses_temporal_history && frame_number > 0u) {
+			copyNaiveHistoryImages(cmd);
+		}
+
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, active_pipeline);
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout, 0,
 		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
@@ -4487,7 +5163,10 @@ void Runtime::MainLoop() {
 			                    gpu_timing_ctx.query_pool, 2);
 		}
 
-		if (needs_visibility_pass) {
+		const bool hold_naive_pause_accumulation =
+		    overlay_ctx.controls.water_paused &&
+		    ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::Naive;
+		if (needs_visibility_pass && !hold_naive_pause_accumulation) {
 			frame_number = 0;
 		}
 
@@ -4513,8 +5192,11 @@ void Runtime::MainLoop() {
 		pc.hipr_clear_order      = hipr_force_clear_order ? 1u : 0u;
 		pc.hipr_vis_enable_tint  = ui::selection_ctx.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
 		pc.hipr_vis_rainbow_tint = ui::selection_ctx.hipr_debug.vis_rainbow_tint ? 1u : 0u;
-		pc.hipr_reserved0 =
-		    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u);
+		const uint32_t water_spp_override =
+		    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u) &
+		    kWaterSppMask;
+		pc.hipr_reserved0 = water_spp_override |
+		                    (overlay_ctx.controls.water_paused ? kWaterPauseBit : 0u);
 		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
@@ -4532,8 +5214,8 @@ void Runtime::MainLoop() {
 		}
 		pc.sun_intensity = ui::selection_ctx.lighting.sun_intensity;
 
-		const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
-		const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;
+		const uint32_t dispatch_w = (render_target_ctx.extent.width + 15) / 16;
+		const uint32_t dispatch_h = (render_target_ctx.extent.height + 15) / 16;
 
 		const auto render_mode   = ui::selection_ctx.debug_view_mode;
 		const bool hipr_mode     = render_mode == ui::RenderDebugViewMode::HiPR;
@@ -4561,7 +5243,8 @@ void Runtime::MainLoop() {
 				pc.hipr_clear_order       = 0u;
 				pc.hipr_vis_enable_tint   = 0u;
 				pc.hipr_vis_rainbow_tint  = 0u;
-				pc.hipr_reserved0         = 0u;
+				pc.hipr_reserved0         =
+				    overlay_ctx.controls.water_paused ? kWaterPauseBit : 0u;
 				pc.hipr_frames_per_object = 0u;
 				pc.hipr_score_blend       = 0.0f;
 				pc.hipr_vis_tint_strength = 0.0f;
@@ -4825,8 +5508,8 @@ void Runtime::MainLoop() {
 		blit_region.srcSubresource.baseArrayLayer = 0;
 		blit_region.srcSubresource.layerCount     = 1;
 		blit_region.srcOffsets[0]                 = {0, 0, 0};
-		blit_region.srcOffsets[1] = {static_cast<int32_t>(swapchain_ctx.extent.width),
-		                             static_cast<int32_t>(swapchain_ctx.extent.height), 1};
+		blit_region.srcOffsets[1] = {static_cast<int32_t>(render_target_ctx.extent.width),
+		                             static_cast<int32_t>(render_target_ctx.extent.height), 1};
 
 		blit_region.dstSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
 		blit_region.dstSubresource.mipLevel       = 0;
@@ -4836,9 +5519,14 @@ void Runtime::MainLoop() {
 		blit_region.dstOffsets[1] = {static_cast<int32_t>(swapchain_ctx.extent.width),
 		                             static_cast<int32_t>(swapchain_ctx.extent.height), 1};
 
+		const VkFilter present_filter =
+		    (render_target_ctx.extent.width == swapchain_ctx.extent.width &&
+		     render_target_ctx.extent.height == swapchain_ctx.extent.height) ?
+		        VK_FILTER_NEAREST :
+		        VK_FILTER_LINEAR;
 		vkCmdBlitImage(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		               swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-		               &blit_region, VK_FILTER_NEAREST);
+		               &blit_region, present_filter);
 
 		render_target_ctx.storage_image_initialized  = true;
 		swapchain_ctx.image_initialized[image_index] = true;

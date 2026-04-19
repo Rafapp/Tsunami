@@ -39,11 +39,14 @@ struct WaterPushConstantsRaw {
 };
 
 struct FloatingObjectPushConstantsRaw {
-	float    time_seconds          = 0.0f;
-	float    delta_time            = 1.0f / 60.0f;
-	float    height_to_world_scale = 1.0f;
-	uint32_t object_count          = 0;
-	uint32_t reset_requested       = 0;
+	float    time_seconds           = 0.0f;
+	float    delta_time             = 1.0f / 60.0f;
+	float    height_to_world_scale  = 1.0f;
+	float    surface_bounds         = 0.94f;
+	float    boundary_shape_exponent = 2.0f;
+	uint32_t object_count           = 0;
+	uint32_t reset_requested        = 0;
+	uint32_t _pad0                  = 0;
 };
 
 struct alignas(16) FloatingObjectSettingsGpu {
@@ -146,6 +149,65 @@ VkExtent2D computeCappedExtent(VkExtent2D requested_extent, uint64_t max_pixels)
 
 VkExtent2D computeSimulationExtent(VkExtent2D requested_extent) {
 	return computeCappedExtent(requested_extent, kMaxSimulationPixels);
+}
+
+std::vector<float> makeDefaultDomainMask(VkExtent2D extent) {
+	const size_t texel_count =
+	    static_cast<size_t>(extent.width) * static_cast<size_t>(extent.height);
+	return std::vector<float>(texel_count, 1.0f);
+}
+
+std::vector<float> resampleDomainMask(const std::vector<float>& source, VkExtent2D source_extent,
+                                      VkExtent2D target_extent) {
+	const size_t target_texel_count =
+	    static_cast<size_t>(target_extent.width) * static_cast<size_t>(target_extent.height);
+	if (target_texel_count == 0) {
+		return {};
+	}
+
+	const size_t source_texel_count =
+	    static_cast<size_t>(source_extent.width) * static_cast<size_t>(source_extent.height);
+	if (source.empty() || source_texel_count == 0 || source.size() != source_texel_count) {
+		return makeDefaultDomainMask(target_extent);
+	}
+
+	if (source_extent.width == target_extent.width && source_extent.height == target_extent.height) {
+		return source;
+	}
+
+	std::vector<float> target(target_texel_count, 1.0f);
+	const float source_width_minus_one =
+	    static_cast<float>(std::max<uint32_t>(source_extent.width, 1u) - 1u);
+	const float source_height_minus_one =
+	    static_cast<float>(std::max<uint32_t>(source_extent.height, 1u) - 1u);
+	const float target_width_minus_one =
+	    static_cast<float>(std::max<uint32_t>(target_extent.width, 1u) - 1u);
+	const float target_height_minus_one =
+	    static_cast<float>(std::max<uint32_t>(target_extent.height, 1u) - 1u);
+
+	for (uint32_t y = 0; y < target_extent.height; ++y) {
+		const float v = target_height_minus_one > 0.0f ?
+		                    static_cast<float>(y) / target_height_minus_one :
+		                    0.0f;
+		const uint32_t source_y =
+		    std::min<uint32_t>(static_cast<uint32_t>(std::lround(v * source_height_minus_one)),
+		                       source_extent.height - 1u);
+		for (uint32_t x = 0; x < target_extent.width; ++x) {
+			const float u = target_width_minus_one > 0.0f ?
+			                    static_cast<float>(x) / target_width_minus_one :
+			                    0.0f;
+			const uint32_t source_x =
+			    std::min<uint32_t>(static_cast<uint32_t>(std::lround(u * source_width_minus_one)),
+			                       source_extent.width - 1u);
+			const size_t source_index =
+			    static_cast<size_t>(source_y) * static_cast<size_t>(source_extent.width) + source_x;
+			const size_t target_index =
+			    static_cast<size_t>(y) * static_cast<size_t>(target_extent.width) + x;
+			target[target_index] = source[source_index] > 0.5f ? 1.0f : 0.0f;
+		}
+	}
+
+	return target;
 }
 
 void createBuffer(VkDevice device, VmaAllocator allocator, VkDeviceSize size,
@@ -339,6 +401,11 @@ WaterSurfaceSimulation::WaterSurfaceSimulation(const WaterSurfaceCreateInfo& cre
 	// allocated but disable their simulation entirely to avoid phantom wakes.
 	m_floating_object_count             = 0;
 	m_floating_object_interaction_count = 0;
+	m_domain_mask =
+	    resampleDomainMask(create_info.domain_mask, create_info.output_extent, m_output_extent);
+	if (m_domain_mask.empty()) {
+		m_domain_mask = makeDefaultDomainMask(m_output_extent);
+	}
 	createImages();
 	createDescriptors();
 	createPipeline();
@@ -394,6 +461,9 @@ WaterSurfaceSimulation::~WaterSurfaceSimulation() {
 	if (m_floating_object_interactions_buffer != VK_NULL_HANDLE) {
 		vmaDestroyBuffer(m_allocator, m_floating_object_interactions_buffer,
 		                 m_floating_object_interactions_allocation);
+	}
+	if (m_domain_mask_buffer != VK_NULL_HANDLE) {
+		vmaDestroyBuffer(m_allocator, m_domain_mask_buffer, m_domain_mask_allocation);
 	}
 
 	for (VkImageView image_view : m_height_image_views) {
@@ -527,6 +597,8 @@ const WaterSurfaceDiagnostics&
 	m_object_push_constants->time_seconds          = time_seconds;
 	m_object_push_constants->delta_time            = clamped_delta_time;
 	m_object_push_constants->height_to_world_scale = m_height_to_world_scale;
+	m_object_push_constants->surface_bounds        = m_surface_bounds;
+	m_object_push_constants->boundary_shape_exponent = m_boundary_shape_exponent;
 	m_object_push_constants->object_count          = m_floating_object_count;
 	m_object_push_constants->reset_requested       = m_reset_objects_requested ? 1u : 0u;
 
@@ -546,6 +618,16 @@ void WaterSurfaceSimulation::requestObjectReset() {
 	m_reset_objects_requested = true;
 	if (m_object_push_constants != nullptr) {
 		m_object_push_constants->reset_requested = 1u;
+	}
+}
+
+void WaterSurfaceSimulation::setFloatingSurfaceBoundary(float surface_bounds,
+                                                        float boundary_shape_exponent) {
+	m_surface_bounds          = std::clamp(surface_bounds, 0.60f, 0.995f);
+	m_boundary_shape_exponent = std::clamp(boundary_shape_exponent, 2.0f, 32.0f);
+	if (m_object_push_constants != nullptr) {
+		m_object_push_constants->surface_bounds          = m_surface_bounds;
+		m_object_push_constants->boundary_shape_exponent = m_boundary_shape_exponent;
 	}
 }
 
@@ -801,6 +883,19 @@ void WaterSurfaceSimulation::createDescriptors() {
 	                 static_cast<VkDeviceSize>(kMaxFloatingObjectInteractions),
 	             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
 	             m_floating_object_interactions_buffer, m_floating_object_interactions_allocation);
+	createBuffer(m_device, m_allocator,
+	             sizeof(float) * static_cast<VkDeviceSize>(m_domain_mask.size()),
+	             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
+	             m_domain_mask_buffer, m_domain_mask_allocation);
+
+	void* mapped_memory = nullptr;
+	if (vmaMapMemory(m_allocator, m_domain_mask_allocation, &mapped_memory) != VK_SUCCESS) {
+		throw std::runtime_error("failed to map water domain mask buffer");
+	}
+	std::memcpy(mapped_memory, m_domain_mask.data(), sizeof(float) * m_domain_mask.size());
+	vmaFlushAllocation(m_allocator, m_domain_mask_allocation, 0,
+	                   sizeof(float) * m_domain_mask.size());
+	vmaUnmapMemory(m_allocator, m_domain_mask_allocation);
 
 	VkDescriptorSetLayoutBinding storage_image_binding{};
 	storage_image_binding.binding         = 0;
@@ -826,13 +921,16 @@ void WaterSurfaceSimulation::createDescriptors() {
 
 	VkDescriptorSetLayoutBinding floating_object_interactions_binding = floating_objects_binding;
 	floating_object_interactions_binding.binding                      = 4;
+	VkDescriptorSetLayoutBinding water_domain_mask_binding            = storage_buffer_binding;
+	water_domain_mask_binding.binding                                 = 5;
 
-	const std::array<VkDescriptorSetLayoutBinding, 5> water_bindings = {
+	const std::array<VkDescriptorSetLayoutBinding, 6> water_bindings = {
 	    output_binding,
 	    current_height_binding,
 	    previous_height_binding,
 	    floating_objects_binding,
 	    floating_object_interactions_binding,
+	    water_domain_mask_binding,
 	};
 
 	VkDescriptorSetLayoutBinding object_height_binding       = storage_image_binding;
@@ -845,10 +943,12 @@ void WaterSurfaceSimulation::createDescriptors() {
 	object_render_binding.binding                            = 3;
 	VkDescriptorSetLayoutBinding object_interactions_binding = storage_buffer_binding;
 	object_interactions_binding.binding                      = 4;
+	VkDescriptorSetLayoutBinding object_domain_mask_binding  = storage_buffer_binding;
+	object_domain_mask_binding.binding                       = 5;
 
-	const std::array<VkDescriptorSetLayoutBinding, 5> object_bindings = {
+	const std::array<VkDescriptorSetLayoutBinding, 6> object_bindings = {
 	    object_height_binding, object_settings_binding,     object_states_binding,
-	    object_render_binding, object_interactions_binding,
+	    object_render_binding, object_interactions_binding, object_domain_mask_binding,
 	};
 
 	VkDescriptorSetLayoutCreateInfo layout_info{};
@@ -870,7 +970,7 @@ void WaterSurfaceSimulation::createDescriptors() {
 
 	const std::array<VkDescriptorPoolSize, 2> pool_sizes = {
 	    VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
-	    VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12},
+	    VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
 	};
 
 	VkDescriptorPoolCreateInfo pool_info{};
@@ -934,8 +1034,13 @@ void WaterSurfaceSimulation::createDescriptors() {
 		    sizeof(FloatingObjectInteractionData) *
 		        static_cast<VkDeviceSize>(kMaxFloatingObjectInteractions),
 		};
+		const VkDescriptorBufferInfo domain_mask_info = {
+		    m_domain_mask_buffer,
+		    0,
+		    sizeof(float) * static_cast<VkDeviceSize>(m_domain_mask.size()),
+		};
 
-		std::array<VkWriteDescriptorSet, 5> writes{};
+		std::array<VkWriteDescriptorSet, 6> writes{};
 
 		writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		writes[0].dstSet          = m_water_descriptor_sets[set_index];
@@ -972,6 +1077,13 @@ void WaterSurfaceSimulation::createDescriptors() {
 		writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		writes[4].pBufferInfo     = &floating_object_interactions_info;
 
+		writes[5].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[5].dstSet          = m_water_descriptor_sets[set_index];
+		writes[5].dstBinding      = 5;
+		writes[5].descriptorCount = 1;
+		writes[5].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[5].pBufferInfo     = &domain_mask_info;
+
 		vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0,
 		                       nullptr);
 	}
@@ -1005,8 +1117,13 @@ void WaterSurfaceSimulation::createDescriptors() {
 		    sizeof(FloatingObjectInteractionData) *
 		        static_cast<VkDeviceSize>(kMaxFloatingObjectInteractions),
 		};
+		const VkDescriptorBufferInfo domain_mask_info = {
+		    m_domain_mask_buffer,
+		    0,
+		    sizeof(float) * static_cast<VkDeviceSize>(m_domain_mask.size()),
+		};
 
-		std::array<VkWriteDescriptorSet, 5> writes{};
+		std::array<VkWriteDescriptorSet, 6> writes{};
 		writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		writes[0].dstSet          = m_object_descriptor_sets[set_index];
 		writes[0].dstBinding      = 0;
@@ -1041,6 +1158,13 @@ void WaterSurfaceSimulation::createDescriptors() {
 		writes[4].descriptorCount = 1;
 		writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		writes[4].pBufferInfo     = &interaction_info;
+
+		writes[5].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[5].dstSet          = m_object_descriptor_sets[set_index];
+		writes[5].dstBinding      = 5;
+		writes[5].descriptorCount = 1;
+		writes[5].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[5].pBufferInfo     = &domain_mask_info;
 
 		vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0,
 		                       nullptr);

@@ -3,8 +3,11 @@ struct PushConstants
     float time_seconds;
     float delta_time;
     float height_to_world_scale;
+    float surface_bounds;
+    float boundary_shape_exponent;
     uint object_count;
     uint reset_requested;
+    uint _pad0;
 };
 
 [[vk::push_constant]]
@@ -49,10 +52,13 @@ struct FloatingObjectInteractionGpu
 [[vk::binding(2, 0)]] RWStructuredBuffer<FloatingObjectStateGpu> object_states;
 [[vk::binding(3, 0)]] RWStructuredBuffer<FloatingObjectGpu> floating_objects;
 [[vk::binding(4, 0)]] RWStructuredBuffer<FloatingObjectInteractionGpu> floating_object_interactions;
+[[vk::binding(5, 0)]] StructuredBuffer<float> water_domain_mask;
 
 static const uint MAX_FLOATING_OBJECTS = 8u;
 static const float GRAVITY = 4.5f;
-static const float SURFACE_BOUNDS = 0.94f;
+static const float WATER_HEIGHT_SENTINEL = -1.0e6f;
+static const float WATER_HEIGHT_INVALID_THRESHOLD = -5.0e5f;
+static const float WATER_DOMAIN_ACTIVE_THRESHOLD = 0.5f;
 
 groupshared FloatingObjectGpu g_previous_objects[MAX_FLOATING_OBJECTS];
 groupshared FloatingObjectStateGpu g_previous_states[MAX_FLOATING_OBJECTS];
@@ -87,6 +93,36 @@ float2 safeNormalize2D(float2 value, float2 fallback)
     return len > 1e-5f ? value / len : fallback;
 }
 
+float superellipseMetric(float2 point, float exponent)
+{
+    float p = max(exponent, 2.0f);
+    return pow(abs(point.x), p) + pow(abs(point.y), p);
+}
+
+float2 projectInsideSuperellipse(float2 point, float bounds, float exponent,
+                                 out float penetration_ratio, out float2 outward_normal)
+{
+    float safe_bounds = max(bounds, 1.0e-4f);
+    float2 normalized = point / safe_bounds;
+    float metric = superellipseMetric(normalized, exponent);
+    if (metric <= 1.0f) {
+        penetration_ratio = 0.0f;
+        outward_normal = float2(0.0f, 0.0f);
+        return point;
+    }
+
+    float p = max(exponent, 2.0f);
+    float scale = pow(metric, -1.0f / p);
+    float2 projected = point * scale;
+    float2 correction = point - projected;
+    float correction_len = length(correction);
+    outward_normal = correction_len > 1.0e-5f ?
+        (correction / correction_len) :
+        safeNormalize2D(point, float2(1.0f, 0.0f));
+    penetration_ratio = clamp(1.0f - scale, 0.0f, 1.0f);
+    return projected;
+}
+
 float wrapAngle(float angle_radians)
 {
     static const float PI = 3.14159265358979323846f;
@@ -105,9 +141,36 @@ int2 clampCoord(int2 coord, int2 dims)
     return clamp(coord, int2(0, 0), dims - 1);
 }
 
+uint domainMaskIndex(int2 coord, int2 dims)
+{
+    return uint(coord.y * dims.x + coord.x);
+}
+
+float readDomainMask(int2 coord, int2 dims)
+{
+    int2 clamped = clampCoord(coord, dims);
+    return water_domain_mask[domainMaskIndex(clamped, dims)];
+}
+
+bool isDomainActive(int2 coord, int2 dims)
+{
+    return readDomainMask(coord, dims) > WATER_DOMAIN_ACTIVE_THRESHOLD;
+}
+
+bool isValidWaterHeight(float value)
+{
+    return value > WATER_HEIGHT_INVALID_THRESHOLD;
+}
+
 float readCurrentHeight(int2 coord, int2 dims)
 {
-    return current_height[clampCoord(coord, dims)];
+    int2 clamped = clampCoord(coord, dims);
+    if (!isDomainActive(clamped, dims)) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+
+    float value = current_height[clamped];
+    return isValidWaterHeight(value) ? value : WATER_HEIGHT_SENTINEL;
 }
 
 float sampleCurrentHeight(float2 uv, int2 dims)
@@ -119,12 +182,58 @@ float sampleCurrentHeight(float2 uv, int2 dims)
     int2 p1 = min(p0 + int2(1, 1), dims - 1);
     float2 f = texel - float2(p0);
 
-    float h00 = readCurrentHeight(p0, dims);
-    float h10 = readCurrentHeight(int2(p1.x, p0.y), dims);
-    float h01 = readCurrentHeight(int2(p0.x, p1.y), dims);
-    float h11 = readCurrentHeight(p1, dims);
+    int2 c00 = p0;
+    int2 c10 = int2(p1.x, p0.y);
+    int2 c01 = int2(p0.x, p1.y);
+    int2 c11 = p1;
+    float h00 = readCurrentHeight(c00, dims);
+    float h10 = readCurrentHeight(c10, dims);
+    float h01 = readCurrentHeight(c01, dims);
+    float h11 = readCurrentHeight(c11, dims);
 
-    return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+    float w00 = (1.0f - f.x) * (1.0f - f.y);
+    float w10 = f.x * (1.0f - f.y);
+    float w01 = (1.0f - f.x) * f.y;
+    float w11 = f.x * f.y;
+
+    float weight = 0.0f;
+    float value = 0.0f;
+    if (isValidWaterHeight(h00)) { value += h00 * w00; weight += w00; }
+    if (isValidWaterHeight(h10)) { value += h10 * w10; weight += w10; }
+    if (isValidWaterHeight(h01)) { value += h01 * w01; weight += w01; }
+    if (isValidWaterHeight(h11)) { value += h11 * w11; weight += w11; }
+
+    if (weight <= 1.0e-6f) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+    return value / weight;
+}
+
+float sampleDomainMask(float2 uv, int2 dims)
+{
+    uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
+
+    float2 texel = uv * float2(dims - 1);
+    int2 p0 = int2(floor(texel));
+    int2 p1 = min(p0 + int2(1, 1), dims - 1);
+    float2 f = texel - float2(p0);
+
+    float m00 = readDomainMask(p0, dims);
+    float m10 = readDomainMask(int2(p1.x, p0.y), dims);
+    float m01 = readDomainMask(int2(p0.x, p1.y), dims);
+    float m11 = readDomainMask(p1, dims);
+
+    return lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y);
+}
+
+float sampleDomainMaskAtXZ(float2 xz, int2 dims)
+{
+    float2 uv = xz * 0.5f + 0.5f;
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
+        return 0.0f;
+    }
+
+    return sampleDomainMask(uv, dims);
 }
 
 float4 quatFromEuler(float3 euler)
@@ -231,13 +340,48 @@ float sampleWaterHeightAtXZ(float2 xz, int2 dims, uint ignored_object_index)
 {
     float2 uv = xz * 0.5f + 0.5f;
     if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
-        return -1000.0f;
+        return WATER_HEIGHT_SENTINEL;
     }
 
-    float raw_height = sampleCurrentHeight(uv, dims) * push.height_to_world_scale;
+    if (sampleDomainMask(uv, dims) <= WATER_DOMAIN_ACTIVE_THRESHOLD) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+
+    float sampled_height = sampleCurrentHeight(uv, dims);
+    if (!isValidWaterHeight(sampled_height)) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+    float raw_height = sampled_height * push.height_to_world_scale;
     float hull_displacement =
         objectHullDisplacementAtXZ(xz, ignored_object_index) * push.height_to_world_scale;
     return raw_height - hull_displacement;
+}
+
+float2 projectInsideDomainMask(float2 outside_position, float2 fallback_inside, int2 dims)
+{
+    if (sampleDomainMaskAtXZ(outside_position, dims) > WATER_DOMAIN_ACTIVE_THRESHOLD) {
+        return outside_position;
+    }
+
+    float2 inside = fallback_inside;
+    if (sampleDomainMaskAtXZ(inside, dims) <= WATER_DOMAIN_ACTIVE_THRESHOLD) {
+        inside = float2(0.0f, 0.0f);
+    }
+    if (sampleDomainMaskAtXZ(inside, dims) <= WATER_DOMAIN_ACTIVE_THRESHOLD) {
+        return outside_position;
+    }
+
+    float2 outside = outside_position;
+    [unroll]
+    for (int iteration = 0; iteration < 12; ++iteration) {
+        float2 mid = 0.5f * (inside + outside);
+        if (sampleDomainMaskAtXZ(mid, dims) > WATER_DOMAIN_ACTIVE_THRESHOLD) {
+            inside = mid;
+        } else {
+            outside = mid;
+        }
+    }
+    return inside;
 }
 
 [shader("compute")]
@@ -313,6 +457,9 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
                                axis_z_prev * local_point.z;
         float3 world_point = previous_position + rotated_point;
         float water_height = sampleWaterHeightAtXZ(world_point.xz, dims, object_index);
+        if (!isValidWaterHeight(water_height)) {
+            continue;
+        }
         float submersion = water_height - world_point.y;
         if (submersion <= 0.0f) {
             continue;
@@ -330,14 +477,30 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
 
     float slope_sample_distance = max(size.x, size.z) * 0.55f;
     float2 center_xz = previous_position.xz;
+    float center_water_height = sampleWaterHeightAtXZ(center_xz, dims, object_index);
+    if (!isValidWaterHeight(center_water_height)) {
+        center_water_height = previous_position.y - half_extents.y;
+    }
     float water_left =
         sampleWaterHeightAtXZ(center_xz + float2(-slope_sample_distance, 0.0f), dims, object_index);
+    if (!isValidWaterHeight(water_left)) {
+        water_left = center_water_height;
+    }
     float water_right =
         sampleWaterHeightAtXZ(center_xz + float2(slope_sample_distance, 0.0f), dims, object_index);
+    if (!isValidWaterHeight(water_right)) {
+        water_right = center_water_height;
+    }
     float water_down =
         sampleWaterHeightAtXZ(center_xz + float2(0.0f, -slope_sample_distance), dims, object_index);
+    if (!isValidWaterHeight(water_down)) {
+        water_down = center_water_height;
+    }
     float water_up =
         sampleWaterHeightAtXZ(center_xz + float2(0.0f, slope_sample_distance), dims, object_index);
+    if (!isValidWaterHeight(water_up)) {
+        water_up = center_water_height;
+    }
     float2 water_gradient = float2(
         (water_right - water_left) / max(slope_sample_distance * 2.0f, 1.0e-4f),
         (water_up - water_down) / max(slope_sample_distance * 2.0f, 1.0e-4f));
@@ -385,16 +548,22 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
         }
     }
 
-    float horizontal_bound = SURFACE_BOUNDS - max(half_extents.x, half_extents.z) - 0.02f;
-    if (abs(previous_position.x) > horizontal_bound) {
-        planar_force.x += (-previous_position.x +
-                           clamp(previous_position.x, -horizontal_bound, horizontal_bound)) *
-                          8.0f * mass;
+    float base_surface_bounds = clamp(push.surface_bounds, 0.60f, 0.995f);
+    float boundary_exponent = clamp(push.boundary_shape_exponent, 2.0f, 32.0f);
+    // Keep object hull comfortably inside the boundary to avoid pool-rim clipping.
+    float boundary_collision_radius = max(half_extents.x, half_extents.z) + 0.02f;
+    float effective_surface_bounds = max(base_surface_bounds - boundary_collision_radius, 0.20f);
+    float boundary_penetration = 0.0f;
+    float2 boundary_outward = float2(0.0f, 0.0f);
+    projectInsideSuperellipse(previous_position.xz, effective_surface_bounds, boundary_exponent,
+                              boundary_penetration, boundary_outward);
+    if (boundary_penetration > 0.0f) {
+        float2 boundary_inward = -boundary_outward;
+        planar_force += boundary_inward * (boundary_penetration * mass * 90.0f);
     }
-    if (abs(previous_position.z) > horizontal_bound) {
-        planar_force.y += (-previous_position.z +
-                           clamp(previous_position.z, -horizontal_bound, horizontal_bound)) *
-                          8.0f * mass;
+    if (sampleDomainMaskAtXZ(previous_position.xz, dims) <= WATER_DOMAIN_ACTIVE_THRESHOLD) {
+        float2 to_anchor = anchor_xz - previous_position.xz;
+        planar_force += safeNormalize2D(to_anchor, float2(0.0f, 1.0f)) * (mass * 140.0f);
     }
 
     float inverse_mass = 1.0f / mass;
@@ -410,8 +579,6 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
 
     float3 position = previous_position;
     position += linear_velocity * push.delta_time;
-    position.x = clamp(position.x, -horizontal_bound, horizontal_bound);
-    position.z = clamp(position.z, -horizontal_bound, horizontal_bound);
 
     float2 position_correction = float2(0.0f, 0.0f);
     [unroll]
@@ -440,8 +607,37 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
 
     position.xz += position_correction;
     linear_velocity.xz += position_correction / max(push.delta_time, 1.0e-4f) * 0.30f;
-    position.x = clamp(position.x, -horizontal_bound, horizontal_bound);
-    position.z = clamp(position.z, -horizontal_bound, horizontal_bound);
+
+    float post_boundary_penetration = 0.0f;
+    float2 post_boundary_outward = float2(0.0f, 0.0f);
+    float2 projected_planar_position = projectInsideSuperellipse(
+        position.xz, effective_surface_bounds, boundary_exponent,
+        post_boundary_penetration, post_boundary_outward);
+    if (post_boundary_penetration > 0.0f) {
+        position.xz = projected_planar_position;
+        float outward_speed = dot(linear_velocity.xz, post_boundary_outward);
+        if (outward_speed > 0.0f) {
+            linear_velocity.xz -= post_boundary_outward * (outward_speed * 1.25f);
+        }
+        linear_velocity.xz += (-post_boundary_outward) *
+                              (post_boundary_penetration * 0.20f /
+                               max(push.delta_time, 1.0e-4f));
+    }
+    if (sampleDomainMaskAtXZ(position.xz, dims) <= WATER_DOMAIN_ACTIVE_THRESHOLD) {
+        float2 projected_domain_position = projectInsideDomainMask(position.xz, anchor_xz, dims);
+        float2 correction = projected_domain_position - position.xz;
+        position.xz = projected_domain_position;
+        float correction_len = length(correction);
+        if (correction_len > 1.0e-5f) {
+            float2 inward_normal = correction / correction_len;
+            float outward_speed = dot(linear_velocity.xz, -inward_normal);
+            if (outward_speed > 0.0f) {
+                linear_velocity.xz += inward_normal * (outward_speed * 1.25f);
+            }
+            linear_velocity.xz += inward_normal *
+                                  (correction_len * 0.30f / max(push.delta_time, 1.0e-4f));
+        }
+    }
 
     float2 angular_acceleration = float2(total_torque.x * angular_strength,
                                          total_torque.z * angular_strength);
@@ -472,7 +668,15 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     float3 axis_z = normalize(rotateByQuat(orientation_now, float3(0.0f, 0.0f, 1.0f)));
 
     float local_water_height = sampleWaterHeightAtXZ(position.xz, dims, object_index);
+    bool local_water_valid = isValidWaterHeight(local_water_height);
+    if (!local_water_valid) {
+        local_water_height = position.y - half_extents.y;
+    }
     float previous_water_height = sampleWaterHeightAtXZ(previous_position.xz, dims, object_index);
+    bool previous_water_valid = isValidWaterHeight(previous_water_height);
+    if (!previous_water_valid) {
+        previous_water_height = previous_position.y - half_extents.y;
+    }
     float equilibrium_draft =
         clamp((GRAVITY * mass) / max(buoyancy_strength * TOTAL_BUOYANCY_WEIGHT, 1.0e-4f),
               size.y * 0.12f, size.y * 0.58f);
@@ -494,6 +698,9 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
         float3 rotated_point = axis_x * local_point.x + axis_y * local_point.y + axis_z * local_point.z;
         float3 world_point = position + rotated_point;
         float water_height = sampleWaterHeightAtXZ(world_point.xz, dims, object_index);
+        if (!isValidWaterHeight(water_height)) {
+            continue;
+        }
         vertical_correction = max(vertical_correction,
                                   water_height - world_point.y - max_allowed_sample_submersion);
     }
@@ -504,10 +711,20 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     }
 
     local_water_height = sampleWaterHeightAtXZ(position.xz, dims, object_index);
+    local_water_valid = isValidWaterHeight(local_water_height);
+    if (!local_water_valid) {
+        local_water_height = position.y - half_extents.y;
+    }
     float keel_height = position.y - half_extents.y;
     float submersion_depth = max(local_water_height - keel_height, 0.0f);
     float previous_keel_height = previous_position.y - half_extents.y;
     float previous_submersion_depth = max(previous_water_height - previous_keel_height, 0.0f);
+    if (!local_water_valid) {
+        submersion_depth = 0.0f;
+    }
+    if (!previous_water_valid) {
+        previous_submersion_depth = 0.0f;
+    }
     float submersion_ratio =
         clamp(submersion_depth / max(size.y, 1.0e-4f), 0.0f, 1.5f);
     float2 current_center_xz = position.xz;
@@ -515,8 +732,9 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     float planar_speed = length(planar_velocity);
     float center_planar_speed = frame_travel_distance / max(push.delta_time, 1.0e-4f);
     float draft_raw = submersion_depth / max(push.height_to_world_scale, 1.0e-4f);
-    float hull_displacement = clamp(draft_raw * 0.82f + submersion_ratio * 0.018f +
-                                    center_planar_speed * 0.010f, 0.0f, 0.14f);
+    float hull_displacement = local_water_valid ?
+        clamp(draft_raw * 0.82f + submersion_ratio * 0.018f + center_planar_speed * 0.010f, 0.0f, 0.14f) :
+        0.0f;
     float submersion_speed =
         abs(submersion_depth - previous_submersion_depth) / max(push.delta_time, 1.0e-4f);
     float angular_surface_speed = length(angular_velocity) * max(size.x, size.z) * 0.35f;
@@ -544,7 +762,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
     FloatingObjectInteractionGpu interaction_data;
     interaction_data.center_radius_strength = float4(0.0f, 0.0f, 0.0f, 0.0f);
     interaction_data.wake_direction_length = float4(0.0f, 0.0f, 0.0f, 0.0f);
-    if (submersion_depth > 1.0e-4f && ripple_strength > 1.0e-4f) {
+    if (local_water_valid && submersion_depth > 1.0e-4f && ripple_strength > 1.0e-4f) {
         interaction_data.center_radius_strength =
             float4(current_center_xz.x, current_center_xz.y, sample_radius, ripple_strength);
         interaction_data.wake_direction_length =

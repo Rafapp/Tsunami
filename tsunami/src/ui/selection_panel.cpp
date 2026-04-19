@@ -16,6 +16,11 @@ SelectionContext::SelectionContext() {
 
 SelectionContext selection_ctx{};
 
+constexpr float kEditorTranslationMin = -2.0f;
+constexpr float kEditorTranslationMax = 2.0f;
+constexpr float kEditorRotationMinDeg = -180.0f;
+constexpr float kEditorRotationMaxDeg = 180.0f;
+
 std::string meshDisplayName(const Scene* scene, int mesh_index) {
 	if (scene == nullptr || mesh_index < 0 ||
 	    mesh_index >= static_cast<int>(scene->m_meshes.size())) {
@@ -115,6 +120,14 @@ static float voiceDrivenScalarValue(VoiceDrivenParameter parameter, float loudne
 			return level * 20.0f;
 		case VoiceDrivenParameter::ObjectScale:
 			return 0.25f + level * (2.0f - 0.25f);
+		case VoiceDrivenParameter::ObjectTranslateX:
+		case VoiceDrivenParameter::ObjectTranslateY:
+		case VoiceDrivenParameter::ObjectTranslateZ:
+			return kEditorTranslationMin + level * (kEditorTranslationMax - kEditorTranslationMin);
+		case VoiceDrivenParameter::ObjectRotateX:
+		case VoiceDrivenParameter::ObjectRotateY:
+		case VoiceDrivenParameter::ObjectRotateZ:
+			return kEditorRotationMinDeg + level * (kEditorRotationMaxDeg - kEditorRotationMinDeg);
 		case VoiceDrivenParameter::BaseTint:
 		case VoiceDrivenParameter::EmissionColor:
 			return level;
@@ -141,6 +154,18 @@ static const char* voiceDrivenParameterLabel(VoiceDrivenParameter parameter) {
 			return "Emission intensity";
 		case VoiceDrivenParameter::ObjectScale:
 			return "Object scale";
+		case VoiceDrivenParameter::ObjectTranslateX:
+			return "Object translation X";
+		case VoiceDrivenParameter::ObjectTranslateY:
+			return "Object translation Y";
+		case VoiceDrivenParameter::ObjectTranslateZ:
+			return "Object translation Z";
+		case VoiceDrivenParameter::ObjectRotateX:
+			return "Object rotation X";
+		case VoiceDrivenParameter::ObjectRotateY:
+			return "Object rotation Y";
+		case VoiceDrivenParameter::ObjectRotateZ:
+			return "Object rotation Z";
 	}
 
 	return "Unknown";
@@ -239,7 +264,7 @@ static VoiceDrivenSyncResult syncVoiceDrivenSelectionParameter(float loudness) {
 			result.material_changed                          = true;
 			return result;
 		}
-		case VoiceDrivenParameter::ObjectScale: {
+case VoiceDrivenParameter::ObjectScale: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_scale - target_value) <= 1.0e-4f) {
@@ -247,6 +272,36 @@ static VoiceDrivenSyncResult syncVoiceDrivenSelectionParameter(float loudness) {
 			}
 			selection_ctx.editor_scale = target_value;
 			result.transform_changed   = true;
+			return result;
+		}
+		case VoiceDrivenParameter::ObjectTranslateX:
+		case VoiceDrivenParameter::ObjectTranslateY:
+		case VoiceDrivenParameter::ObjectTranslateZ: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			const int axis = static_cast<int>(selection_ctx.voice_parameter) -
+			                 static_cast<int>(VoiceDrivenParameter::ObjectTranslateX);
+			if (axis < 0 || axis > 2 ||
+			    std::abs(selection_ctx.editor_translation[axis] - target_value) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_translation[axis] = target_value;
+			result.transform_changed               = true;
+			return result;
+		}
+		case VoiceDrivenParameter::ObjectRotateX:
+		case VoiceDrivenParameter::ObjectRotateY:
+		case VoiceDrivenParameter::ObjectRotateZ: {
+			const float target_value =
+			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
+			const int axis = static_cast<int>(selection_ctx.voice_parameter) -
+			                 static_cast<int>(VoiceDrivenParameter::ObjectRotateX);
+			if (axis < 0 || axis > 2 ||
+			    std::abs(selection_ctx.editor_rotation_deg[axis] - target_value) <= 1.0e-4f) {
+				return result;
+			}
+			selection_ctx.editor_rotation_deg[axis] = target_value;
+			result.transform_changed                = true;
 			return result;
 		}
 	}
@@ -265,7 +320,9 @@ bool selectMesh(const Scene* scene, int mesh_index) {
 	selection_ctx.selected_mesh_index = clamped_index;
 	refreshSelectedMaterialEditor(scene);
 	if (clamped_index < 0) {
-		selection_ctx.editor_scale = 1.0f;
+		selection_ctx.editor_scale        = 1.0f;
+		selection_ctx.editor_translation  = glm::vec3(0.0f);
+		selection_ctx.editor_rotation_deg = glm::vec3(0.0f);
 	}
 	return true;
 }
@@ -325,14 +382,15 @@ SelectionPanelResult drawSelectionPanel(const Scene*                           s
 
 	int         edit_mode  = static_cast<int>(selection_ctx.material_edit_mode);
 	const char* edit_items = "GUI\0Voice\0";
-	if (ImGui::Combo("Material input", &edit_mode, edit_items)) {
+	if (ImGui::Combo("Inspector input", &edit_mode, edit_items)) {
 		selection_ctx.material_edit_mode = static_cast<MaterialEditMode>(edit_mode);
 	}
 	if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
 		int         voice_parameter = static_cast<int>(selection_ctx.voice_parameter);
 		const char* voice_items =
 		    "Base tint\0Emission color\0Metalness\0Roughness\0Transmission\0IOR\0Emission "
-		    "intensity\0Object scale\0";
+		    "intensity\0Object scale\0Translate X\0Translate Y\0Translate Z\0Rotate X\0Rotate "
+		    "Y\0Rotate Z\0";
 		if (ImGui::Combo("Voice target", &voice_parameter, voice_items)) {
 			selection_ctx.voice_parameter = static_cast<VoiceDrivenParameter>(voice_parameter);
 		}
@@ -487,6 +545,18 @@ SelectionPanelResult drawSelectionPanel(const Scene*                           s
 	ImGui::BeginDisabled(!gui_mode_enabled);
 	result.transform_changed |=
 	    ImGui::SliderFloat("Scale", &selection_ctx.editor_scale, 0.10f, 3.00f, "%.2f");
+	result.transform_changed |=
+	    ImGui::SliderFloat3("Translation", glm::value_ptr(selection_ctx.editor_translation),
+	                        kEditorTranslationMin, kEditorTranslationMax, "%.2f");
+	result.transform_changed |=
+	    ImGui::SliderFloat3("Rotation", glm::value_ptr(selection_ctx.editor_rotation_deg),
+	                        kEditorRotationMinDeg, kEditorRotationMaxDeg, "%.1f deg");
+	if (ImGui::Button("Reset transform")) {
+		selection_ctx.editor_scale        = 1.0f;
+		selection_ctx.editor_translation  = glm::vec3(0.0f);
+		selection_ctx.editor_rotation_deg = glm::vec3(0.0f);
+		result.transform_changed          = true;
+	}
 	ImGui::EndDisabled();
 
 	ImGui::BeginDisabled(!gui_mode_enabled);

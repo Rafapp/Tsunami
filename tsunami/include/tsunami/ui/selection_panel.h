@@ -27,6 +27,12 @@ enum class VoiceDrivenParameter : int {
 	Ior               = 5,
 	EmissionIntensity = 6,
 	ObjectScale       = 7,
+	ObjectTranslateX  = 8,
+	ObjectTranslateY  = 9,
+	ObjectTranslateZ  = 10,
+	ObjectRotateX     = 11,
+	ObjectRotateY     = 12,
+	ObjectRotateZ     = 13,
 };
 
 enum class RenderDebugViewMode : int {
@@ -81,7 +87,9 @@ struct SelectionContext {
 	CameraSettings             camera{};
 	PathTracingSettings        path_tracing{};
 	GPUMaterial                editor_material{};
-	float                      editor_scale  = 1.0f;
+	float                      editor_scale        = 1.0f;
+	glm::vec3                  editor_translation  = glm::vec3(0.0f);
+	glm::vec3                  editor_rotation_deg = glm::vec3(0.0f);
 	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
 	uint32_t                   outline_width = 1;
 	std::vector<ObjectIdEntry> object_id_map;

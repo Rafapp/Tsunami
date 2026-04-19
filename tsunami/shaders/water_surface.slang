@@ -39,6 +39,7 @@ struct FloatingObjectInteractionGpu
 [[vk::binding(2, 0)]] RWTexture2D<float> previous_height;
 [[vk::binding(3, 0)]] StructuredBuffer<FloatingObjectGpu> floating_objects;
 [[vk::binding(4, 0)]] StructuredBuffer<FloatingObjectInteractionGpu> floating_object_interactions;
+[[vk::binding(5, 0)]] StructuredBuffer<float> water_domain_mask;
 
 static const float PI = 3.14159265358979323846f;
 static const float KELVIN_WAKE_HALF_ANGLE = 19.47f * (PI / 180.0f);
@@ -46,15 +47,56 @@ static const float MAX_STABLE_WORLD_HEIGHT = 0.24f;
 static const float MAX_STABLE_WORLD_VELOCITY = 0.18f;
 static const float MAX_STABLE_WORLD_SLOPE = 2.25f;
 static const float HULL_WATER_CLEARANCE = 0.008f;
+static const float WATER_HEIGHT_SENTINEL = -1.0e6f;
+static const float WATER_HEIGHT_INVALID_THRESHOLD = -5.0e5f;
+static const float WATER_DOMAIN_ACTIVE_THRESHOLD = 0.5f;
 
 int2 clampCoord(int2 coord, int2 dims)
 {
     return clamp(coord, int2(0, 0), dims - 1);
 }
 
+uint domainMaskIndex(int2 coord, int2 dims)
+{
+    return uint(coord.y * dims.x + coord.x);
+}
+
+float readDomainMask(int2 coord, int2 dims)
+{
+    int2 clamped = clampCoord(coord, dims);
+    return water_domain_mask[domainMaskIndex(clamped, dims)];
+}
+
+bool isDomainActive(int2 coord, int2 dims)
+{
+    return readDomainMask(coord, dims) > WATER_DOMAIN_ACTIVE_THRESHOLD;
+}
+
+bool isValidWaterHeight(float value)
+{
+    return value > WATER_HEIGHT_INVALID_THRESHOLD;
+}
+
+float sanitizeWaterHeight(float value, float fallback)
+{
+    return isValidWaterHeight(value) ? value : fallback;
+}
+
 float readCurrentHeight(int2 coord, int2 dims)
 {
-    return current_height[clampCoord(coord, dims)];
+    int2 clamped = clampCoord(coord, dims);
+    if (!isDomainActive(clamped, dims)) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+
+    float value = current_height[clamped];
+    return isValidWaterHeight(value) ? value : WATER_HEIGHT_SENTINEL;
+}
+
+float readCurrentHeightForSolver(int2 coord, int2 dims, float fallback)
+{
+    float sampled = readCurrentHeight(coord, dims);
+    return sanitizeWaterHeight(sampled, fallback);
 }
 
 float sampleCurrentHeight(float2 uv, int2 dims)
@@ -66,12 +108,32 @@ float sampleCurrentHeight(float2 uv, int2 dims)
     int2 p1 = min(p0 + int2(1, 1), dims - 1);
     float2 f = texel - float2(p0);
 
-    float h00 = readCurrentHeight(p0, dims);
-    float h10 = readCurrentHeight(int2(p1.x, p0.y), dims);
-    float h01 = readCurrentHeight(int2(p0.x, p1.y), dims);
-    float h11 = readCurrentHeight(p1, dims);
+    int2 c00 = p0;
+    int2 c10 = int2(p1.x, p0.y);
+    int2 c01 = int2(p0.x, p1.y);
+    int2 c11 = p1;
 
-    return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+    float h00 = readCurrentHeight(c00, dims);
+    float h10 = readCurrentHeight(c10, dims);
+    float h01 = readCurrentHeight(c01, dims);
+    float h11 = readCurrentHeight(c11, dims);
+
+    float w00 = (1.0f - f.x) * (1.0f - f.y);
+    float w10 = f.x * (1.0f - f.y);
+    float w01 = (1.0f - f.x) * f.y;
+    float w11 = f.x * f.y;
+
+    float weight = 0.0f;
+    float value = 0.0f;
+    if (isValidWaterHeight(h00)) { value += h00 * w00; weight += w00; }
+    if (isValidWaterHeight(h10)) { value += h10 * w10; weight += w10; }
+    if (isValidWaterHeight(h01)) { value += h01 * w01; weight += w01; }
+    if (isValidWaterHeight(h11)) { value += h11 * w11; weight += w11; }
+
+    if (weight <= 1.0e-6f) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+    return value / weight;
 }
 
 float gaussian(float2 delta, float radius)
@@ -244,10 +306,14 @@ float surfaceHeightAtXZ(float2 xz, int2 dims)
 {
     float2 uv = xz * 0.5f + 0.5f;
     if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
-        return -1000.0f;
+        return WATER_HEIGHT_SENTINEL;
     }
 
-    return heightToWorld(sampleCurrentHeight(uv, dims));
+    float sampled = sampleCurrentHeight(uv, dims);
+    if (!isValidWaterHeight(sampled)) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+    return heightToWorld(sampled);
 }
 
 float3 surfaceNormalAtXZ(float2 xz, int2 dims)
@@ -255,10 +321,14 @@ float3 surfaceNormalAtXZ(float2 xz, int2 dims)
     float dx = 2.0f / max(float(dims.x), 1.0f);
     float dz = 2.0f / max(float(dims.y), 1.0f);
 
-    float hL = surfaceHeightAtXZ(xz - float2(dx, 0.0f), dims);
-    float hR = surfaceHeightAtXZ(xz + float2(dx, 0.0f), dims);
-    float hD = surfaceHeightAtXZ(xz - float2(0.0f, dz), dims);
-    float hU = surfaceHeightAtXZ(xz + float2(0.0f, dz), dims);
+    float center = surfaceHeightAtXZ(xz, dims);
+    if (!isValidWaterHeight(center)) {
+        return float3(0.0f, 1.0f, 0.0f);
+    }
+    float hL = sanitizeWaterHeight(surfaceHeightAtXZ(xz - float2(dx, 0.0f), dims), center);
+    float hR = sanitizeWaterHeight(surfaceHeightAtXZ(xz + float2(dx, 0.0f), dims), center);
+    float hD = sanitizeWaterHeight(surfaceHeightAtXZ(xz - float2(0.0f, dz), dims), center);
+    float hU = sanitizeWaterHeight(surfaceHeightAtXZ(xz + float2(0.0f, dz), dims), center);
 
     float dhdx = (hR - hL) / max(2.0f * dx, 1e-4f);
     float dhdz = (hU - hD) / max(2.0f * dz, 1e-4f);
@@ -272,14 +342,19 @@ float rippleEnergyAtXZ(float2 xz, int2 dims)
     float dv = 1.0f / max(float(dims.y), 1.0f);
 
     float center = sampleCurrentHeight(uv, dims);
-    float left = sampleCurrentHeight(uv + float2(-du, 0.0f), dims);
-    float right = sampleCurrentHeight(uv + float2(du, 0.0f), dims);
-    float down = sampleCurrentHeight(uv + float2(0.0f, -dv), dims);
-    float up = sampleCurrentHeight(uv + float2(0.0f, dv), dims);
-    float down_left = sampleCurrentHeight(uv + float2(-du, -dv), dims);
-    float down_right = sampleCurrentHeight(uv + float2(du, -dv), dims);
-    float up_left = sampleCurrentHeight(uv + float2(-du, dv), dims);
-    float up_right = sampleCurrentHeight(uv + float2(du, dv), dims);
+    if (!isValidWaterHeight(center)) {
+        return 0.0f;
+    }
+    float left = sanitizeWaterHeight(sampleCurrentHeight(uv + float2(-du, 0.0f), dims), center);
+    float right = sanitizeWaterHeight(sampleCurrentHeight(uv + float2(du, 0.0f), dims), center);
+    float down = sanitizeWaterHeight(sampleCurrentHeight(uv + float2(0.0f, -dv), dims), center);
+    float up = sanitizeWaterHeight(sampleCurrentHeight(uv + float2(0.0f, dv), dims), center);
+    float down_left =
+        sanitizeWaterHeight(sampleCurrentHeight(uv + float2(-du, -dv), dims), center);
+    float down_right =
+        sanitizeWaterHeight(sampleCurrentHeight(uv + float2(du, -dv), dims), center);
+    float up_left = sanitizeWaterHeight(sampleCurrentHeight(uv + float2(-du, dv), dims), center);
+    float up_right = sanitizeWaterHeight(sampleCurrentHeight(uv + float2(du, dv), dims), center);
     float laplacian = (((left + right + down + up) * 4.0f) +
                        (down_left + down_right + up_left + up_right) -
                        (20.0f * center)) / 6.0f;
@@ -474,34 +549,50 @@ bool traceWater(float3 ray_origin, float3 ray_dir, int2 dims, out float hit_t, o
 
     float prev_t = t_min;
     float3 prev_pos = ray_origin + ray_dir * prev_t;
-    float prev_delta = prev_pos.y - surfaceHeightAtXZ(prev_pos.xz, dims);
+    float prev_height = surfaceHeightAtXZ(prev_pos.xz, dims);
+    bool prev_valid = isValidWaterHeight(prev_height);
+    float prev_delta = prev_pos.y - prev_height;
 
     [loop]
     for (int step = 1; step <= 84; ++step) {
         float t = lerp(t_min, t_max, float(step) / 84.0f);
         float3 pos = ray_origin + ray_dir * t;
-        float delta = pos.y - surfaceHeightAtXZ(pos.xz, dims);
+        float height = surfaceHeightAtXZ(pos.xz, dims);
+        bool valid = isValidWaterHeight(height);
+        float delta = pos.y - height;
 
-        if (delta <= 0.0f) {
+        if (prev_valid && valid && (prev_delta == 0.0f || delta == 0.0f || prev_delta * delta <= 0.0f)) {
             float lo = prev_t;
             float hi = t;
+            float lo_delta = prev_delta;
 
             [unroll]
             for (int refine = 0; refine < 6; ++refine) {
                 float mid = 0.5f * (lo + hi);
                 float3 mid_pos = ray_origin + ray_dir * mid;
-                float mid_delta = mid_pos.y - surfaceHeightAtXZ(mid_pos.xz, dims);
-                if (mid_delta > 0.0f) {
-                    lo = mid;
-                } else {
+                float mid_height = surfaceHeightAtXZ(mid_pos.xz, dims);
+                if (!isValidWaterHeight(mid_height)) {
                     hi = mid;
+                    continue;
+                }
+
+                float mid_delta = mid_pos.y - mid_height;
+                if (lo_delta == 0.0f || lo_delta * mid_delta <= 0.0f) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                    lo_delta = mid_delta;
                 }
             }
 
             float final_hit_t = 0.5f * (lo + hi);
             hit_t = final_hit_t;
             hit_pos = ray_origin + ray_dir * final_hit_t;
-            hit_pos.y = surfaceHeightAtXZ(hit_pos.xz, dims);
+            float final_height = surfaceHeightAtXZ(hit_pos.xz, dims);
+            if (!isValidWaterHeight(final_height)) {
+                break;
+            }
+            hit_pos.y = final_height;
             hit_normal = surfaceNormalAtXZ(hit_pos.xz, dims);
             ripple_energy = rippleEnergyAtXZ(hit_pos.xz, dims);
             return true;
@@ -509,6 +600,7 @@ bool traceWater(float3 ray_origin, float3 ray_dir, int2 dims, out float hit_t, o
 
         prev_t = t;
         prev_delta = delta;
+        prev_valid = valid;
     }
 
     hit_t = 0.0f;
@@ -530,16 +622,22 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     int2 coord = int2(pixel);
     int2 dims_i = int2(dims);
 
-    float center = readCurrentHeight(coord, dims_i);
-    float left = readCurrentHeight(coord + int2(-1, 0), dims_i);
-    float right = readCurrentHeight(coord + int2(1, 0), dims_i);
-    float down = readCurrentHeight(coord + int2(0, -1), dims_i);
-    float up = readCurrentHeight(coord + int2(0, 1), dims_i);
-    float down_left = readCurrentHeight(coord + int2(-1, -1), dims_i);
-    float down_right = readCurrentHeight(coord + int2(1, -1), dims_i);
-    float up_left = readCurrentHeight(coord + int2(-1, 1), dims_i);
-    float up_right = readCurrentHeight(coord + int2(1, 1), dims_i);
-    float previous = previous_height[coord];
+    if (!isDomainActive(coord, dims_i)) {
+        previous_height[coord] = WATER_HEIGHT_SENTINEL;
+        output_image[coord] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        return;
+    }
+
+    float center = sanitizeWaterHeight(current_height[coord], 0.0f);
+    float left = readCurrentHeightForSolver(coord + int2(-1, 0), dims_i, center);
+    float right = readCurrentHeightForSolver(coord + int2(1, 0), dims_i, center);
+    float down = readCurrentHeightForSolver(coord + int2(0, -1), dims_i, center);
+    float up = readCurrentHeightForSolver(coord + int2(0, 1), dims_i, center);
+    float down_left = readCurrentHeightForSolver(coord + int2(-1, -1), dims_i, center);
+    float down_right = readCurrentHeightForSolver(coord + int2(1, -1), dims_i, center);
+    float up_left = readCurrentHeightForSolver(coord + int2(-1, 1), dims_i, center);
+    float up_right = readCurrentHeightForSolver(coord + int2(1, 1), dims_i, center);
+    float previous = sanitizeWaterHeight(previous_height[coord], center);
 
     float laplacian = (((left + right + down + up) * 4.0f) +
                        (down_left + down_right + up_left + up_right) -

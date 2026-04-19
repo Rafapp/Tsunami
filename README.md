@@ -120,7 +120,7 @@ The executable is generated in the preset binary folder under `bin/`:
 Run with an optional scene alias or explicit `.gltf/.glb` path:
 
 ```bash
-tsunami [pool|chess|cornell|cornellsimple|sponza|<path/to/scene.gltf|.glb>]
+tsunami [pool|pool_and_water|chess|cornell|cornellsimple|sponza|<path/to/scene.gltf|.glb>]
 ```
 
 If no argument is provided, Tsunami defaults to the Cornell scene.

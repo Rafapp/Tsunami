@@ -182,6 +182,12 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
 	                              8.0f, "%.2f");
+	if (ImGui::Button(state.water_paused ? "Resume water simulation" : "Pause water simulation")) {
+		state.water_paused = !state.water_paused;
+		changed            = true;
+	}
+	ImGui::SameLine();
+	ImGui::TextUnformatted(state.water_paused ? "Paused at current frame" : "Live");
 	if (ImGui::Button("Reset water state")) {
 		state.reset_water_requested = true;
 	}

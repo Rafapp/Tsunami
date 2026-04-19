@@ -20,6 +20,7 @@ struct WaterSurfaceCreateInfo {
 	VkDevice     device        = VK_NULL_HANDLE;
 	VmaAllocator allocator     = nullptr;
 	VkExtent2D   output_extent = {};
+	std::vector<float> domain_mask;
 };
 
 class WaterSurfaceSimulation {
@@ -35,6 +36,7 @@ class WaterSurfaceSimulation {
 	                                            float delta_time);
 	void                           requestReset();
 	void                           requestObjectReset();
+	void setFloatingSurfaceBoundary(float surface_bounds, float boundary_shape_exponent);
 	void setFloatingObjects(std::span<const FloatingObjectSettings> objects);
 	std::vector<FloatingObjectRenderData> floatingObjectRenderData() const;
 	void                                  record(VkCommandBuffer command_buffer);
@@ -53,6 +55,9 @@ class WaterSurfaceSimulation {
 	}
 	float heightToWorldScale() const {
 		return m_height_to_world_scale;
+	}
+	bool hasRecordedFrame() const {
+		return m_height_layout_initialized;
 	}
 
   private:
@@ -92,10 +97,13 @@ class WaterSurfaceSimulation {
 	VmaAllocation           m_floating_objects_allocation             = nullptr;
 	VkBuffer                m_floating_object_interactions_buffer     = VK_NULL_HANDLE;
 	VmaAllocation           m_floating_object_interactions_allocation = nullptr;
+	VkBuffer                m_domain_mask_buffer                      = VK_NULL_HANDLE;
+	VmaAllocation           m_domain_mask_allocation                  = nullptr;
 	uint32_t                m_floating_object_count                   = 0;
 	uint32_t                m_floating_object_interaction_count       = 0;
 	WaterSurfaceDiagnostics m_diagnostics{};
 	float                   m_height_to_world_scale = 1.0f;
+	std::vector<float>      m_domain_mask;
 
 	uint32_t m_active_descriptor_set_index = 0;
 	bool     m_height_layout_initialized   = false;
@@ -107,6 +115,8 @@ class WaterSurfaceSimulation {
 	float    m_emission_accumulator        = 0.0f;
 	float    m_pending_impulse             = 0.0f;
 	float    m_last_prepare_time           = -1.0f;
+	float    m_surface_bounds              = 0.94f;
+	float    m_boundary_shape_exponent     = 2.0f;
 
 	struct WaterPushConstants;
 	struct FloatingObjectPushConstants;
