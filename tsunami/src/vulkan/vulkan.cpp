@@ -1666,14 +1666,11 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 		floating_simulation_settings.push_back(settings);
 		floating_group_base_settings.push_back(settings);
 		floating_group_user_scales.push_back(1.0f);
+		floating_group_user_translations.push_back(glm::vec3(0.0f));
+		floating_group_user_rotations_deg.push_back(glm::vec3(0.0f));
 		const glm::mat4 pose = makeFloatingWorldPose(settings);
 
 		for (int mesh_index = mesh_start; mesh_index < mesh_end; ++mesh_index) {
-			floating_simulation_settings.push_back(settings);
-			floating_group_base_settings.push_back(settings);
-			floating_group_user_scales.push_back(1.0f);
-			floating_group_user_translations.push_back(glm::vec3(0.0f));
-			floating_group_user_rotations_deg.push_back(glm::vec3(0.0f));
 			const glm::mat4 pose = makeFloatingWorldPose(settings);
 			auto&           mesh = scene->m_meshes[mesh_index];
 			if (mesh == nullptr) {

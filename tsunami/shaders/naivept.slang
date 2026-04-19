@@ -282,13 +282,13 @@ float powerHeuristic(float pdf_a, float pdf_b) {
 }
 
 float3 clampRadianceContribution(float3 value) {
-    const float clamp_value = 20.0f;
+    const float clamp_value = 28.0f;
     return min(max(value, float3(0.0f, 0.0f, 0.0f)),
                float3(clamp_value, clamp_value, clamp_value));
 }
 
 float3 clampPathThroughput(float3 value) {
-    const float clamp_value = 8.0f;
+    const float clamp_value = 10.0f;
     return min(max(value, float3(0.0f, 0.0f, 0.0f)),
                float3(clamp_value, clamp_value, clamp_value));
 }
@@ -1398,11 +1398,11 @@ float historyMismatch(float3 previous_color, float3 current_color) {
 
 float3 temporalOutlierClamp(float3 previous_color, float3 current_color, float mismatch) {
     float history_luma = luminance(previous_color);
-    float base_radius = max(0.10f, 0.18f + history_luma * 1.35f);
-    float relaxed_radius = base_radius * lerp(1.0f, 2.8f, saturate(mismatch));
-    float3 min_color = max(previous_color - relaxed_radius.xxx, 0.0f.xxx);
-    float3 max_color = previous_color + relaxed_radius.xxx;
-    return clamp(current_color, min_color, max_color);
+    float floor_value = 0.22f + history_luma * 1.2f;
+    float relaxed_scale = lerp(2.2f, 6.5f, saturate(mismatch));
+    float3 max_color = previous_color * relaxed_scale + floor_value.xxx;
+    float3 guarded_max = max(max_color, current_color * 0.60f);
+    return min(current_color, guarded_max);
 }
 
 float3 filterWaterTile(uint2 group_thread_id, float3 center_accum, float center_motion) {
@@ -1584,7 +1584,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_Gr
                 blend = 1.0f;
             }
         }
-        if (push.frame > 0u) {
+        if (push.frame > 0u && (center_visible_water || dynamic_visible_object)) {
             center_history_mismatch = historyMismatch(prev, color);
             color = temporalOutlierClamp(prev, color, center_history_mismatch);
         }
