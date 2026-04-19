@@ -17,9 +17,9 @@
 namespace simulation {
 
 struct WaterSurfaceCreateInfo {
-	VkDevice     device        = VK_NULL_HANDLE;
-	VmaAllocator allocator     = nullptr;
-	VkExtent2D   output_extent = {};
+	VkDevice           device        = VK_NULL_HANDLE;
+	VmaAllocator       allocator     = nullptr;
+	VkExtent2D         output_extent = {};
 	std::vector<float> domain_mask;
 };
 

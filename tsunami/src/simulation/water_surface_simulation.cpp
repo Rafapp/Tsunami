@@ -39,14 +39,14 @@ struct WaterPushConstantsRaw {
 };
 
 struct FloatingObjectPushConstantsRaw {
-	float    time_seconds           = 0.0f;
-	float    delta_time             = 1.0f / 60.0f;
-	float    height_to_world_scale  = 1.0f;
-	float    surface_bounds         = 0.94f;
+	float    time_seconds            = 0.0f;
+	float    delta_time              = 1.0f / 60.0f;
+	float    height_to_world_scale   = 1.0f;
+	float    surface_bounds          = 0.94f;
 	float    boundary_shape_exponent = 2.0f;
-	uint32_t object_count           = 0;
-	uint32_t reset_requested        = 0;
-	uint32_t _pad0                  = 0;
+	uint32_t object_count            = 0;
+	uint32_t reset_requested         = 0;
+	uint32_t _pad0                   = 0;
 };
 
 struct alignas(16) FloatingObjectSettingsGpu {
@@ -171,12 +171,13 @@ std::vector<float> resampleDomainMask(const std::vector<float>& source, VkExtent
 		return makeDefaultDomainMask(target_extent);
 	}
 
-	if (source_extent.width == target_extent.width && source_extent.height == target_extent.height) {
+	if (source_extent.width == target_extent.width &&
+	    source_extent.height == target_extent.height) {
 		return source;
 	}
 
 	std::vector<float> target(target_texel_count, 1.0f);
-	const float source_width_minus_one =
+	const float        source_width_minus_one =
 	    static_cast<float>(std::max<uint32_t>(source_extent.width, 1u) - 1u);
 	const float source_height_minus_one =
 	    static_cast<float>(std::max<uint32_t>(source_extent.height, 1u) - 1u);
@@ -186,16 +187,15 @@ std::vector<float> resampleDomainMask(const std::vector<float>& source, VkExtent
 	    static_cast<float>(std::max<uint32_t>(target_extent.height, 1u) - 1u);
 
 	for (uint32_t y = 0; y < target_extent.height; ++y) {
-		const float v = target_height_minus_one > 0.0f ?
-		                    static_cast<float>(y) / target_height_minus_one :
-		                    0.0f;
+		const float v =
+		    target_height_minus_one > 0.0f ? static_cast<float>(y) / target_height_minus_one : 0.0f;
 		const uint32_t source_y =
 		    std::min<uint32_t>(static_cast<uint32_t>(std::lround(v * source_height_minus_one)),
 		                       source_extent.height - 1u);
 		for (uint32_t x = 0; x < target_extent.width; ++x) {
-			const float u = target_width_minus_one > 0.0f ?
-			                    static_cast<float>(x) / target_width_minus_one :
-			                    0.0f;
+			const float    u = target_width_minus_one > 0.0f ?
+			                       static_cast<float>(x) / target_width_minus_one :
+			                       0.0f;
 			const uint32_t source_x =
 			    std::min<uint32_t>(static_cast<uint32_t>(std::lround(u * source_width_minus_one)),
 			                       source_extent.width - 1u);
@@ -594,13 +594,13 @@ const WaterSurfaceDiagnostics&
 	m_water_push_constants->floating_object_count = m_floating_object_count;
 	m_water_push_constants->floating_object_interaction_count = m_floating_object_interaction_count;
 
-	m_object_push_constants->time_seconds          = time_seconds;
-	m_object_push_constants->delta_time            = clamped_delta_time;
-	m_object_push_constants->height_to_world_scale = m_height_to_world_scale;
-	m_object_push_constants->surface_bounds        = m_surface_bounds;
+	m_object_push_constants->time_seconds            = time_seconds;
+	m_object_push_constants->delta_time              = clamped_delta_time;
+	m_object_push_constants->height_to_world_scale   = m_height_to_world_scale;
+	m_object_push_constants->surface_bounds          = m_surface_bounds;
 	m_object_push_constants->boundary_shape_exponent = m_boundary_shape_exponent;
-	m_object_push_constants->object_count          = m_floating_object_count;
-	m_object_push_constants->reset_requested       = m_reset_objects_requested ? 1u : 0u;
+	m_object_push_constants->object_count            = m_floating_object_count;
+	m_object_push_constants->reset_requested         = m_reset_objects_requested ? 1u : 0u;
 
 	return m_diagnostics;
 }

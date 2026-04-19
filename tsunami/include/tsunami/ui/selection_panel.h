@@ -90,8 +90,8 @@ struct SelectionContext {
 	float                      editor_scale        = 1.0f;
 	glm::vec3                  editor_translation  = glm::vec3(0.0f);
 	glm::vec3                  editor_rotation_deg = glm::vec3(0.0f);
-	glm::vec4                  outline_color = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
-	uint32_t                   outline_width = 1;
+	glm::vec4                  outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
+	uint32_t                   outline_width       = 1;
 	std::vector<ObjectIdEntry> object_id_map;
 
 	SelectionContext();

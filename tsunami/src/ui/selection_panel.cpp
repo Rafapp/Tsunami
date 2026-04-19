@@ -264,7 +264,7 @@ static VoiceDrivenSyncResult syncVoiceDrivenSelectionParameter(float loudness) {
 			result.material_changed                          = true;
 			return result;
 		}
-case VoiceDrivenParameter::ObjectScale: {
+		case VoiceDrivenParameter::ObjectScale: {
 			const float target_value =
 			    voiceDrivenScalarValue(selection_ctx.voice_parameter, loudness);
 			if (std::abs(selection_ctx.editor_scale - target_value) <= 1.0e-4f) {
