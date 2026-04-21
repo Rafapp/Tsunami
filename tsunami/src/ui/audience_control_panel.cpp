@@ -168,6 +168,11 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	ImGui::Separator();
 	ImGui::TextUnformatted("Water Surface");
 	changed |= ImGui::Checkbox("Voice drives water motion", &state.water_voice_control_enabled);
+	int         water_drive_mode   = static_cast<int>(state.water.drive_mode);
+	const char* water_drive_items[] = {"Physical (inertia)", "Artist (linear)"};
+	changed |= ImGui::Combo("Water drive mode", &water_drive_mode, water_drive_items,
+	                        IM_ARRAYSIZE(water_drive_items));
+	state.water.drive_mode = static_cast<simulation::WaterDriveMode>(water_drive_mode);
 	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.28f, "%.3f");
 	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.004f, 0.12f, "%.3f");
 	changed |=
@@ -185,21 +190,12 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
 	                              8.0f, "%.2f");
-	if (ImGui::Button("Apply calm demo preset")) {
-		state.water_voice_control_enabled  = false;
-		state.water.propagation            = 0.05f;
-		state.water.damping                = 0.095f;
-		state.water.restoring_force        = 0.24f;
-		state.water.height_scale           = 6.0f;
-		state.water.ripple_radius          = 0.012f;
-		state.water.base_impulse           = 0.0f;
-		state.water.audio_impulse_scale    = 0.0f;
-		state.water.floating_wake_strength = 0.10f;
-		state.water.orbit_radius           = 0.0f;
-		state.water.orbit_speed            = 0.0f;
-		state.water.impulse_frequency_hz   = 0.5f;
-		state.reset_water_requested        = true;
-		changed                            = true;
+	if (state.water.drive_mode == simulation::WaterDriveMode::ArtistLinear) {
+		ImGui::TextUnformatted(
+		    "Artist mode: linear voice->waves, no inertia memory (0 = calm, higher = choppier).");
+	} else {
+		ImGui::TextUnformatted(
+		    "Physical mode: voice controls wave intensity with inertia (0 calms over time).");
 	}
 	if (ImGui::Button(state.water_paused ? "Resume water simulation" : "Pause water simulation")) {
 		state.water_paused = !state.water_paused;

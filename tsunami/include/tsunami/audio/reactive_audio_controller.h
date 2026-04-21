@@ -38,7 +38,8 @@ struct ReactiveAudioDiagnostics {
 
 class ReactiveAudioController {
   public:
-	float update(const ReactiveAudioSettings& settings, const ReactiveAudioInputFrame& input_frame);
+	float update(const ReactiveAudioSettings& settings, const ReactiveAudioInputFrame& input_frame,
+	             float delta_time);
 	void  reset();
 
 	const ReactiveAudioDiagnostics& diagnostics() const {

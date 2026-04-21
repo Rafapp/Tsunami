@@ -542,14 +542,17 @@ float normalizeMicrophoneLevelForSelection(const audio::ReactiveAudioSettings& s
 
 float updateSelectionVoiceLoudness(const audio::ReactiveAudioSettings&   settings,
                                    const audio::ReactiveAudioInputFrame& input_frame,
-                                   float previous_smoothed_loudness) {
+                                   float previous_smoothed_loudness,
+                                   float delta_time) {
 	const float target_loudness =
 	    input_frame.source_available ?
 	        normalizeMicrophoneLevelForSelection(settings, input_frame.raw_level) :
 	        0.0f;
 	const float smoothing = std::clamp(settings.smoothing, 0.01f, 1.0f);
+	const float dt_steps  = std::clamp(delta_time * 60.0f, 0.0f, 8.0f);
+	const float alpha     = 1.0f - std::pow(1.0f - smoothing, dt_steps);
 	const float smoothed_loudness =
-	    previous_smoothed_loudness + (target_loudness - previous_smoothed_loudness) * smoothing;
+	    previous_smoothed_loudness + (target_loudness - previous_smoothed_loudness) * alpha;
 	return clampUnit(smoothed_loudness);
 }
 
@@ -4696,11 +4699,12 @@ void Runtime::MainLoop() {
 
 		float audio_level = 0.0f;
 		if (m_audio_controller != nullptr) {
-			audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+			audio_level =
+			    m_audio_controller->update(overlay_ctx.controls.audio, audio_input, delta_time);
 			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 		}
 		selection_voice_loudness = updateSelectionVoiceLoudness(
-		    overlay_ctx.controls.audio, audio_input, selection_voice_loudness);
+		    overlay_ctx.controls.audio, audio_input, selection_voice_loudness, delta_time);
 		const float water_audio_level = overlay_ctx.controls.water_voice_control_enabled ?
 		                                    overlay_ctx.diagnostics.audio.normalized_level :
 		                                    0.0f;
@@ -4795,11 +4799,12 @@ void Runtime::MainLoop() {
 
 		if (controls_changed) {
 			if (m_audio_controller != nullptr) {
-				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
+				audio_level =
+				    m_audio_controller->update(overlay_ctx.controls.audio, audio_input, delta_time);
 				overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 			}
 			selection_voice_loudness = updateSelectionVoiceLoudness(
-			    overlay_ctx.controls.audio, audio_input, selection_voice_loudness);
+			    overlay_ctx.controls.audio, audio_input, selection_voice_loudness, delta_time);
 			const float updated_water_audio_level =
 			    overlay_ctx.controls.water_voice_control_enabled ?
 			        overlay_ctx.diagnostics.audio.normalized_level :

@@ -11,6 +11,11 @@ namespace simulation {
 constexpr uint32_t kMaxFloatingObjects            = 8;
 constexpr uint32_t kMaxFloatingObjectInteractions = kMaxFloatingObjects * 8;
 
+enum class WaterDriveMode : int {
+	PhysicalWithInertia = 0,
+	ArtistLinear        = 1,
+};
+
 struct WaterSurfaceSettings {
 	float propagation            = 0.22f;
 	float damping                = 0.012f;
@@ -23,6 +28,7 @@ struct WaterSurfaceSettings {
 	float orbit_radius           = 0.0f;
 	float orbit_speed            = 0.0f;
 	float impulse_frequency_hz   = 1.80f;
+	WaterDriveMode drive_mode    = WaterDriveMode::PhysicalWithInertia;
 };
 
 struct WaterSurfaceDiagnostics {

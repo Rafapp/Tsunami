@@ -35,6 +35,7 @@ struct WaterPushConstantsRaw {
 	float    floating_wake_strength            = 1.0f;
 	float    emitter_u                         = 0.5f;
 	float    emitter_v                         = 0.5f;
+	float    artist_calm_strength              = 0.0f;
 	uint32_t floating_object_count             = 0;
 	uint32_t floating_object_interaction_count = 0;
 };
@@ -500,62 +501,120 @@ const WaterSurfaceDiagnostics&
 	const float clamped_delta_time = std::clamp(delta_time, 1.0e-5f, 1.0f / 12.0f);
 	const float time_scale         = std::clamp(clamped_delta_time * 60.0f, 0.01f, 2.0f);
 	const float clamped_audio      = clamp01(audio_level);
-	const float gated_audio        = clamp01((clamped_audio - 0.025f) / 0.975f);
+	const float gated_audio        = clamp01((clamped_audio - 0.010f) / 0.990f);
+	const bool  artist_linear_mode = settings.drive_mode == WaterDriveMode::ArtistLinear;
+	const bool  artist_force_calm  = artist_linear_mode && gated_audio <= 1.0e-4f;
 	const bool  advance_state =
 	    m_last_prepare_time < 0.0f || std::abs(time_seconds - m_last_prepare_time) > 1.0e-5f;
 
 	if (advance_state) {
-		const float attack              = std::max(gated_audio - m_previous_audio_level, 0.0f);
-		const float activity_decay      = std::exp(-clamped_delta_time * 4.0f);
-		m_recent_activity               = std::max(gated_audio, m_recent_activity * activity_decay);
-		const float preview_speed_drive = clamp01(gated_audio * 0.55f + m_recent_activity * 0.75f);
-
 		float impulse_strength = 0.0f;
-		if (gated_audio > 0.0f) {
-			const float emission_rate = std::max(settings.impulse_frequency_hz, 0.0f) *
-			                            (0.18f + preview_speed_drive * 1.55f);
-			m_emission_accumulator += clamped_delta_time * emission_rate;
+		float       preview_speed_drive = gated_audio;
+		float       preview_activity    = 0.0f;
 
-			const bool cadence_pulse = m_emission_accumulator >= 1.0f;
-			const bool attack_pulse  = attack > 0.040f;
-			if (cadence_pulse) {
-				m_emission_accumulator -= std::floor(m_emission_accumulator);
-			}
-
-			if (cadence_pulse || attack_pulse) {
-				const float energy = clamp01(preview_speed_drive * 0.80f + attack * 2.00f);
-				impulse_strength   = std::max(settings.base_impulse, 0.0f) +
-				                     energy * std::max(settings.audio_impulse_scale, 0.0f) *
-				                         (0.70f + preview_speed_drive * 0.90f);
+		if (artist_linear_mode) {
+			m_recent_activity = 0.0f;
+			m_emission_accumulator      = 0.0f;
+			if (artist_force_calm) {
+				preview_speed_drive = 0.0f;
+				impulse_strength    = 0.0f;
+				if (!m_artist_calm_active) {
+					m_clear_history_requested = true;
+				}
+				m_artist_calm_active = true;
+			} else {
+				const float linear_wave_drive = gated_audio;
+				const float baseline_impulse =
+				    std::max(settings.base_impulse, 0.0f) * linear_wave_drive;
+				const float audio_impulse =
+				    std::max(settings.audio_impulse_scale, 0.0f) * linear_wave_drive;
+				impulse_strength      = baseline_impulse + audio_impulse;
+				m_artist_calm_active = false;
 			}
 		} else {
-			m_emission_accumulator = 0.0f;
+			const float attack         = std::max(gated_audio - m_previous_audio_level, 0.0f);
+			const float activity_decay = std::exp(-clamped_delta_time * 4.0f);
+			m_recent_activity          = std::max(gated_audio, m_recent_activity * activity_decay);
+			preview_speed_drive        = clamp01(gated_audio * 0.55f + m_recent_activity * 0.75f);
+			preview_activity           = m_recent_activity;
+
+			const float wave_drive =
+			    clamp01(gated_audio * 0.55f + m_recent_activity * 0.75f);
+			const bool has_wave_energy = wave_drive > 1.0e-4f || attack > 1.0e-4f;
+			if (has_wave_energy) {
+				const float emission_rate =
+				    std::max(settings.impulse_frequency_hz, 0.0f) * (0.20f + wave_drive * 1.80f);
+				m_emission_accumulator += clamped_delta_time * emission_rate;
+
+				const bool cadence_pulse = m_emission_accumulator >= 1.0f;
+				const bool attack_pulse  = attack > 0.040f;
+				if (cadence_pulse) {
+					m_emission_accumulator -= std::floor(m_emission_accumulator);
+				}
+
+				if (cadence_pulse || attack_pulse) {
+					const float energy = clamp01(wave_drive * 0.78f + attack * 2.20f);
+					const float baseline_impulse =
+					    std::max(settings.base_impulse, 0.0f) * wave_drive;
+					const float audio_impulse =
+					    energy * std::max(settings.audio_impulse_scale, 0.0f) *
+					    (0.65f + wave_drive * 0.95f);
+					impulse_strength = baseline_impulse + audio_impulse;
+				}
+			} else {
+				m_emission_accumulator = 0.0f;
+			}
+			m_artist_calm_active = false;
 		}
 
 		const float preview_height_scale =
-		    std::clamp(settings.height_scale * (0.84f + m_recent_activity * 0.36f), 0.1f, 40.0f);
+		    std::clamp(settings.height_scale * (0.84f + preview_speed_drive * 0.36f), 0.1f, 40.0f);
 		const float preview_world_height_scale = std::max(preview_height_scale * 0.055f, 1.0e-4f);
 		const float max_stable_sim_height =
 		    std::clamp(0.24f / preview_world_height_scale, 0.08f, 0.42f);
 		const float max_impulse =
 		    std::clamp(max_stable_sim_height *
-		                   (0.12f + preview_speed_drive * 0.10f + m_recent_activity * 0.06f),
+		                   (0.12f + preview_speed_drive * 0.10f + preview_activity * 0.06f),
 		               0.010f, 0.036f);
 		m_pending_impulse      = std::min(impulse_strength, max_impulse);
 		m_previous_audio_level = gated_audio;
 		m_last_prepare_time    = time_seconds;
 	}
 
-	const float speed_drive = clamp01(gated_audio * 0.45f + m_recent_activity * 0.85f);
+	if (artist_force_calm) {
+		m_pending_impulse = 0.0f;
+		if (!m_artist_calm_active) {
+			m_clear_history_requested = true;
+			m_artist_calm_active      = true;
+		}
+	} else if (artist_linear_mode) {
+		m_artist_calm_active = false;
+	} else {
+		m_artist_calm_active = false;
+	}
+
+	const float speed_drive =
+	    artist_linear_mode ? gated_audio : clamp01(gated_audio * 0.35f + m_recent_activity * 0.95f);
+	const float artist_calm_strength =
+	    artist_linear_mode ? clamp01(1.0f - speed_drive) : 0.0f;
 	const float propagation =
 	    std::clamp(settings.propagation * (0.70f + speed_drive * 0.30f) * time_scale * time_scale,
 	               0.0f, 0.24f);
-	const float damping =
-	    std::clamp(settings.damping + ((1.0f - speed_drive) * 0.010f) + (speed_drive * 0.004f),
-	               0.0060f, 0.090f);
-	const float restoring_force = std::clamp(
-	    settings.restoring_force * (0.80f + speed_drive * 1.20f) * time_scale * time_scale, 0.0f,
-	    0.28f);
+	const float damping = artist_linear_mode ?
+	                          std::clamp(settings.damping + ((1.0f - speed_drive) * 0.040f),
+	                                     0.010f, 0.120f) :
+	                          std::clamp(
+	                              settings.damping + ((1.0f - speed_drive) * 0.010f) +
+	                                  (speed_drive * 0.004f),
+	                              0.0060f, 0.090f);
+	const float restoring_force =
+	    artist_linear_mode ?
+	        std::clamp(settings.restoring_force * (0.45f + speed_drive * 1.55f) * time_scale *
+	                       time_scale,
+	                   0.0f, 0.28f) :
+	        std::clamp(
+	            settings.restoring_force * (0.80f + speed_drive * 1.20f) * time_scale * time_scale,
+	            0.0f, 0.28f);
 	const float orbit_radius = std::clamp(settings.orbit_radius, 0.0f, 0.45f);
 	const float orbit_speed  = std::max(settings.orbit_speed, 0.0f);
 	const float orbit_angle  = time_seconds * orbit_speed * kPi * 2.0f;
@@ -600,6 +659,7 @@ const WaterSurfaceDiagnostics&
 	m_water_push_constants->floating_wake_strength = floating_wake_strength;
 	m_water_push_constants->emitter_u              = m_diagnostics.emitter_u;
 	m_water_push_constants->emitter_v              = m_diagnostics.emitter_v;
+	m_water_push_constants->artist_calm_strength   = artist_calm_strength;
 	m_water_push_constants->floating_object_count  = m_floating_object_count;
 	m_water_push_constants->floating_object_interaction_count = m_floating_object_interaction_count;
 
@@ -621,6 +681,7 @@ void WaterSurfaceSimulation::requestReset() {
 	m_emission_accumulator    = 0.0f;
 	m_pending_impulse         = 0.0f;
 	m_last_prepare_time       = -1.0f;
+	m_artist_calm_active      = false;
 }
 
 void WaterSurfaceSimulation::requestObjectReset() {

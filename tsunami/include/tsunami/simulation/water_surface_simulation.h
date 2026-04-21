@@ -115,6 +115,7 @@ class WaterSurfaceSimulation {
 	float    m_emission_accumulator        = 0.0f;
 	float    m_pending_impulse             = 0.0f;
 	float    m_last_prepare_time           = -1.0f;
+	bool     m_artist_calm_active          = false;
 	float    m_surface_bounds              = 0.94f;
 	float    m_boundary_shape_exponent     = 2.0f;
 

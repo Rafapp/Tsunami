@@ -12,6 +12,7 @@ struct PushConstants {
     float floating_wake_strength;
     float emitter_u;
     float emitter_v;
+    float artist_calm_strength;
     uint floating_object_count;
     uint floating_object_interaction_count;
 };
@@ -712,12 +713,14 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float raw_velocity = center - previous;
     float world_velocity = abs(raw_velocity) * world_height_scale;
     float world_curvature = abs(laplacian) * world_height_scale;
+    float dt_steps = clamp(push.delta_time * 60.0f, 0.05f, 4.0f);
     float solver_stress = saturate(max(world_height / MAX_STABLE_WORLD_HEIGHT,
                                        max(world_velocity / MAX_STABLE_WORLD_VELOCITY,
                                            length(world_gradient) / MAX_STABLE_WORLD_SLOPE)));
     solver_stress = max(solver_stress, saturate(world_curvature * 2.6f));
     float adaptive_damping = saturate(push.damping + solver_stress * 0.08f);
-    float velocity = raw_velocity * (1.0f - adaptive_damping);
+    float damping_decay = pow(saturate(1.0f - adaptive_damping), dt_steps);
+    float velocity = raw_velocity * damping_decay;
     float collapse_smoothing = saturate(push.damping * 2.0f + solver_stress * 0.55f) * 0.04f;
 
     float2 uv = (float2(pixel) + 0.5f) / float2(dims);
@@ -725,12 +728,13 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float hull_target = objectHullDisplacementAtXZ(world_xz);
     float hull_mask = saturate(abs(hull_target) * 16.0f);
     float2 emitter = float2(push.emitter_u, push.emitter_v);
-    float disturbance = impactKernel(uv - emitter, push.ripple_radius) * push.impulse_strength;
+    float disturbance =
+        impactKernel(uv - emitter, push.ripple_radius) * push.impulse_strength * dt_steps;
     float max_sim_height = clamp(MAX_STABLE_WORLD_HEIGHT / world_height_scale, 0.08f, 0.42f);
     float max_sim_velocity = max(max_sim_height * (0.42f - solver_stress * 0.14f),
-                                 max_sim_height * 0.20f);
+                                 max_sim_height * 0.20f) * dt_steps;
     float max_disturbance = max(max_sim_height * (0.22f - solver_stress * 0.08f),
-                                max_sim_height * 0.08f);
+                                max_sim_height * 0.08f) * dt_steps;
 
     float roughness = push.audio_level * push.audio_level * (1.0f - solver_stress * 0.70f);
     float splash_angle = push.time_seconds * (6.0f + push.audio_level * 8.0f);
@@ -739,12 +743,12 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     disturbance += roughness *
                    impactKernel(uv - (emitter + splash_dir0 * push.ripple_radius * 1.85f),
                                 push.ripple_radius * 0.56f) *
-                   push.impulse_strength * 0.34f;
+                   push.impulse_strength * 0.34f * dt_steps;
     disturbance += roughness *
                    impactKernel(uv - (emitter - splash_dir1 * push.ripple_radius * 1.55f),
                                 push.ripple_radius * 0.46f) *
-                   push.impulse_strength * 0.22f;
-    disturbance += objectDisturbanceAtXZ(world_xz) * push.floating_wake_strength;
+                   push.impulse_strength * 0.22f * dt_steps;
+    disturbance += objectDisturbanceAtXZ(world_xz) * push.floating_wake_strength * dt_steps;
     disturbance *= (1.0f - solver_stress * 0.45f);
     disturbance = clamp(disturbance, -max_disturbance, max_disturbance);
 
@@ -756,6 +760,14 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float next_height = center + velocity;
     next_height = lerp(next_height, hull_target, hull_mask * (0.22f + solver_stress * 0.10f));
     next_height = lerp(next_height, neighbor_average, collapse_smoothing);
+    float calm_strength = saturate(push.artist_calm_strength);
+    if (calm_strength >= 0.999f) {
+        next_height = 0.0f;
+    } else if (calm_strength > 0.0f) {
+        float calm_blend =
+            1.0f - exp(-(calm_strength * calm_strength * 2.4f) * dt_steps);
+        next_height = lerp(next_height, 0.0f, saturate(calm_blend));
+    }
     next_height = clamp(next_height, -max_sim_height, max_sim_height);
     previous_height[coord] = next_height;
 
