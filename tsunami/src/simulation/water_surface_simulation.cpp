@@ -56,6 +56,7 @@ struct alignas(16) FloatingObjectSettingsGpu {
 	glm::vec4 buoyancy_linear_angular{};
 	glm::vec4 motion_planar{};
 	glm::vec4 anchor_waterline_yaw{};
+	glm::vec4 shape_profile{};
 };
 
 struct alignas(16) FloatingObjectStateGpu {
@@ -78,6 +79,7 @@ const std::array<FloatingObjectSettingsGpu, 3> kDefaultFloatingObjectSettings = 
         .buoyancy_linear_angular = glm::vec4(7.5f, 1.8f, 13.0f, 5.5f),
         .motion_planar           = glm::vec4(6.5f, 0.35f, 2.5f, 1.4f),
         .anchor_waterline_yaw    = glm::vec4(0.45f, 0.50f, 0.010f, 2.2f),
+        .shape_profile           = glm::vec4(0.85f, 0.0f, 0.0f, 0.0f),
     },
     FloatingObjectSettingsGpu{
         .anchor_base_height_yaw  = glm::vec4(0.28f, 0.14f, 0.025f, -18.0f * (kPi / 180.0f)),
@@ -86,6 +88,7 @@ const std::array<FloatingObjectSettingsGpu, 3> kDefaultFloatingObjectSettings = 
         .buoyancy_linear_angular = glm::vec4(7.5f, 1.8f, 13.0f, 5.5f),
         .motion_planar           = glm::vec4(6.5f, 0.35f, 2.8f, 1.4f),
         .anchor_waterline_yaw    = glm::vec4(0.45f, 0.44f, 0.010f, 2.2f),
+        .shape_profile           = glm::vec4(0.85f, 0.0f, 0.0f, 0.0f),
     },
     FloatingObjectSettingsGpu{
         .anchor_base_height_yaw  = glm::vec4(0.06f, 0.38f, 0.04f, 32.0f * (kPi / 180.0f)),
@@ -94,6 +97,7 @@ const std::array<FloatingObjectSettingsGpu, 3> kDefaultFloatingObjectSettings = 
         .buoyancy_linear_angular = glm::vec4(7.5f, 1.8f, 11.0f, 5.5f),
         .motion_planar           = glm::vec4(6.5f, 0.35f, 1.9f, 1.4f),
         .anchor_waterline_yaw    = glm::vec4(0.45f, 0.56f, 0.012f, 2.2f),
+        .shape_profile           = glm::vec4(0.85f, 0.0f, 0.0f, 0.0f),
     },
 };
 
@@ -119,6 +123,8 @@ FloatingObjectSettingsGpu
 	                                     settings.planar_drift_strength, settings.planar_damping);
 	gpu.anchor_waterline_yaw = glm::vec4(settings.anchor_pull_strength, settings.drift_radius,
 	                                     settings.waterline_offset, settings.yaw_follow_strength);
+	gpu.shape_profile        = glm::vec4(settings.footprint_roundness,
+	                                     settings.footprint_hole_ratio, 0.0f, 0.0f);
 	return gpu;
 }
 

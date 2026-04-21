@@ -57,6 +57,8 @@ struct FloatingObjectSettings {
 	float     planar_damping        = 1.4f;
 	float     anchor_pull_strength  = 0.45f;
 	float     drift_radius          = 0.48f;
+	float     footprint_roundness   = 0.85f;
+	float     footprint_hole_ratio  = 0.0f;
 	float     waterline_offset      = 0.01f;
 	float     yaw_follow_strength   = 2.2f;
 };

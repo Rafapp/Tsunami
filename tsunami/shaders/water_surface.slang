@@ -185,6 +185,65 @@ HorizontalFootprintGpu computeHorizontalFootprint(FloatingObjectGpu object_data)
     return footprint;
 }
 
+float boxSignedDistance2D(float2 point, float2 half_extents)
+{
+    float2 q = abs(point) - half_extents;
+    float2 outside = max(q, float2(0.0f, 0.0f));
+    float outside_distance = length(outside);
+    float inside_distance = min(max(q.x, q.y), 0.0f);
+    return outside_distance + inside_distance;
+}
+
+float ellipseSignedDistanceApprox2D(float2 point, float2 half_extents)
+{
+    float2 safe_half_extents = max(half_extents, float2(1.0e-4f, 1.0e-4f));
+    float2 normalized = point / safe_half_extents;
+    float radius = length(normalized);
+    return (radius - 1.0f) * min(safe_half_extents.x, safe_half_extents.y);
+}
+
+float footprintSignedDistance(float2 point, float2 half_extents, float roundness)
+{
+    float box_distance = boxSignedDistance2D(point, half_extents);
+    float ellipse_distance = ellipseSignedDistanceApprox2D(point, half_extents);
+    return lerp(box_distance, ellipse_distance, clamp(roundness, 0.0f, 1.0f));
+}
+
+struct FootprintSampleGpu
+{
+    float occupied_weight;
+    float boundary_distance;
+};
+
+FootprintSampleGpu sampleFootprint(FloatingObjectGpu object_data, HorizontalFootprintGpu footprint,
+                                   float2 local, float edge_softness)
+{
+    float2 half_extents = max(footprint.half_extents, float2(1.0e-4f, 1.0e-4f));
+    float roundness = clamp(object_data.color.w, 0.0f, 1.0f);
+    float hole_ratio = clamp(object_data.half_extents.w, 0.0f, 0.92f);
+    float softness = max(edge_softness, 1.0e-4f);
+
+    float outer_signed_distance = footprintSignedDistance(local, half_extents, roundness);
+    float outer_weight = 1.0f - smoothstep(-softness, softness, outer_signed_distance);
+    float hole_weight = 0.0f;
+    float boundary_distance = abs(outer_signed_distance);
+
+    if (hole_ratio > 1.0e-3f) {
+        float2 inner_half_extents =
+            max(half_extents * hole_ratio, float2(1.0e-4f, 1.0e-4f));
+        float inner_signed_distance =
+            footprintSignedDistance(local, inner_half_extents, roundness);
+        float inner_softness = max(softness * 0.85f, 1.0e-4f);
+        hole_weight = 1.0f - smoothstep(-inner_softness, inner_softness, inner_signed_distance);
+        boundary_distance = min(boundary_distance, abs(inner_signed_distance));
+    }
+
+    FootprintSampleGpu sample;
+    sample.occupied_weight = saturate(outer_weight * (1.0f - hole_weight));
+    sample.boundary_distance = boundary_distance;
+    return sample;
+}
+
 float objectHullDisplacementAtXZ(float2 xz)
 {
     float displacement = 0.0f;
@@ -204,16 +263,13 @@ float objectHullDisplacementAtXZ(float2 xz)
 
         float2 delta = xz - object_data.center.xz;
         float2 local = float2(dot(delta, footprint.axis_u), dot(delta, footprint.axis_v));
-        float2 q = abs(local) - footprint.half_extents;
-        float2 outside = max(q, float2(0.0f, 0.0f));
-        float outside_distance = length(outside);
-        float inside_distance = min(max(q.x, q.y), 0.0f);
-        float signed_distance = outside_distance + inside_distance;
         float edge_softness = clamp(min(footprint.half_extents.x, footprint.half_extents.y) * 0.30f,
                                     0.03f, 0.09f);
-        float inside_weight =
-            1.0f - smoothstep(-edge_softness, edge_softness, signed_distance);
-        float positive_distance = max(signed_distance, 0.0f);
+        FootprintSampleGpu footprint_sample =
+            sampleFootprint(object_data, footprint, local, edge_softness);
+        float inside_weight = footprint_sample.occupied_weight;
+        float outside_weight = 1.0f - inside_weight;
+        float positive_distance = footprint_sample.boundary_distance;
         float rim_sigma = edge_softness * 1.35f;
         float rim_center = edge_softness * 1.15f;
         float rim_delta = positive_distance - rim_center;
@@ -226,7 +282,7 @@ float objectHullDisplacementAtXZ(float2 xz)
                                     max(2.0f * shoulder_sigma * shoulder_sigma, 1e-6f));
         float rim = (hull_displacement * 0.62f * rim_weight +
                      hull_displacement * 0.18f * shoulder_weight) *
-                    (1.0f - inside_weight);
+                    outside_weight;
         displacement += -hull_displacement * inside_weight + rim;
     }
 
@@ -484,8 +540,9 @@ bool objectBottomHeightAtXZ(float2 xz, FloatingObjectGpu object_data, out float 
     float2 delta = xz - object_data.center.xz;
     float2 local = float2(dot(delta, footprint.axis_u), dot(delta, footprint.axis_v));
     const float footprint_pad = 0.02f;
-    if (abs(local.x) > footprint.half_extents.x + footprint_pad ||
-        abs(local.y) > footprint.half_extents.y + footprint_pad) {
+    FootprintSampleGpu footprint_sample =
+        sampleFootprint(object_data, footprint, local, footprint_pad);
+    if (footprint_sample.occupied_weight <= 0.01f) {
         bottom_height = 0.0f;
         return false;
     }

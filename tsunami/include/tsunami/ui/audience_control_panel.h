@@ -46,6 +46,7 @@ struct AudienceDiagnostics {
 struct AudienceControlPanelState {
 	bool                             show_overlay            = true;
 	bool                             water_paused            = false;
+	bool                             water_voice_control_enabled = true;
 	bool                             reset_water_requested   = false;
 	bool                             reset_objects_requested = false;
 	float                            render_scale            = 0.60f;

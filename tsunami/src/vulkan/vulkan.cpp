@@ -529,6 +529,30 @@ audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput
 	return input_frame;
 }
 
+float clampUnit(float value) {
+	return std::clamp(value, 0.0f, 1.0f);
+}
+
+float normalizeMicrophoneLevelForSelection(const audio::ReactiveAudioSettings& settings,
+                                           float                               raw_level) {
+	const float noise_floor = clampUnit(settings.noise_floor);
+	const float sensitivity = std::max(settings.sensitivity, 0.0f);
+	return clampUnit((raw_level - noise_floor) * sensitivity);
+}
+
+float updateSelectionVoiceLoudness(const audio::ReactiveAudioSettings&   settings,
+                                   const audio::ReactiveAudioInputFrame& input_frame,
+                                   float previous_smoothed_loudness) {
+	const float target_loudness =
+	    input_frame.source_available ?
+	        normalizeMicrophoneLevelForSelection(settings, input_frame.raw_level) :
+	        0.0f;
+	const float smoothing = std::clamp(settings.smoothing, 0.01f, 1.0f);
+	const float smoothed_loudness =
+	    previous_smoothed_loudness + (target_loudness - previous_smoothed_loudness) * smoothing;
+	return clampUnit(smoothed_loudness);
+}
+
 void applyOverlayLevel(float value) {
 	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
 	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
@@ -998,15 +1022,19 @@ static glm::vec3 meshRotationPivotForTransform(int mesh_index) {
 	return glm::vec3(0.0f);
 }
 
-static glm::mat4 meshUserOffsetTransform(int mesh_index) {
+static glm::mat4 meshWorldTranslationTransform(int mesh_index) {
 	const glm::vec3 translation  = clampVec3(meshTranslationForTransform(mesh_index),
 	                                         kEditorTranslationMin, kEditorTranslationMax);
+	return glm::translate(glm::mat4(1.0f), translation);
+}
+
+static glm::mat4 meshLocalOffsetTransform(int mesh_index) {
 	const glm::vec3 rotation_deg = clampVec3(meshRotationForTransform(mesh_index),
 	                                         kEditorRotationMinDeg, kEditorRotationMaxDeg);
 	const glm::vec3 pivot        = meshRotationPivotForTransform(mesh_index);
 
-	return glm::translate(glm::mat4(1.0f), translation) * glm::translate(glm::mat4(1.0f), pivot) *
-	       rotationDegreesMatrix(rotation_deg) * glm::translate(glm::mat4(1.0f), -pivot);
+	return glm::translate(glm::mat4(1.0f), pivot) * rotationDegreesMatrix(rotation_deg) *
+	       glm::translate(glm::mat4(1.0f), -pivot);
 }
 
 static glm::mat4 composeMeshTransform(int mesh_index) {
@@ -1015,7 +1043,8 @@ static glm::mat4 composeMeshTransform(int mesh_index) {
 		return glm::mat4(1.0f);
 	}
 
-	return mesh_pose_transforms[mesh_index] * meshUserOffsetTransform(mesh_index) *
+	return meshWorldTranslationTransform(mesh_index) * mesh_pose_transforms[mesh_index] *
+	       meshLocalOffsetTransform(mesh_index) *
 	       glm::scale(glm::mat4(1.0f), glm::vec3(meshScaleForTransform(mesh_index))) *
 	       mesh_base_transforms[mesh_index];
 }
@@ -1544,6 +1573,8 @@ static simulation::FloatingObjectSettings
 	settings.planar_damping        = is_teapot ? 1.9f : 1.4f;
 	settings.anchor_pull_strength  = 0.45f;
 	settings.drift_radius          = is_ring ? 0.56f : (is_teapot ? 0.28f : 0.42f);
+	settings.footprint_roundness   = is_ring ? 1.0f : (is_teapot ? 0.72f : (is_duck ? 0.86f : 0.90f));
+	settings.footprint_hole_ratio  = is_ring ? 0.52f : 0.0f;
 	settings.waterline_offset =
 	    is_ring ? -settings.size.y * 0.08f :
 	              (is_teapot ? -settings.size.y * 0.18f : settings.size.y * 0.02f);
@@ -1846,6 +1877,7 @@ static bool applySelectedTransformEditor(Scene* scene, VmaAllocator allocator) {
 			    floating_group_base_settings[floating_group_index];
 			scaled_settings.size *= clamped_scale;
 			scaled_settings.mass *= clamped_scale * clamped_scale * clamped_scale;
+			scaled_settings.buoyancy_strength *= clamped_scale * clamped_scale;
 			scaled_settings.drift_radius *= std::clamp(std::sqrt(clamped_scale), 0.5f, 2.0f);
 			scaled_settings.waterline_offset *= clamped_scale;
 			floating_simulation_settings[simulation_index] = scaled_settings;
@@ -4602,7 +4634,9 @@ void Runtime::MainLoop() {
 	bool                    show_all_gui           = true;
 	bool                    show_selection_panel   = true;
 	bool                    last_water_paused      = overlay_ctx.controls.water_paused;
-	float applied_render_scale        = std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
+	float                   selection_voice_loudness = 0.0f;
+	float applied_render_scale =
+	    std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
 	overlay_ctx.controls.render_scale = applied_render_scale;
 
 	// One-shot key-press trackers
@@ -4676,7 +4710,11 @@ void Runtime::MainLoop() {
 			audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
 			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 		}
-		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
+		selection_voice_loudness = updateSelectionVoiceLoudness(
+		    overlay_ctx.controls.audio, audio_input, selection_voice_loudness);
+		const float water_audio_level = overlay_ctx.controls.water_voice_control_enabled ?
+		                                    overlay_ctx.diagnostics.audio.normalized_level :
+		                                    0.0f;
 		applyOverlayLevel(audio_level);
 		syncFloatingSimulationBoundary(m_water_surface.get());
 		update_water_and_floaters(water_audio_level);
@@ -4720,7 +4758,7 @@ void Runtime::MainLoop() {
 		ui::SelectionPanelResult selection_panel_result{};
 		if (show_all_gui && show_selection_panel) {
 			selection_panel_result = ui::drawSelectionPanel(
-			    m_scene.get(), overlay_ctx.diagnostics.audio, &show_selection_panel);
+			    m_scene.get(), selection_voice_loudness, &show_selection_panel);
 		}
 		{
 			const uint32_t sanitized_rank_count =
@@ -4771,7 +4809,12 @@ void Runtime::MainLoop() {
 				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
 				overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 			}
-			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
+			selection_voice_loudness = updateSelectionVoiceLoudness(
+			    overlay_ctx.controls.audio, audio_input, selection_voice_loudness);
+			const float updated_water_audio_level =
+			    overlay_ctx.controls.water_voice_control_enabled ?
+			        overlay_ctx.diagnostics.audio.normalized_level :
+			        0.0f;
 			applyOverlayLevel(audio_level);
 			syncFloatingSimulationBoundary(m_water_surface.get());
 			update_water_and_floaters(updated_water_audio_level);

@@ -155,11 +155,11 @@ static const char* voiceDrivenParameterLabel(VoiceDrivenParameter parameter) {
 		case VoiceDrivenParameter::ObjectScale:
 			return "Object scale";
 		case VoiceDrivenParameter::ObjectTranslateX:
-			return "Object translation X";
+			return "Object translation X (world)";
 		case VoiceDrivenParameter::ObjectTranslateY:
-			return "Object translation Y";
+			return "Object translation Y (world)";
 		case VoiceDrivenParameter::ObjectTranslateZ:
-			return "Object translation Z";
+			return "Object translation Z (world)";
 		case VoiceDrivenParameter::ObjectRotateX:
 			return "Object rotation X";
 		case VoiceDrivenParameter::ObjectRotateY:
@@ -359,11 +359,9 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* mat
 	                         selection_ctx.selected_mesh_index, selection_ctx.editor_material);
 }
 
-SelectionPanelResult drawSelectionPanel(const Scene*                           scene,
-                                        const audio::ReactiveAudioDiagnostics& audio,
-                                        bool*                                  is_open) {
+SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness,
+                                        bool* is_open) {
 	SelectionPanelResult result{};
-	const float          voice_loudness = audio.smoothed_level;
 	const glm::vec3      voice_color    = rainbowColorFromLoudness(voice_loudness);
 	const float voice_value = voiceDrivenScalarValue(selection_ctx.voice_parameter, voice_loudness);
 
@@ -546,7 +544,7 @@ SelectionPanelResult drawSelectionPanel(const Scene*                           s
 	result.transform_changed |=
 	    ImGui::SliderFloat("Scale", &selection_ctx.editor_scale, 0.10f, 3.00f, "%.2f");
 	result.transform_changed |=
-	    ImGui::SliderFloat3("Translation", glm::value_ptr(selection_ctx.editor_translation),
+	    ImGui::SliderFloat3("Translation (world)", glm::value_ptr(selection_ctx.editor_translation),
 	                        kEditorTranslationMin, kEditorTranslationMax, "%.2f");
 	result.transform_changed |=
 	    ImGui::SliderFloat3("Rotation", glm::value_ptr(selection_ctx.editor_rotation_deg),
