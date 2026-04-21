@@ -1522,7 +1522,7 @@ static float floatingTargetMajorWorldSize(const std::string& asset_name_lower) {
 }
 
 static float floatingDesiredDraftFraction(const std::string& asset_name_lower) {
-	(void)asset_name_lower;
+	(void) asset_name_lower;
 	// Keep all floaters at the same draft ratio as ring floaties.
 	return 0.18f;
 }
@@ -1545,9 +1545,9 @@ static simulation::FloatingObjectSettings
 	    scaled_world_size.x / std::max(water_surface_render_ctx.half_extent_u, 1.0e-4f);
 	settings.size.z =
 	    scaled_world_size.z / std::max(water_surface_render_ctx.half_extent_v, 1.0e-4f);
-	settings.size.y    = scaled_world_size.y;
-	const float volume = scaled_world_size.x * scaled_world_size.y * scaled_world_size.z;
-	settings.mass      = std::clamp(volume * 30.0f, 0.35f, 1.80f);
+	settings.size.y           = scaled_world_size.y;
+	const float volume        = scaled_world_size.x * scaled_world_size.y * scaled_world_size.z;
+	settings.mass             = std::clamp(volume * 30.0f, 0.35f, 1.80f);
 	settings.color            = glm::vec3(0.86f, 0.58f, 0.28f);
 	const float desired_draft = std::max(
 	    settings.size.y * floatingDesiredDraftFraction(asset_name_lower), settings.size.y * 0.12f);
@@ -1565,8 +1565,8 @@ static simulation::FloatingObjectSettings
 	settings.drift_radius          = 0.56f;
 	settings.footprint_roundness = is_ring ? 1.0f : (is_teapot ? 0.72f : (is_duck ? 0.86f : 0.90f));
 	settings.footprint_hole_ratio = is_ring ? 0.52f : 0.0f;
-	settings.waterline_offset    = -settings.size.y * 0.08f;
-	settings.yaw_follow_strength = 2.2f;
+	settings.waterline_offset     = -settings.size.y * 0.08f;
+	settings.yaw_follow_strength  = 2.2f;
 	return settings;
 }
 
