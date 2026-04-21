@@ -426,31 +426,6 @@ audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput
 	return input_frame;
 }
 
-float clampUnit(float value) {
-	return std::clamp(value, 0.0f, 1.0f);
-}
-
-float normalizeMicrophoneLevelForSelection(const audio::ReactiveAudioSettings& settings,
-                                           float                               raw_level) {
-	const float noise_floor = clampUnit(settings.noise_floor);
-	const float sensitivity = std::max(settings.sensitivity, 0.0f);
-	return clampUnit((raw_level - noise_floor) * sensitivity);
-}
-
-// TODO: MOVE TO AUDIO
-float updateSelectionVoiceLoudness(const audio::ReactiveAudioSettings&   settings,
-                                   const audio::ReactiveAudioInputFrame& input_frame,
-                                   float previous_smoothed_loudness) {
-	const float target_loudness =
-	    input_frame.source_available ?
-	        normalizeMicrophoneLevelForSelection(settings, input_frame.raw_level) :
-	        0.0f;
-	const float smoothing = std::clamp(settings.smoothing, 0.01f, 1.0f);
-	const float smoothed_loudness =
-	    previous_smoothed_loudness + (target_loudness - previous_smoothed_loudness) * smoothing;
-	return clampUnit(smoothed_loudness);
-}
-
 void applyOverlayLevel(float value) {
 	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
 	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
@@ -2966,9 +2941,8 @@ void Runtime::MainLoop() {
 			audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
 			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 		}
-		scene_ctx.selection_voice_loudness = updateSelectionVoiceLoudness(
-		    overlay_ctx.controls.audio, audio_input, scene_ctx.selection_voice_loudness);
-		const float water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
+		scene_ctx.selection_voice_loudness = std::clamp(audio_level, 0.0f, 1.0f);
+		const float water_audio_level      = overlay_ctx.diagnostics.audio.normalized_level;
 		applyOverlayLevel(audio_level);
 		update_water_and_floaters(water_audio_level);
 
@@ -3032,8 +3006,7 @@ void Runtime::MainLoop() {
 				audio_level = m_audio_controller->update(overlay_ctx.controls.audio, audio_input);
 				overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
 			}
-			scene_ctx.selection_voice_loudness = updateSelectionVoiceLoudness(
-			    overlay_ctx.controls.audio, audio_input, scene_ctx.selection_voice_loudness);
+			scene_ctx.selection_voice_loudness    = std::clamp(audio_level, 0.0f, 1.0f);
 			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 			applyOverlayLevel(audio_level);
 			update_water_and_floaters(updated_water_audio_level);
