@@ -251,7 +251,7 @@ struct PathTracerPushConstants {
 };
 
 static_assert(sizeof(PathTracerPushConstants) == 124);
-static constexpr uint32_t kWaterPauseBit = 0x80000000u;
+static constexpr uint32_t kWaterPauseBit   = 0x80000000u;
 static constexpr uint32_t kSceneDynamicBit = 0x40000000u;
 static constexpr uint32_t kWaterSppMask    = 0x0000FFFFu;
 
@@ -5235,9 +5235,8 @@ void Runtime::MainLoop() {
 		    effective_water_paused &&
 		    ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::Naive;
 		const bool hold_hipr_animation_accumulation =
-		    floating_meshes_moved &&
-		    (current_render_mode == ui::RenderDebugViewMode::HiPR ||
-		     current_render_mode == ui::RenderDebugViewMode::HiPRVis);
+		    floating_meshes_moved && (current_render_mode == ui::RenderDebugViewMode::HiPR ||
+		                              current_render_mode == ui::RenderDebugViewMode::HiPRVis);
 		if (needs_visibility_pass && !hold_naive_pause_accumulation &&
 		    !hold_hipr_animation_accumulation) {
 			frame_number = 0;
