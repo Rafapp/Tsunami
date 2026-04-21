@@ -123,8 +123,8 @@ FloatingObjectSettingsGpu
 	                                     settings.planar_drift_strength, settings.planar_damping);
 	gpu.anchor_waterline_yaw = glm::vec4(settings.anchor_pull_strength, settings.drift_radius,
 	                                     settings.waterline_offset, settings.yaw_follow_strength);
-	gpu.shape_profile        = glm::vec4(settings.footprint_roundness,
-	                                     settings.footprint_hole_ratio, 0.0f, 0.0f);
+	gpu.shape_profile =
+	    glm::vec4(settings.footprint_roundness, settings.footprint_hole_ratio, 0.0f, 0.0f);
 	return gpu;
 }
 

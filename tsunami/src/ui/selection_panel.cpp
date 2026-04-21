@@ -359,10 +359,9 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* mat
 	                         selection_ctx.selected_mesh_index, selection_ctx.editor_material);
 }
 
-SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness,
-                                        bool* is_open) {
+SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness, bool* is_open) {
 	SelectionPanelResult result{};
-	const glm::vec3      voice_color    = rainbowColorFromLoudness(voice_loudness);
+	const glm::vec3      voice_color = rainbowColorFromLoudness(voice_loudness);
 	const float voice_value = voiceDrivenScalarValue(selection_ctx.voice_parameter, voice_loudness);
 
 	if (is_open != nullptr && !*is_open) {

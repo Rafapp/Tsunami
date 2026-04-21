@@ -1023,8 +1023,8 @@ static glm::vec3 meshRotationPivotForTransform(int mesh_index) {
 }
 
 static glm::mat4 meshWorldTranslationTransform(int mesh_index) {
-	const glm::vec3 translation  = clampVec3(meshTranslationForTransform(mesh_index),
-	                                         kEditorTranslationMin, kEditorTranslationMax);
+	const glm::vec3 translation = clampVec3(meshTranslationForTransform(mesh_index),
+	                                        kEditorTranslationMin, kEditorTranslationMax);
 	return glm::translate(glm::mat4(1.0f), translation);
 }
 
@@ -1573,8 +1573,8 @@ static simulation::FloatingObjectSettings
 	settings.planar_damping        = is_teapot ? 1.9f : 1.4f;
 	settings.anchor_pull_strength  = 0.45f;
 	settings.drift_radius          = is_ring ? 0.56f : (is_teapot ? 0.28f : 0.42f);
-	settings.footprint_roundness   = is_ring ? 1.0f : (is_teapot ? 0.72f : (is_duck ? 0.86f : 0.90f));
-	settings.footprint_hole_ratio  = is_ring ? 0.52f : 0.0f;
+	settings.footprint_roundness = is_ring ? 1.0f : (is_teapot ? 0.72f : (is_duck ? 0.86f : 0.90f));
+	settings.footprint_hole_ratio = is_ring ? 0.52f : 0.0f;
 	settings.waterline_offset =
 	    is_ring ? -settings.size.y * 0.08f :
 	              (is_teapot ? -settings.size.y * 0.18f : settings.size.y * 0.02f);
@@ -4627,16 +4627,15 @@ void Runtime::MainLoop() {
 	bool needs_visibility_pass = true;
 
 	// Tracks active material drag/edit interactions from the selection panel.
-	bool                    material_edit_mode     = false;
-	bool                    camera_was_moving      = false;
-	bool                    hipr_force_clear_order = true;
-	ui::RenderDebugViewMode last_render_mode       = ui::selection_ctx.debug_view_mode;
-	bool                    show_all_gui           = true;
-	bool                    show_selection_panel   = true;
-	bool                    last_water_paused      = overlay_ctx.controls.water_paused;
+	bool                    material_edit_mode       = false;
+	bool                    camera_was_moving        = false;
+	bool                    hipr_force_clear_order   = true;
+	ui::RenderDebugViewMode last_render_mode         = ui::selection_ctx.debug_view_mode;
+	bool                    show_all_gui             = true;
+	bool                    show_selection_panel     = true;
+	bool                    last_water_paused        = overlay_ctx.controls.water_paused;
 	float                   selection_voice_loudness = 0.0f;
-	float applied_render_scale =
-	    std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
+	float applied_render_scale        = std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
 	overlay_ctx.controls.render_scale = applied_render_scale;
 
 	// One-shot key-press trackers
@@ -4757,8 +4756,8 @@ void Runtime::MainLoop() {
 
 		ui::SelectionPanelResult selection_panel_result{};
 		if (show_all_gui && show_selection_panel) {
-			selection_panel_result = ui::drawSelectionPanel(
-			    m_scene.get(), selection_voice_loudness, &show_selection_panel);
+			selection_panel_result = ui::drawSelectionPanel(m_scene.get(), selection_voice_loudness,
+			                                                &show_selection_panel);
 		}
 		{
 			const uint32_t sanitized_rank_count =

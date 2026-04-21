@@ -113,8 +113,7 @@ void        rebuildObjectIdMap(const Scene* scene);
 bool        selectMesh(const Scene* scene, int mesh_index);
 void        applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* material_mapped,
                                         uint32_t material_count, VmaAllocation material_alloc);
-SelectionPanelResult drawSelectionPanel(const Scene*                           scene,
-                                        float                                  voice_loudness,
-                                        bool*                                  is_open = nullptr);
+SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness,
+                                        bool* is_open = nullptr);
 
 }        // namespace ui

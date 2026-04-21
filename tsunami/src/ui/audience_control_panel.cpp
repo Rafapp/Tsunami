@@ -167,8 +167,7 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Water Surface");
-	changed |=
-	    ImGui::Checkbox("Voice drives water motion", &state.water_voice_control_enabled);
+	changed |= ImGui::Checkbox("Voice drives water motion", &state.water_voice_control_enabled);
 	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.28f, "%.3f");
 	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.004f, 0.12f, "%.3f");
 	changed |=
