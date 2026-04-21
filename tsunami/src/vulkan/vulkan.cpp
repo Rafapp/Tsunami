@@ -1522,16 +1522,9 @@ static float floatingTargetMajorWorldSize(const std::string& asset_name_lower) {
 }
 
 static float floatingDesiredDraftFraction(const std::string& asset_name_lower) {
-	if (asset_name_lower.find("ring") != std::string::npos) {
-		return 0.18f;
-	}
-	if (asset_name_lower.find("duck") != std::string::npos) {
-		return 0.30f;
-	}
-	if (asset_name_lower.find("teapot") != std::string::npos) {
-		return 0.56f;
-	}
-	return 0.28f;
+	(void)asset_name_lower;
+	// Keep all floaters at the same draft ratio as ring floaties.
+	return 0.18f;
 }
 
 static simulation::FloatingObjectSettings
@@ -1555,30 +1548,25 @@ static simulation::FloatingObjectSettings
 	settings.size.y    = scaled_world_size.y;
 	const float volume = scaled_world_size.x * scaled_world_size.y * scaled_world_size.z;
 	settings.mass      = std::clamp(volume * 30.0f, 0.35f, 1.80f);
-	if (is_teapot) {
-		settings.mass = std::clamp(volume * 44.0f, 0.70f, 1.80f);
-	}
 	settings.color            = glm::vec3(0.86f, 0.58f, 0.28f);
 	const float desired_draft = std::max(
 	    settings.size.y * floatingDesiredDraftFraction(asset_name_lower), settings.size.y * 0.12f);
 	settings.buoyancy_strength =
 	    std::clamp((4.5f * settings.mass) / std::max(desired_draft * 5.0f, 1.0e-4f), 16.0f, 46.0f);
-	settings.buoyancy_damping      = is_teapot ? 14.0f : 7.5f;
-	settings.linear_damping        = is_teapot ? 3.4f : 1.8f;
-	settings.angular_strength      = is_ring ? 9.5f : (is_teapot ? 8.0f : 12.0f);
-	settings.angular_damping       = is_teapot ? 7.5f : 5.5f;
-	settings.self_righting         = is_ring ? 4.5f : (is_teapot ? 4.0f : 6.5f);
-	settings.max_tilt_radians      = is_ring ? 0.42f : (is_teapot ? 0.24f : 0.34f);
-	settings.planar_drift_strength = is_teapot ? 1.6f : 2.4f;
-	settings.planar_damping        = is_teapot ? 1.9f : 1.4f;
+	settings.buoyancy_damping      = 7.5f;
+	settings.linear_damping        = 1.8f;
+	settings.angular_strength      = 9.5f;
+	settings.angular_damping       = 5.5f;
+	settings.self_righting         = 4.5f;
+	settings.max_tilt_radians      = 0.42f;
+	settings.planar_drift_strength = 2.4f;
+	settings.planar_damping        = 1.4f;
 	settings.anchor_pull_strength  = 0.45f;
-	settings.drift_radius          = is_ring ? 0.56f : (is_teapot ? 0.28f : 0.42f);
+	settings.drift_radius          = 0.56f;
 	settings.footprint_roundness = is_ring ? 1.0f : (is_teapot ? 0.72f : (is_duck ? 0.86f : 0.90f));
 	settings.footprint_hole_ratio = is_ring ? 0.52f : 0.0f;
-	settings.waterline_offset =
-	    is_ring ? -settings.size.y * 0.08f :
-	              (is_teapot ? -settings.size.y * 0.18f : settings.size.y * 0.02f);
-	settings.yaw_follow_strength = is_teapot ? 1.4f : 2.2f;
+	settings.waterline_offset    = -settings.size.y * 0.08f;
+	settings.yaw_follow_strength = 2.2f;
 	return settings;
 }
 
@@ -4610,7 +4598,7 @@ void Runtime::MainLoop() {
 		return snapped;
 	};
 
-	float last_frame_time = static_cast<float>(glfwGetTime());
+	double last_frame_time = glfwGetTime();
 
 	// Initialise fly camera from the scene camera
 	FlyCamera fly_cam(m_scene->m_camera.m_position, m_scene->m_camera.m_target,
@@ -4672,7 +4660,7 @@ void Runtime::MainLoop() {
 		const uint32_t framebuffer_height = m_window->height();
 		if (framebuffer_width == 0 || framebuffer_height == 0) {
 			m_window->waitEvents();
-			last_frame_time = static_cast<float>(glfwGetTime());
+			last_frame_time = glfwGetTime();
 			continue;
 		}
 
@@ -4684,9 +4672,11 @@ void Runtime::MainLoop() {
 			reset_hipr_object_sampling();
 		}
 
-		const float time_seconds = static_cast<float>(glfwGetTime());
-		const float delta_time   = std::max(time_seconds - last_frame_time, 1.0f / 240.0f);
-		last_frame_time          = time_seconds;
+		const double time_seconds_raw = glfwGetTime();
+		const float  time_seconds     = static_cast<float>(time_seconds_raw);
+		const float  delta_time =
+		    static_cast<float>(std::max(time_seconds_raw - last_frame_time, 1.0e-6));
+		last_frame_time = time_seconds_raw;
 
 		updateRenderDiagnostics(delta_time);
 

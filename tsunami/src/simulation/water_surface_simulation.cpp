@@ -496,8 +496,8 @@ WaterSurfaceSimulation::~WaterSurfaceSimulation() {
 const WaterSurfaceDiagnostics&
     WaterSurfaceSimulation::prepareFrame(const WaterSurfaceSettings& settings, float audio_level,
                                          float time_seconds, float delta_time) {
-	const float clamped_delta_time = std::clamp(delta_time, 1.0f / 240.0f, 1.0f / 12.0f);
-	const float time_scale         = std::clamp(clamped_delta_time * 60.0f, 0.25f, 2.0f);
+	const float clamped_delta_time = std::clamp(delta_time, 1.0e-5f, 1.0f / 12.0f);
+	const float time_scale         = std::clamp(clamped_delta_time * 60.0f, 0.01f, 2.0f);
 	const float clamped_audio      = clamp01(audio_level);
 	const float gated_audio        = clamp01((clamped_audio - 0.025f) / 0.975f);
 	const bool  advance_state =
