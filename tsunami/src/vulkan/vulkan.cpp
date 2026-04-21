@@ -252,7 +252,8 @@ struct PathTracerPushConstants {
 
 static_assert(sizeof(PathTracerPushConstants) == 124);
 static constexpr uint32_t kWaterPauseBit = 0x80000000u;
-static constexpr uint32_t kWaterSppMask  = 0x7FFFFFFFu;
+static constexpr uint32_t kSceneDynamicBit = 0x40000000u;
+static constexpr uint32_t kWaterSppMask    = 0x0000FFFFu;
 
 struct WaterSurfaceParamsGpu {
 	glm::vec4 center_trace_half_height    = glm::vec4(0.0f);
@@ -5170,11 +5171,11 @@ void Runtime::MainLoop() {
 		    m_scene.get(), m_water_surface.get(), render_target_ctx.allocator);
 		if (floating_meshes_moved) {
 			needs_visibility_pass = true;
-			if (ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::HiPR ||
-			    ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::HiPRVis) {
-				frame_number           = 0;
-				hipr_force_clear_order = true;
-				reset_hipr_object_sampling();
+			// Floating animation is expected in water scenes. Keep HiPR/HiPRVis schedules alive
+			// instead of restarting them every frame while transforms keep updating.
+			if (ui::selection_ctx.debug_view_mode != ui::RenderDebugViewMode::HiPR &&
+			    ui::selection_ctx.debug_view_mode != ui::RenderDebugViewMode::HiPRVis) {
+				frame_number = 0;
 			}
 		}
 		if (tlas_update_pending) {
@@ -5233,7 +5234,12 @@ void Runtime::MainLoop() {
 		const bool hold_naive_pause_accumulation =
 		    effective_water_paused &&
 		    ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::Naive;
-		if (needs_visibility_pass && !hold_naive_pause_accumulation) {
+		const bool hold_hipr_animation_accumulation =
+		    floating_meshes_moved &&
+		    (current_render_mode == ui::RenderDebugViewMode::HiPR ||
+		     current_render_mode == ui::RenderDebugViewMode::HiPRVis);
+		if (needs_visibility_pass && !hold_naive_pause_accumulation &&
+		    !hold_hipr_animation_accumulation) {
 			frame_number = 0;
 		}
 
@@ -5262,7 +5268,8 @@ void Runtime::MainLoop() {
 		const uint32_t water_spp_override =
 		    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u) &
 		    kWaterSppMask;
-		pc.hipr_reserved0 = water_spp_override | (effective_water_paused ? kWaterPauseBit : 0u);
+		pc.hipr_reserved0 = water_spp_override | (effective_water_paused ? kWaterPauseBit : 0u) |
+		                    (floating_meshes_moved ? kSceneDynamicBit : 0u);
 		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
@@ -5402,8 +5409,9 @@ void Runtime::MainLoop() {
 
 		// HiPR ranking refresh policy:
 		// - refresh on visibility-pass rebuilds (camera/view/selection-driven)
+		// - only refresh when stage 1 is running (stage 1 populates influence stats)
 		// - do not periodically resort every N frames
-		bool hipr_refresh = use_hipr_ranked && needs_visibility_pass;
+		bool hipr_refresh = use_hipr_ranked && needs_visibility_pass && run_stage1;
 		if (hipr_full_scene_sampling) {
 			hipr_refresh = false;
 		}

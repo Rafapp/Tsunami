@@ -184,7 +184,8 @@ static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 static const float WATER_HEIGHT_SENTINEL = -1.0e6f;
 static const float WATER_HEIGHT_INVALID_THRESHOLD = -5.0e5f;
 static const uint WATER_PAUSE_BIT = 0x80000000u;
-static const uint WATER_SPP_MASK  = 0x7FFFFFFFu;
+static const uint SCENE_DYNAMIC_BIT = 0x40000000u;
+static const uint WATER_SPP_MASK  = 0x0000FFFFu;
 
 bool waterPaused() {
     return (push.hipr_reserved0 & WATER_PAUSE_BIT) != 0u;
@@ -192,6 +193,10 @@ bool waterPaused() {
 
 uint waterSppOverride() {
     return push.hipr_reserved0 & WATER_SPP_MASK;
+}
+
+bool sceneHasDynamicUpdates() {
+    return (push.hipr_reserved0 & SCENE_DYNAMIC_BIT) != 0u;
 }
 
 // â”€â”€â”€ Light: directional sun â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1702,7 +1707,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     if (center_visible_water) {
         waterTemporalInfoForHit(center_water_hit, center_water_motion, blend);
     }
-    if (center_visible_water && !water_paused && push.frame > 0u) {
+    if (center_visible_water && !water_paused && push.frame > 0u &&
+        !sceneHasDynamicUpdates()) {
         float3 reprojected_prev = float3(0.0f, 0.0f, 0.0f);
         int reprojected_prev_object_id = -1;
         if (sampleReprojectedWaterHistory(center_water_hit, dims, reprojected_prev,
@@ -1737,6 +1743,23 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     }
     if (center_visible_water && water_paused) {
         blend = 1.f / float(accumulation_frame + 1u);
+    }
+    if (sceneHasDynamicUpdates() && center_visible_water && push.frame > 0u) {
+        // Dynamic floaters alter reflected/transmitted radiance on water even when
+        // the water height field changes modestly, so push water history to refresh.
+        blend = max(blend, lerp(0.18f, 0.92f, center_history_mismatch));
+    }
+    if (sceneHasDynamicUpdates() && !center_visible_water && push.frame > 0u &&
+        visible_object_id >= 0 && previous_visible_object_id == visible_object_id) {
+        int visible_rank = hiprRankForObject(visible_object_id);
+        const bool in_dynamic_focus =
+            (push.selected_mesh_index < 0) || (visible_rank >= 0);
+        if (in_dynamic_focus) {
+            float dynamic_history_mismatch = historyMismatch(prev, color);
+            color = temporalOutlierClamp(prev, color, dynamic_history_mismatch);
+            float dynamic_blend = smoothstep(0.10f, 0.85f, dynamic_history_mismatch);
+            blend = max(blend, dynamic_blend);
+        }
     }
 
     float3 accum = sanitizeColor(lerp(prev, color, blend), color);
