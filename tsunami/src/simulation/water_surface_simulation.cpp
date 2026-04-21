@@ -31,7 +31,6 @@ struct WaterPushConstantsRaw {
 	float    height_scale                      = 24.0f;
 	float    ripple_radius                     = 0.035f;
 	float    impulse_strength                  = 0.0f;
-	float    impulse_frequency_hz              = 1.4f;
 	float    floating_wake_strength            = 1.0f;
 	float    emitter_u                         = 0.5f;
 	float    emitter_v                         = 0.5f;
@@ -506,6 +505,16 @@ const WaterSurfaceDiagnostics&
 	const bool  artist_force_calm  = artist_linear_mode && gated_audio <= 1.0e-4f;
 	const bool  advance_state =
 	    m_last_prepare_time < 0.0f || std::abs(time_seconds - m_last_prepare_time) > 1.0e-5f;
+	const float splash_strength = std::clamp(settings.splash_strength, 0.0f, 1.0f);
+	// In the simplified UI model, splash energy is fully voice-reactive.
+	const float base_impulse      = 0.0f;
+	const float audio_impulse     = splash_strength * 0.080f;
+	const float ripple_radius_base =
+	    std::clamp(0.005f + 0.115f * splash_strength * splash_strength, 0.005f, 0.20f);
+	const float emitter_motion     = std::clamp(settings.emitter_motion, 0.0f, 1.0f);
+	const float impulse_frequency  = 1.8f + emitter_motion * (8.0f - 1.8f);
+	const float orbit_radius       = emitter_motion * 0.45f;
+	const float orbit_speed        = emitter_motion * 1.5f;
 
 	if (advance_state) {
 		float impulse_strength    = 0.0f;
@@ -524,11 +533,9 @@ const WaterSurfaceDiagnostics&
 				m_artist_calm_active = true;
 			} else {
 				const float linear_wave_drive = gated_audio;
-				const float baseline_impulse =
-				    std::max(settings.base_impulse, 0.0f) * linear_wave_drive;
-				const float audio_impulse =
-				    std::max(settings.audio_impulse_scale, 0.0f) * linear_wave_drive;
-				impulse_strength     = baseline_impulse + audio_impulse;
+				const float baseline = std::max(base_impulse, 0.0f) * linear_wave_drive;
+				const float reactive = std::max(audio_impulse, 0.0f) * linear_wave_drive;
+				impulse_strength     = baseline + reactive;
 				m_artist_calm_active = false;
 			}
 		} else {
@@ -542,7 +549,7 @@ const WaterSurfaceDiagnostics&
 			const bool  has_wave_energy = wave_drive > 1.0e-4f || attack > 1.0e-4f;
 			if (has_wave_energy) {
 				const float emission_rate =
-				    std::max(settings.impulse_frequency_hz, 0.0f) * (0.20f + wave_drive * 1.80f);
+				    std::max(impulse_frequency, 0.0f) * (0.20f + wave_drive * 1.80f);
 				m_emission_accumulator += clamped_delta_time * emission_rate;
 
 				const bool cadence_pulse = m_emission_accumulator >= 1.0f;
@@ -553,12 +560,10 @@ const WaterSurfaceDiagnostics&
 
 				if (cadence_pulse || attack_pulse) {
 					const float energy = clamp01(wave_drive * 0.78f + attack * 2.20f);
-					const float baseline_impulse =
-					    std::max(settings.base_impulse, 0.0f) * wave_drive;
-					const float audio_impulse = energy *
-					                            std::max(settings.audio_impulse_scale, 0.0f) *
-					                            (0.65f + wave_drive * 0.95f);
-					impulse_strength          = baseline_impulse + audio_impulse;
+					const float baseline = std::max(base_impulse, 0.0f) * wave_drive;
+					const float reactive =
+					    energy * std::max(audio_impulse, 0.0f) * (0.65f + wave_drive * 0.95f);
+					impulse_strength = baseline + reactive;
 				}
 			} else {
 				m_emission_accumulator = 0.0f;
@@ -567,7 +572,7 @@ const WaterSurfaceDiagnostics&
 		}
 
 		const float preview_height_scale =
-		    std::clamp(settings.height_scale * (0.84f + preview_speed_drive * 0.36f), 0.1f, 40.0f);
+		    std::clamp(settings.wave_height * (0.84f + preview_speed_drive * 0.36f), 0.1f, 40.0f);
 		const float preview_world_height_scale = std::max(preview_height_scale * 0.055f, 1.0e-4f);
 		const float max_stable_sim_height =
 		    std::clamp(0.24f / preview_world_height_scale, 0.08f, 0.42f);
@@ -596,30 +601,29 @@ const WaterSurfaceDiagnostics&
 	    artist_linear_mode ? gated_audio : clamp01(gated_audio * 0.35f + m_recent_activity * 0.95f);
 	const float artist_calm_strength = artist_linear_mode ? clamp01(1.0f - speed_drive) : 0.0f;
 	const float propagation =
-	    std::clamp(settings.propagation * (0.70f + speed_drive * 0.30f) * time_scale * time_scale,
+	    std::clamp(settings.wave_spread * (0.70f + speed_drive * 0.30f) * time_scale * time_scale,
 	               0.0f, 0.24f);
 	const float damping =
 	    artist_linear_mode ?
-	        std::clamp(settings.damping + ((1.0f - speed_drive) * 0.040f), 0.010f, 0.120f) :
-	        std::clamp(settings.damping + ((1.0f - speed_drive) * 0.010f) + (speed_drive * 0.004f),
+	        std::clamp(settings.wave_damping + ((1.0f - speed_drive) * 0.040f), 0.010f, 0.120f) :
+	        std::clamp(
+	            settings.wave_damping + ((1.0f - speed_drive) * 0.010f) + (speed_drive * 0.004f),
 	                   0.0060f, 0.090f);
 	const float restoring_force =
-	    artist_linear_mode ? std::clamp(settings.restoring_force * (0.45f + speed_drive * 1.55f) *
+	    artist_linear_mode ? std::clamp(settings.wave_rebound * (0.45f + speed_drive * 1.55f) *
 	                                        time_scale * time_scale,
 	                                    0.0f, 0.28f) :
-	                         std::clamp(settings.restoring_force * (0.80f + speed_drive * 1.20f) *
+	                         std::clamp(settings.wave_rebound * (0.80f + speed_drive * 1.20f) *
 	                                        time_scale * time_scale,
 	                                    0.0f, 0.28f);
-	const float orbit_radius = std::clamp(settings.orbit_radius, 0.0f, 0.45f);
-	const float orbit_speed  = std::max(settings.orbit_speed, 0.0f);
 	const float orbit_angle  = time_seconds * orbit_speed * kPi * 2.0f;
 	const float emitter_u    = 0.5f + std::cos(orbit_angle) * orbit_radius;
 	const float emitter_v    = 0.5f + std::sin(orbit_angle * 1.618f) * orbit_radius * 0.65f;
 	const float ripple_radius =
-	    std::clamp(settings.ripple_radius * (0.80f + speed_drive * 0.90f), 0.001f, 0.35f);
-	const float floating_wake_strength = std::clamp(settings.floating_wake_strength, 0.0f, 1.5f);
+	    std::clamp(ripple_radius_base * (0.80f + speed_drive * 0.90f), 0.001f, 0.35f);
+	const float floating_wake_strength = std::clamp(settings.wake_influence, 0.0f, 1.5f);
 	const float height_scale =
-	    std::clamp(settings.height_scale * (0.84f + speed_drive * 0.36f), 0.1f, 40.0f);
+	    std::clamp(settings.wave_height * (0.84f + speed_drive * 0.36f), 0.1f, 40.0f);
 	const float clamped_emitter_u = std::clamp(emitter_u, 0.05f, 0.95f);
 	const float clamped_emitter_v = std::clamp(emitter_v, 0.05f, 0.95f);
 	m_height_to_world_scale       = height_scale * 0.055f;
@@ -650,7 +654,6 @@ const WaterSurfaceDiagnostics&
 	m_water_push_constants->height_scale           = height_scale;
 	m_water_push_constants->ripple_radius          = ripple_radius;
 	m_water_push_constants->impulse_strength       = m_pending_impulse;
-	m_water_push_constants->impulse_frequency_hz   = std::max(settings.impulse_frequency_hz, 0.0f);
 	m_water_push_constants->floating_wake_strength = floating_wake_strength;
 	m_water_push_constants->emitter_u              = m_diagnostics.emitter_u;
 	m_water_push_constants->emitter_v              = m_diagnostics.emitter_v;

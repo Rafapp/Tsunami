@@ -8,7 +8,6 @@ struct PushConstants {
     float height_scale;
     float ripple_radius;
     float impulse_strength;
-    float impulse_frequency_hz;
     float floating_wake_strength;
     float emitter_u;
     float emitter_v;

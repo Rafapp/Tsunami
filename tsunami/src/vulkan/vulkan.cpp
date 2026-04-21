@@ -555,6 +555,25 @@ float updateSelectionVoiceLoudness(const audio::ReactiveAudioSettings&   setting
 	return clampUnit(smoothed_loudness);
 }
 
+float gatedWaterLevel(float water_audio_level) {
+	return clampUnit((water_audio_level - 0.010f) / 0.990f);
+}
+
+bool shouldAutoPauseWaterWhenCalm(const ui::AudienceControlPanelState& controls,
+                                  float water_audio_level, bool currently_auto_paused) {
+	if (controls.water.drive_mode != simulation::WaterDriveMode::ArtistLinear) {
+		return false;
+	}
+
+	const float gated_level = gatedWaterLevel(water_audio_level);
+	constexpr float kPauseThreshold  = 0.002f;
+	constexpr float kResumeThreshold = 0.010f;
+	if (currently_auto_paused) {
+		return gated_level < kResumeThreshold;
+	}
+	return gated_level <= kPauseThreshold;
+}
+
 void applyOverlayLevel(float value) {
 	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
 	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
@@ -1538,17 +1557,27 @@ static simulation::FloatingObjectSettings
 	const bool        is_teapot        = asset_name_lower.find("teapot") != std::string::npos;
 	const glm::vec3   scaled_world_size =
 	    glm::max(asset_world_size * default_scale, glm::vec3(0.03f, 0.03f, 0.03f));
+	glm::vec3 effective_world_size = scaled_world_size;
+	if (is_duck) {
+		// The rubber duck asset has an attached tether/tag that inflates its bounds,
+		// so compact the physical hull to avoid unstable torques and collisions.
+		const float planar_mean = 0.5f * (scaled_world_size.x + scaled_world_size.z);
+		const float compact_planar = std::max(planar_mean * 0.78f, 0.03f);
+		effective_world_size.x = compact_planar;
+		effective_world_size.z = compact_planar;
+	}
 
 	simulation::FloatingObjectSettings settings{};
 	settings.anchor           = floatingAnchorForIndex(simulation_index);
-	settings.base_height      = 0.02f + scaled_world_size.y * 0.10f;
+	settings.base_height      = 0.02f + effective_world_size.y * 0.10f;
 	settings.base_yaw_radians = floatingYawForIndex(simulation_index);
 	settings.size.x =
-	    scaled_world_size.x / std::max(water_surface_render_ctx.half_extent_u, 1.0e-4f);
+	    effective_world_size.x / std::max(water_surface_render_ctx.half_extent_u, 1.0e-4f);
 	settings.size.z =
-	    scaled_world_size.z / std::max(water_surface_render_ctx.half_extent_v, 1.0e-4f);
-	settings.size.y           = scaled_world_size.y;
-	const float volume        = scaled_world_size.x * scaled_world_size.y * scaled_world_size.z;
+	    effective_world_size.z / std::max(water_surface_render_ctx.half_extent_v, 1.0e-4f);
+	settings.size.y           = effective_world_size.y;
+	const float volume =
+	    effective_world_size.x * effective_world_size.y * effective_world_size.z;
 	settings.mass             = std::clamp(volume * 30.0f, 0.35f, 1.80f);
 	settings.color            = glm::vec3(0.86f, 0.58f, 0.28f);
 	const float desired_draft = std::max(
@@ -1569,6 +1598,20 @@ static simulation::FloatingObjectSettings
 	settings.footprint_hole_ratio = is_ring ? 0.52f : 0.0f;
 	settings.waterline_offset     = -settings.size.y * 0.08f;
 	settings.yaw_follow_strength  = 2.2f;
+	if (is_duck) {
+		settings.buoyancy_damping      = 11.5f;
+		settings.linear_damping        = 3.2f;
+		settings.angular_strength      = 5.0f;
+		settings.angular_damping       = 10.5f;
+		settings.self_righting         = 8.0f;
+		settings.max_tilt_radians      = 0.24f;
+		settings.planar_drift_strength = 1.1f;
+		settings.planar_damping        = 3.0f;
+		settings.anchor_pull_strength  = 0.95f;
+		settings.drift_radius          = 0.22f;
+		settings.waterline_offset      = -settings.size.y * 0.06f;
+		settings.yaw_follow_strength   = 1.2f;
+	}
 	return settings;
 }
 
@@ -4623,6 +4666,7 @@ void Runtime::MainLoop() {
 	ui::RenderDebugViewMode last_render_mode         = ui::selection_ctx.debug_view_mode;
 	bool                    show_all_gui             = true;
 	bool                    show_selection_panel     = true;
+	bool                    auto_water_paused        = false;
 	bool                    last_water_paused        = overlay_ctx.controls.water_paused;
 	float                   selection_voice_loudness = 0.0f;
 	float applied_render_scale        = std::clamp(overlay_ctx.controls.render_scale, 0.50f, 1.0f);
@@ -4689,10 +4733,30 @@ void Runtime::MainLoop() {
 		const audio::ReactiveAudioInputFrame audio_input =
 		    buildAudioInputFrame(m_microphone.get(), time_seconds);
 
-		const auto update_water_and_floaters = [&](float water_audio_level) {
-			if (m_water_surface != nullptr && !overlay_ctx.controls.water_paused) {
+		bool effective_water_paused = overlay_ctx.controls.water_paused;
+		const auto compute_effective_water_pause = [&](float water_audio_level) {
+			auto_water_paused = shouldAutoPauseWaterWhenCalm(overlay_ctx.controls, water_audio_level,
+			                                                 auto_water_paused);
+			effective_water_paused = overlay_ctx.controls.water_paused || auto_water_paused;
+			return effective_water_paused;
+		};
+		const auto handle_water_pause_transition = [&](bool water_paused_now) {
+			if (water_paused_now != last_water_paused) {
+				frame_number           = 0;
+				needs_visibility_pass  = true;
+				hipr_force_clear_order = true;
+				last_water_paused      = water_paused_now;
+				reset_hipr_object_sampling();
+			}
+		};
+		const auto update_water_and_floaters = [&](float water_audio_level,
+		                                           bool  water_paused_effective) {
+			if (m_water_surface != nullptr && !water_paused_effective) {
 				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
 				    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
+			} else {
+				overlay_ctx.diagnostics.water.audio_drive_level = 0.0f;
+				overlay_ctx.diagnostics.water.impulse_strength  = 0.0f;
 			}
 		};
 
@@ -4705,11 +4769,13 @@ void Runtime::MainLoop() {
 		selection_voice_loudness = updateSelectionVoiceLoudness(
 		    overlay_ctx.controls.audio, audio_input, selection_voice_loudness, delta_time);
 		const float water_audio_level = overlay_ctx.controls.water_voice_control_enabled ?
-		                                    overlay_ctx.diagnostics.audio.normalized_level :
+		                                    overlay_ctx.diagnostics.audio.smoothed_level :
 		                                    0.0f;
+		const bool current_effective_water_paused = compute_effective_water_pause(water_audio_level);
 		applyOverlayLevel(audio_level);
 		syncFloatingSimulationBoundary(m_water_surface.get());
-		update_water_and_floaters(water_audio_level);
+		update_water_and_floaters(water_audio_level, current_effective_water_paused);
+		handle_water_pause_transition(current_effective_water_paused);
 
 		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
 			show_all_gui = !show_all_gui;
@@ -4739,14 +4805,6 @@ void Runtime::MainLoop() {
 			reset_hipr_object_sampling();
 			continue;
 		}
-		if (overlay_ctx.controls.water_paused != last_water_paused) {
-			frame_number           = 0;
-			needs_visibility_pass  = true;
-			hipr_force_clear_order = true;
-			last_water_paused      = overlay_ctx.controls.water_paused;
-			reset_hipr_object_sampling();
-		}
-
 		ui::SelectionPanelResult selection_panel_result{};
 		if (show_all_gui && show_selection_panel) {
 			selection_panel_result = ui::drawSelectionPanel(m_scene.get(), selection_voice_loudness,
@@ -4806,11 +4864,14 @@ void Runtime::MainLoop() {
 			    overlay_ctx.controls.audio, audio_input, selection_voice_loudness, delta_time);
 			const float updated_water_audio_level =
 			    overlay_ctx.controls.water_voice_control_enabled ?
-			        overlay_ctx.diagnostics.audio.normalized_level :
+			        overlay_ctx.diagnostics.audio.smoothed_level :
 			        0.0f;
+			const bool updated_effective_water_paused =
+			    compute_effective_water_pause(updated_water_audio_level);
 			applyOverlayLevel(audio_level);
 			syncFloatingSimulationBoundary(m_water_surface.get());
-			update_water_and_floaters(updated_water_audio_level);
+			update_water_and_floaters(updated_water_audio_level, updated_effective_water_paused);
+			handle_water_pause_transition(updated_effective_water_paused);
 		}
 
 		if (selection_panel_result.material_edit_active && !material_edit_mode) {
@@ -5129,7 +5190,7 @@ void Runtime::MainLoop() {
 			                    gpu_timing_ctx.query_pool, 0);
 		}
 		if (m_water_surface != nullptr &&
-		    (!overlay_ctx.controls.water_paused || !m_water_surface->hasRecordedFrame())) {
+		    (!effective_water_paused || !m_water_surface->hasRecordedFrame())) {
 			m_water_surface->record(cmd);
 			updateWaterSurfaceImageDescriptors(m_water_surface.get());
 		}
@@ -5170,7 +5231,7 @@ void Runtime::MainLoop() {
 		}
 
 		const bool hold_naive_pause_accumulation =
-		    overlay_ctx.controls.water_paused &&
+		    effective_water_paused &&
 		    ui::selection_ctx.debug_view_mode == ui::RenderDebugViewMode::Naive;
 		if (needs_visibility_pass && !hold_naive_pause_accumulation) {
 			frame_number = 0;
@@ -5202,7 +5263,7 @@ void Runtime::MainLoop() {
 		    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u) &
 		    kWaterSppMask;
 		pc.hipr_reserved0 =
-		    water_spp_override | (overlay_ctx.controls.water_paused ? kWaterPauseBit : 0u);
+		    water_spp_override | (effective_water_paused ? kWaterPauseBit : 0u);
 		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =
@@ -5249,7 +5310,7 @@ void Runtime::MainLoop() {
 				pc.hipr_clear_order       = 0u;
 				pc.hipr_vis_enable_tint   = 0u;
 				pc.hipr_vis_rainbow_tint  = 0u;
-				pc.hipr_reserved0         = overlay_ctx.controls.water_paused ? kWaterPauseBit : 0u;
+				pc.hipr_reserved0         = effective_water_paused ? kWaterPauseBit : 0u;
 				pc.hipr_frames_per_object = 0u;
 				pc.hipr_score_blend       = 0.0f;
 				pc.hipr_vis_tint_strength = 0.0f;

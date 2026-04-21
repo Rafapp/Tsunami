@@ -173,23 +173,20 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::Combo("Water drive mode", &water_drive_mode, water_drive_items,
 	                        IM_ARRAYSIZE(water_drive_items));
 	state.water.drive_mode = static_cast<simulation::WaterDriveMode>(water_drive_mode);
-	changed |= ImGui::SliderFloat("Propagation", &state.water.propagation, 0.01f, 0.28f, "%.3f");
-	changed |= ImGui::SliderFloat("Damping", &state.water.damping, 0.004f, 0.12f, "%.3f");
+	changed |= ImGui::SliderFloat("Wave spread", &state.water.wave_spread, 0.01f, 0.28f, "%.3f");
+	changed |= ImGui::SliderFloat("Wave damping", &state.water.wave_damping, 0.004f, 0.12f, "%.3f");
+	changed |= ImGui::SliderFloat("Wave rebound", &state.water.wave_rebound, 0.0f, 0.35f, "%.3f");
+	changed |= ImGui::SliderFloat("Wave height", &state.water.wave_height, 1.0f, 40.0f, "%.1f");
 	changed |=
-	    ImGui::SliderFloat("Restoring force", &state.water.restoring_force, 0.0f, 0.35f, "%.3f");
-	changed |= ImGui::SliderFloat("Height scale", &state.water.height_scale, 1.0f, 40.0f, "%.1f");
+	    ImGui::SliderFloat("Splash strength", &state.water.splash_strength, 0.0f, 1.0f, "%.2f");
 	changed |=
-	    ImGui::SliderFloat("Ripple radius", &state.water.ripple_radius, 0.005f, 0.20f, "%.3f");
-	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.015f, "%.4f");
-	changed |=
-	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f, "%.4f");
-	changed |= ImGui::SliderFloat("Floating wake", &state.water.floating_wake_strength, 0.0f, 1.5f,
+	    ImGui::SliderFloat("Wake influence", &state.water.wake_influence, 0.0f, 1.5f, "%.2f");
+	changed |= ImGui::SliderFloat("Emitter motion", &state.water.emitter_motion, 0.0f, 1.0f,
 	                              "%.2f");
-	changed |= ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f,
-	                              "%.2f");
-	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
-	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
-	                              8.0f, "%.2f");
+	ImGui::TextUnformatted(
+	    "Splash strength controls both ripple size and voice-driven pulse energy.");
+	ImGui::TextUnformatted(
+	    "Emitter motion controls orbit radius, orbit speed, and pulse cadence.");
 	if (state.water.drive_mode == simulation::WaterDriveMode::ArtistLinear) {
 		ImGui::TextUnformatted(
 		    "Artist mode: linear voice->waves, no inertia memory (0 = calm, higher = choppier).");
