@@ -542,8 +542,7 @@ float normalizeMicrophoneLevelForSelection(const audio::ReactiveAudioSettings& s
 
 float updateSelectionVoiceLoudness(const audio::ReactiveAudioSettings&   settings,
                                    const audio::ReactiveAudioInputFrame& input_frame,
-                                   float previous_smoothed_loudness,
-                                   float delta_time) {
+                                   float previous_smoothed_loudness, float delta_time) {
 	const float target_loudness =
 	    input_frame.source_available ?
 	        normalizeMicrophoneLevelForSelection(settings, input_frame.raw_level) :

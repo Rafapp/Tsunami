@@ -49,9 +49,9 @@ float ReactiveAudioController::update(const ReactiveAudioSettings&   settings,
 			break;
 	}
 
-	const float smoothing = std::clamp(settings.smoothing, 0.01f, 1.0f);
-	const float dt_steps  = std::clamp(delta_time * 60.0f, 0.0f, 8.0f);
-	const float alpha     = 1.0f - std::pow(1.0f - smoothing, dt_steps);
+	const float smoothing          = std::clamp(settings.smoothing, 0.01f, 1.0f);
+	const float dt_steps           = std::clamp(delta_time * 60.0f, 0.0f, 8.0f);
+	const float alpha              = 1.0f - std::pow(1.0f - smoothing, dt_steps);
 	m_diagnostics.normalized_level = clamp01(target_level);
 	m_diagnostics.smoothed_level +=
 	    (m_diagnostics.normalized_level - m_diagnostics.smoothed_level) * alpha;

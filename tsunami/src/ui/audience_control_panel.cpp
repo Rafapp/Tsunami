@@ -168,7 +168,7 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	ImGui::Separator();
 	ImGui::TextUnformatted("Water Surface");
 	changed |= ImGui::Checkbox("Voice drives water motion", &state.water_voice_control_enabled);
-	int         water_drive_mode   = static_cast<int>(state.water.drive_mode);
+	int         water_drive_mode    = static_cast<int>(state.water.drive_mode);
 	const char* water_drive_items[] = {"Physical (inertia)", "Artist (linear)"};
 	changed |= ImGui::Combo("Water drive mode", &water_drive_mode, water_drive_items,
 	                        IM_ARRAYSIZE(water_drive_items));
