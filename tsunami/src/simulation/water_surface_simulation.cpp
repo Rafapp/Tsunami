@@ -32,6 +32,7 @@ struct WaterPushConstantsRaw {
 	float    ripple_radius                     = 0.035f;
 	float    impulse_strength                  = 0.0f;
 	float    impulse_frequency_hz              = 1.4f;
+	float    floating_wake_strength            = 1.0f;
 	float    emitter_u                         = 0.5f;
 	float    emitter_v                         = 0.5f;
 	uint32_t floating_object_count             = 0;
@@ -562,6 +563,8 @@ const WaterSurfaceDiagnostics&
 	const float emitter_v    = 0.5f + std::sin(orbit_angle * 1.618f) * orbit_radius * 0.65f;
 	const float ripple_radius =
 	    std::clamp(settings.ripple_radius * (0.80f + speed_drive * 0.90f), 0.001f, 0.35f);
+	const float floating_wake_strength =
+	    std::clamp(settings.floating_wake_strength, 0.0f, 1.5f);
 	const float height_scale =
 	    std::clamp(settings.height_scale * (0.84f + speed_drive * 0.36f), 0.1f, 40.0f);
 	const float clamped_emitter_u = std::clamp(emitter_u, 0.05f, 0.95f);
@@ -595,6 +598,7 @@ const WaterSurfaceDiagnostics&
 	m_water_push_constants->ripple_radius         = ripple_radius;
 	m_water_push_constants->impulse_strength      = m_pending_impulse;
 	m_water_push_constants->impulse_frequency_hz  = std::max(settings.impulse_frequency_hz, 0.0f);
+	m_water_push_constants->floating_wake_strength = floating_wake_strength;
 	m_water_push_constants->emitter_u             = m_diagnostics.emitter_u;
 	m_water_push_constants->emitter_v             = m_diagnostics.emitter_v;
 	m_water_push_constants->floating_object_count = m_floating_object_count;

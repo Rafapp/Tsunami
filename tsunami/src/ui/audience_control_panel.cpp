@@ -178,11 +178,29 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	changed |= ImGui::SliderFloat("Base impulse", &state.water.base_impulse, 0.0f, 0.015f, "%.4f");
 	changed |=
 	    ImGui::SliderFloat("Audio impulse", &state.water.audio_impulse_scale, 0.0f, 0.080f, "%.4f");
+	changed |= ImGui::SliderFloat("Floating wake", &state.water.floating_wake_strength, 0.0f,
+	                              1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Emitter orbit (0=fixed)", &state.water.orbit_radius, 0.0f, 0.45f,
 	                              "%.2f");
 	changed |= ImGui::SliderFloat("Orbit speed (Hz)", &state.water.orbit_speed, 0.0f, 1.5f, "%.2f");
 	changed |= ImGui::SliderFloat("Impulse rate (Hz)", &state.water.impulse_frequency_hz, 0.1f,
 	                              8.0f, "%.2f");
+	if (ImGui::Button("Apply calm demo preset")) {
+		state.water_voice_control_enabled = false;
+		state.water.propagation           = 0.05f;
+		state.water.damping               = 0.095f;
+		state.water.restoring_force       = 0.24f;
+		state.water.height_scale          = 6.0f;
+		state.water.ripple_radius         = 0.012f;
+		state.water.base_impulse          = 0.0f;
+		state.water.audio_impulse_scale   = 0.0f;
+		state.water.floating_wake_strength = 0.10f;
+		state.water.orbit_radius          = 0.0f;
+		state.water.orbit_speed           = 0.0f;
+		state.water.impulse_frequency_hz  = 0.5f;
+		state.reset_water_requested       = true;
+		changed                           = true;
+	}
 	if (ImGui::Button(state.water_paused ? "Resume water simulation" : "Pause water simulation")) {
 		state.water_paused = !state.water_paused;
 		changed            = true;

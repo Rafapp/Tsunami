@@ -19,6 +19,7 @@ struct WaterSurfaceSettings {
 	float ripple_radius        = 0.012f;
 	float base_impulse         = 0.0f;
 	float audio_impulse_scale  = 0.020f;
+	float floating_wake_strength = 1.0f;
 	float orbit_radius         = 0.0f;
 	float orbit_speed          = 0.0f;
 	float impulse_frequency_hz = 1.80f;

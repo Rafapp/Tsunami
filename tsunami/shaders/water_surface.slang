@@ -9,6 +9,7 @@ struct PushConstants {
     float ripple_radius;
     float impulse_strength;
     float impulse_frequency_hz;
+    float floating_wake_strength;
     float emitter_u;
     float emitter_v;
     uint floating_object_count;
@@ -743,7 +744,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
                    impactKernel(uv - (emitter - splash_dir1 * push.ripple_radius * 1.55f),
                                 push.ripple_radius * 0.46f) *
                    push.impulse_strength * 0.22f;
-    disturbance += objectDisturbanceAtXZ(world_xz);
+    disturbance += objectDisturbanceAtXZ(world_xz) * push.floating_wake_strength;
     disturbance *= (1.0f - solver_stress * 0.45f);
     disturbance = clamp(disturbance, -max_disturbance, max_disturbance);
 
