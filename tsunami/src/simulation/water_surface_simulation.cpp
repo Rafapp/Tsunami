@@ -507,14 +507,14 @@ const WaterSurfaceDiagnostics&
 	    m_last_prepare_time < 0.0f || std::abs(time_seconds - m_last_prepare_time) > 1.0e-5f;
 	const float splash_strength = std::clamp(settings.splash_strength, 0.0f, 1.0f);
 	// In the simplified UI model, splash energy is fully voice-reactive.
-	const float base_impulse      = 0.0f;
-	const float audio_impulse     = splash_strength * 0.080f;
+	const float base_impulse  = 0.0f;
+	const float audio_impulse = splash_strength * 0.080f;
 	const float ripple_radius_base =
 	    std::clamp(0.005f + 0.115f * splash_strength * splash_strength, 0.005f, 0.20f);
-	const float emitter_motion     = std::clamp(settings.emitter_motion, 0.0f, 1.0f);
-	const float impulse_frequency  = 1.8f + emitter_motion * (8.0f - 1.8f);
-	const float orbit_radius       = emitter_motion * 0.45f;
-	const float orbit_speed        = emitter_motion * 1.5f;
+	const float emitter_motion    = std::clamp(settings.emitter_motion, 0.0f, 1.0f);
+	const float impulse_frequency = 1.8f + emitter_motion * (8.0f - 1.8f);
+	const float orbit_radius      = emitter_motion * 0.45f;
+	const float orbit_speed       = emitter_motion * 1.5f;
 
 	if (advance_state) {
 		float impulse_strength    = 0.0f;
@@ -533,10 +533,10 @@ const WaterSurfaceDiagnostics&
 				m_artist_calm_active = true;
 			} else {
 				const float linear_wave_drive = gated_audio;
-				const float baseline = std::max(base_impulse, 0.0f) * linear_wave_drive;
-				const float reactive = std::max(audio_impulse, 0.0f) * linear_wave_drive;
-				impulse_strength     = baseline + reactive;
-				m_artist_calm_active = false;
+				const float baseline          = std::max(base_impulse, 0.0f) * linear_wave_drive;
+				const float reactive          = std::max(audio_impulse, 0.0f) * linear_wave_drive;
+				impulse_strength              = baseline + reactive;
+				m_artist_calm_active          = false;
 			}
 		} else {
 			const float attack         = std::max(gated_audio - m_previous_audio_level, 0.0f);
@@ -559,7 +559,7 @@ const WaterSurfaceDiagnostics&
 				}
 
 				if (cadence_pulse || attack_pulse) {
-					const float energy = clamp01(wave_drive * 0.78f + attack * 2.20f);
+					const float energy   = clamp01(wave_drive * 0.78f + attack * 2.20f);
 					const float baseline = std::max(base_impulse, 0.0f) * wave_drive;
 					const float reactive =
 					    energy * std::max(audio_impulse, 0.0f) * (0.65f + wave_drive * 0.95f);
@@ -606,8 +606,8 @@ const WaterSurfaceDiagnostics&
 	const float damping =
 	    artist_linear_mode ?
 	        std::clamp(settings.wave_damping + ((1.0f - speed_drive) * 0.040f), 0.010f, 0.120f) :
-	        std::clamp(
-	            settings.wave_damping + ((1.0f - speed_drive) * 0.010f) + (speed_drive * 0.004f),
+	        std::clamp(settings.wave_damping + ((1.0f - speed_drive) * 0.010f) +
+	                       (speed_drive * 0.004f),
 	                   0.0060f, 0.090f);
 	const float restoring_force =
 	    artist_linear_mode ? std::clamp(settings.wave_rebound * (0.45f + speed_drive * 1.55f) *
@@ -616,9 +616,9 @@ const WaterSurfaceDiagnostics&
 	                         std::clamp(settings.wave_rebound * (0.80f + speed_drive * 1.20f) *
 	                                        time_scale * time_scale,
 	                                    0.0f, 0.28f);
-	const float orbit_angle  = time_seconds * orbit_speed * kPi * 2.0f;
-	const float emitter_u    = 0.5f + std::cos(orbit_angle) * orbit_radius;
-	const float emitter_v    = 0.5f + std::sin(orbit_angle * 1.618f) * orbit_radius * 0.65f;
+	const float orbit_angle = time_seconds * orbit_speed * kPi * 2.0f;
+	const float emitter_u   = 0.5f + std::cos(orbit_angle) * orbit_radius;
+	const float emitter_v   = 0.5f + std::sin(orbit_angle * 1.618f) * orbit_radius * 0.65f;
 	const float ripple_radius =
 	    std::clamp(ripple_radius_base * (0.80f + speed_drive * 0.90f), 0.001f, 0.35f);
 	const float floating_wake_strength = std::clamp(settings.wake_influence, 0.0f, 1.5f);
@@ -645,20 +645,20 @@ const WaterSurfaceDiagnostics&
 	                                        0ull;
 	m_diagnostics.triangle_count      = m_diagnostics.cell_count * 2ull;
 
-	m_water_push_constants->time_seconds           = time_seconds;
-	m_water_push_constants->delta_time             = clamped_delta_time;
-	m_water_push_constants->propagation            = propagation;
-	m_water_push_constants->damping                = damping;
-	m_water_push_constants->restoring_force        = restoring_force;
-	m_water_push_constants->audio_level            = speed_drive;
-	m_water_push_constants->height_scale           = height_scale;
-	m_water_push_constants->ripple_radius          = ripple_radius;
-	m_water_push_constants->impulse_strength       = m_pending_impulse;
-	m_water_push_constants->floating_wake_strength = floating_wake_strength;
-	m_water_push_constants->emitter_u              = m_diagnostics.emitter_u;
-	m_water_push_constants->emitter_v              = m_diagnostics.emitter_v;
-	m_water_push_constants->artist_calm_strength   = artist_calm_strength;
-	m_water_push_constants->floating_object_count  = m_floating_object_count;
+	m_water_push_constants->time_seconds                      = time_seconds;
+	m_water_push_constants->delta_time                        = clamped_delta_time;
+	m_water_push_constants->propagation                       = propagation;
+	m_water_push_constants->damping                           = damping;
+	m_water_push_constants->restoring_force                   = restoring_force;
+	m_water_push_constants->audio_level                       = speed_drive;
+	m_water_push_constants->height_scale                      = height_scale;
+	m_water_push_constants->ripple_radius                     = ripple_radius;
+	m_water_push_constants->impulse_strength                  = m_pending_impulse;
+	m_water_push_constants->floating_wake_strength            = floating_wake_strength;
+	m_water_push_constants->emitter_u                         = m_diagnostics.emitter_u;
+	m_water_push_constants->emitter_v                         = m_diagnostics.emitter_v;
+	m_water_push_constants->artist_calm_strength              = artist_calm_strength;
+	m_water_push_constants->floating_object_count             = m_floating_object_count;
 	m_water_push_constants->floating_object_interaction_count = m_floating_object_interaction_count;
 
 	m_object_push_constants->time_seconds            = time_seconds;

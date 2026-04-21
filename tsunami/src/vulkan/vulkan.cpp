@@ -565,7 +565,7 @@ bool shouldAutoPauseWaterWhenCalm(const ui::AudienceControlPanelState& controls,
 		return false;
 	}
 
-	const float gated_level = gatedWaterLevel(water_audio_level);
+	const float     gated_level      = gatedWaterLevel(water_audio_level);
 	constexpr float kPauseThreshold  = 0.002f;
 	constexpr float kResumeThreshold = 0.010f;
 	if (currently_auto_paused) {
@@ -1561,10 +1561,10 @@ static simulation::FloatingObjectSettings
 	if (is_duck) {
 		// The rubber duck asset has an attached tether/tag that inflates its bounds,
 		// so compact the physical hull to avoid unstable torques and collisions.
-		const float planar_mean = 0.5f * (scaled_world_size.x + scaled_world_size.z);
+		const float planar_mean    = 0.5f * (scaled_world_size.x + scaled_world_size.z);
 		const float compact_planar = std::max(planar_mean * 0.78f, 0.03f);
-		effective_world_size.x = compact_planar;
-		effective_world_size.z = compact_planar;
+		effective_world_size.x     = compact_planar;
+		effective_world_size.z     = compact_planar;
 	}
 
 	simulation::FloatingObjectSettings settings{};
@@ -1575,11 +1575,10 @@ static simulation::FloatingObjectSettings
 	    effective_world_size.x / std::max(water_surface_render_ctx.half_extent_u, 1.0e-4f);
 	settings.size.z =
 	    effective_world_size.z / std::max(water_surface_render_ctx.half_extent_v, 1.0e-4f);
-	settings.size.y           = effective_world_size.y;
-	const float volume =
-	    effective_world_size.x * effective_world_size.y * effective_world_size.z;
-	settings.mass             = std::clamp(volume * 30.0f, 0.35f, 1.80f);
-	settings.color            = glm::vec3(0.86f, 0.58f, 0.28f);
+	settings.size.y    = effective_world_size.y;
+	const float volume = effective_world_size.x * effective_world_size.y * effective_world_size.z;
+	settings.mass      = std::clamp(volume * 30.0f, 0.35f, 1.80f);
+	settings.color     = glm::vec3(0.86f, 0.58f, 0.28f);
 	const float desired_draft = std::max(
 	    settings.size.y * floatingDesiredDraftFraction(asset_name_lower), settings.size.y * 0.12f);
 	settings.buoyancy_strength =
@@ -4733,10 +4732,10 @@ void Runtime::MainLoop() {
 		const audio::ReactiveAudioInputFrame audio_input =
 		    buildAudioInputFrame(m_microphone.get(), time_seconds);
 
-		bool effective_water_paused = overlay_ctx.controls.water_paused;
+		bool       effective_water_paused        = overlay_ctx.controls.water_paused;
 		const auto compute_effective_water_pause = [&](float water_audio_level) {
-			auto_water_paused = shouldAutoPauseWaterWhenCalm(overlay_ctx.controls, water_audio_level,
-			                                                 auto_water_paused);
+			auto_water_paused = shouldAutoPauseWaterWhenCalm(overlay_ctx.controls,
+			                                                 water_audio_level, auto_water_paused);
 			effective_water_paused = overlay_ctx.controls.water_paused || auto_water_paused;
 			return effective_water_paused;
 		};
@@ -4771,7 +4770,8 @@ void Runtime::MainLoop() {
 		const float water_audio_level = overlay_ctx.controls.water_voice_control_enabled ?
 		                                    overlay_ctx.diagnostics.audio.smoothed_level :
 		                                    0.0f;
-		const bool current_effective_water_paused = compute_effective_water_pause(water_audio_level);
+		const bool  current_effective_water_paused =
+		    compute_effective_water_pause(water_audio_level);
 		applyOverlayLevel(audio_level);
 		syncFloatingSimulationBoundary(m_water_surface.get());
 		update_water_and_floaters(water_audio_level, current_effective_water_paused);
@@ -5262,8 +5262,7 @@ void Runtime::MainLoop() {
 		const uint32_t water_spp_override =
 		    std::clamp(ui::selection_ctx.path_tracing.hipr_water_spp_override, 0u, 1024u) &
 		    kWaterSppMask;
-		pc.hipr_reserved0 =
-		    water_spp_override | (effective_water_paused ? kWaterPauseBit : 0u);
+		pc.hipr_reserved0 = water_spp_override | (effective_water_paused ? kWaterPauseBit : 0u);
 		pc.hipr_frames_per_object = hipr_frames_per_object;
 		pc.hipr_score_blend = std::clamp(ui::selection_ctx.hipr_debug.score_blend, 0.05f, 1.0f);
 		pc.hipr_vis_tint_strength =

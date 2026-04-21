@@ -181,12 +181,11 @@ bool drawAudienceControlPanel(bool* is_open, AudienceControlPanelState& state,
 	    ImGui::SliderFloat("Splash strength", &state.water.splash_strength, 0.0f, 1.0f, "%.2f");
 	changed |=
 	    ImGui::SliderFloat("Wake influence", &state.water.wake_influence, 0.0f, 1.5f, "%.2f");
-	changed |= ImGui::SliderFloat("Emitter motion", &state.water.emitter_motion, 0.0f, 1.0f,
-	                              "%.2f");
+	changed |=
+	    ImGui::SliderFloat("Emitter motion", &state.water.emitter_motion, 0.0f, 1.0f, "%.2f");
 	ImGui::TextUnformatted(
 	    "Splash strength controls both ripple size and voice-driven pulse energy.");
-	ImGui::TextUnformatted(
-	    "Emitter motion controls orbit radius, orbit speed, and pulse cadence.");
+	ImGui::TextUnformatted("Emitter motion controls orbit radius, orbit speed, and pulse cadence.");
 	if (state.water.drive_mode == simulation::WaterDriveMode::ArtistLinear) {
 		ImGui::TextUnformatted(
 		    "Artist mode: linear voice->waves, no inertia memory (0 = calm, higher = choppier).");

@@ -17,14 +17,14 @@ enum class WaterDriveMode : int {
 };
 
 struct WaterSurfaceSettings {
-	float          wave_spread      = 0.22f;
-	float          wave_damping     = 0.012f;
-	float          wave_rebound     = 0.110f;
-	float          wave_height      = 16.0f;
-	float          splash_strength  = 0.25f;
-	float          wake_influence   = 1.0f;
-	float          emitter_motion   = 0.0f;
-	WaterDriveMode drive_mode             = WaterDriveMode::PhysicalWithInertia;
+	float          wave_spread     = 0.22f;
+	float          wave_damping    = 0.012f;
+	float          wave_rebound    = 0.110f;
+	float          wave_height     = 16.0f;
+	float          splash_strength = 0.25f;
+	float          wake_influence  = 1.0f;
+	float          emitter_motion  = 0.0f;
+	WaterDriveMode drive_mode      = WaterDriveMode::PhysicalWithInertia;
 };
 
 struct WaterSurfaceDiagnostics {
