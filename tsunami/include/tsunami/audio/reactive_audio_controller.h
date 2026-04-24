@@ -1,3 +1,5 @@
+// Purpose: Audio-reactive controller interface that smooths and shapes raw input into control
+// signals.
 #pragma once
 
 #include <string>

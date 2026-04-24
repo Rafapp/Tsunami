@@ -1,3 +1,4 @@
+// Purpose: Free-fly camera controller interface driven by user input deltas.
 #pragma once
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>

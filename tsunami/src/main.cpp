@@ -1,6 +1,8 @@
+// Purpose: Program entry point that parses scene arguments, runs App, and reports fatal errors.
 #include <iostream>
 #include <string>
 
+#include "app/internal/scene_catalog.h"
 #include "tsunami/app/app.h"
 
 int main(int argc, char** argv) {
@@ -11,9 +13,7 @@ int main(int argc, char** argv) {
 
 	try {
 		if (argc > 2) {
-			std::cerr << "Usage: tsunami "
-			             "[pool|pool_and_water|chess|cornell|cornellsimple|sponza|<path/to/"
-			             "scene.gltf|.glb>]\n";
+			std::cerr << "Usage: tsunami " << app::scene::sceneArgumentUsage() << "\n";
 			return 1;
 		}
 

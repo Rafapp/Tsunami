@@ -1,3 +1,4 @@
+// Purpose: Implements transform math utilities and local-to-world composition helpers.
 #include "tsunami/scene/transform.h"
 
 Transform::Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale) {

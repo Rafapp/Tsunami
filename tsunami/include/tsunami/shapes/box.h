@@ -1,3 +1,4 @@
+// Purpose: Procedural box primitive interface for generating box meshes.
 #pragma once
 
 #include "tsunami/shapes/shape.h"

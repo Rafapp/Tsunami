@@ -1,3 +1,4 @@
+// Purpose: Microphone capture interface that exposes normalized live levels and device status.
 #pragma once
 
 #include <string>

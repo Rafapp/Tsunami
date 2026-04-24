@@ -1,3 +1,4 @@
+// Purpose: Implements texture file loading and pixel format preparation for GPU upload.
 #include "tsunami/texture/texture.h"
 
 #include <assimp/texture.h>

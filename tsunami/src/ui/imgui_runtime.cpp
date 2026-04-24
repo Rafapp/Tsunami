@@ -1,3 +1,4 @@
+// Purpose: Implements ImGui runtime setup/teardown and Vulkan frame submission glue.
 #include "tsunami/ui/imgui_runtime.h"
 
 #include <stdexcept>

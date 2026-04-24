@@ -1,3 +1,4 @@
+// Purpose: Implements GLFW window creation, event polling, and resize handling.
 #include "tsunami/core/window.h"
 #include <stdexcept>
 

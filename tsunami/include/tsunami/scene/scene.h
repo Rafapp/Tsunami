@@ -1,3 +1,4 @@
+// Purpose: Scene interface for mesh/material/light ownership and glTF loading.
 #pragma once
 
 #include "tsunami/camera/camera.h"

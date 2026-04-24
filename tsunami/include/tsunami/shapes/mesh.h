@@ -1,3 +1,4 @@
+// Purpose: Mesh data interface used by scene loading and rendering systems.
 #pragma once
 #include "tsunami/materials/material.h"
 #include "tsunami/scene/transform.h"

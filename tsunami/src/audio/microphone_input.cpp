@@ -1,3 +1,4 @@
+// Purpose: Implements microphone capture, level extraction, and input device diagnostics.
 #include <atomic>
 #include <cmath>
 #include <cstdint>

@@ -1,3 +1,4 @@
+// Purpose: Implements the App facade that wires the application layer to the Vulkan runtime.
 #include "tsunami/app/app.h"
 
 #include <memory>

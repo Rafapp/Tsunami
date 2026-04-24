@@ -1,3 +1,4 @@
+// Purpose: Implements point-light construction and light-specific utility behavior.
 #include "tsunami/light/pointlight.h"
 
 PointLight::PointLight(const glm::vec3& position, const glm::vec3& color, float intensity) {

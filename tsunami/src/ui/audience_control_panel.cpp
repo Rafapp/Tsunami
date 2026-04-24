@@ -1,3 +1,4 @@
+// Purpose: Implements audience control-panel widgets and synchronization with runtime state.
 #include <algorithm>
 #include <cfloat>
 #include <cstdint>

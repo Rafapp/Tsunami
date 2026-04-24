@@ -1,3 +1,4 @@
+// Purpose: Implements smoothing, gating, and dynamics shaping for audio-reactive controls.
 #include <algorithm>
 #include <cmath>
 

@@ -1,3 +1,4 @@
+// Purpose: Point-light interface defining position, color, and intensity parameters.
 #pragma once
 
 #include "tsunami/light/light.h"

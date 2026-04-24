@@ -1,4 +1,5 @@
-#include "tsunami/vulkan/floating_policy.h"
+// Purpose: Implements floating-object sizing, anchoring, and pose policy for scene assets.
+#include "vulkan/internal/floating_policy.h"
 
 #include <algorithm>
 #include <array>

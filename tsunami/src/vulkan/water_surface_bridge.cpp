@@ -1,3 +1,4 @@
+// Purpose: Implements Vulkan-side glue that consumes water simulation output for rendering.
 #include "tsunami/vulkan/water_surface_bridge.h"
 
 #include <cstring>

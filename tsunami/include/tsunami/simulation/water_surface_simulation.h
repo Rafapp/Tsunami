@@ -1,3 +1,4 @@
+// Purpose: Water simulation interface for frame prep, GPU dispatch recording, and diagnostics.
 #pragma once
 
 #include <array>

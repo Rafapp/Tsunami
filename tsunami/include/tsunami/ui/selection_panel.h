@@ -1,3 +1,4 @@
+// Purpose: Selection panel interface for object picking and property editing UI.
 #pragma once
 
 #include "tsunami/materials/material.h"

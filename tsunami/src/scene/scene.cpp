@@ -1,3 +1,4 @@
+// Purpose: Implements scene loading plus mesh/material/light ownership and bookkeeping.
 #include "tsunami/scene/scene.h"
 #include "tsunami/shapes/mesh.h"
 

@@ -1,3 +1,4 @@
+// Purpose: Implements procedural generation of sphere mesh vertices and indices.
 #include "tsunami/shapes/sphere.h"
 
 Sphere::Sphere(Transform transform, std::shared_ptr<Material> material) :

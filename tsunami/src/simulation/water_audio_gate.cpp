@@ -1,3 +1,4 @@
+// Purpose: Implements calmness-based audio gating logic for automatic water pause/resume.
 #include "tsunami/simulation/water_audio_gate.h"
 
 #include <algorithm>

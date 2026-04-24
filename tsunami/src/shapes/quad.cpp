@@ -1,3 +1,4 @@
+// Purpose: Implements procedural generation of quad mesh vertices and indices.
 #include "tsunami/shapes/quad.h"
 
 Quad::Quad(Transform transform, std::shared_ptr<Material> material) : Shape(transform, material) {

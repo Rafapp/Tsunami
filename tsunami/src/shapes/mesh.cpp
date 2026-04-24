@@ -1,3 +1,4 @@
+// Purpose: Implements mesh container behavior and geometry helper routines.
 #include "tsunami/shapes/mesh.h"
 #include <assimp/material.h>
 #include <cmath>

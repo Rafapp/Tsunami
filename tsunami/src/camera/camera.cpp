@@ -1,3 +1,4 @@
+// Purpose: Implements camera matrix updates, projection setup, and GPU camera packing.
 #include "tsunami/camera/camera.h"
 
 Camera::Camera(glm::vec3 position, glm::vec3 target, glm::vec3 up, float fov, float nearClip,

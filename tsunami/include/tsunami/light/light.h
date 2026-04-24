@@ -1,3 +1,4 @@
+// Purpose: Base lighting interface shared by scene light implementations.
 #pragma once
 
 #include <glm/glm.hpp>

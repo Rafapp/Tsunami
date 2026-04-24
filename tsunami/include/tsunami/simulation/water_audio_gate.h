@@ -1,3 +1,4 @@
+// Purpose: Audio-gating policy interface for auto-pausing or resuming water simulation.
 #pragma once
 
 #include "tsunami/simulation/water_surface_types.h"

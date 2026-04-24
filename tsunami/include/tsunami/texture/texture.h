@@ -1,3 +1,4 @@
+// Purpose: Texture loading interface and pixel container definitions for renderer uploads.
 #pragma once
 
 #include <assimp/material.h>

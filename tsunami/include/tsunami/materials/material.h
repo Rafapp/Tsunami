@@ -1,3 +1,4 @@
+// Purpose: Material parameter interface used for scene shading and GPU uploads.
 #pragma once
 #include <cstdint>
 #include <glm/glm.hpp>

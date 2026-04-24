@@ -1,5 +1,10 @@
-#include "internal/pathtracer_shared_prefix.slang"
+#include "pathtracer_shared_prefix.slang"
 
+[[vk::binding(14, 0)]] RWStructuredBuffer<uint>       hipr_visible_counts;
+[[vk::binding(15, 0)]] RWStructuredBuffer<uint>       hipr_secondary_counts;
+[[vk::binding(16, 0)]] RWStructuredBuffer<uint>       hipr_shadow_counts;
+[[vk::binding(17, 0)]] RWStructuredBuffer<float>      hipr_scores;
+[[vk::binding(18, 0)]] RWStructuredBuffer<int>        hipr_order;
 [[vk::binding(19, 0)]] StructuredBuffer<WaterSurfaceParams> water_surface_params_buf;
 [[vk::binding(20, 0)]] RWTexture2D<float>                  water_height_image;
 [[vk::binding(21, 0)]] RWTexture2D<float>                  water_prev_height_image;
@@ -99,7 +104,8 @@ static const uint  NO_TEXTURE  = 0xFFFFFFFFu;
 static const float WATER_HEIGHT_SENTINEL = -1.0e6f;
 static const float WATER_HEIGHT_INVALID_THRESHOLD = -5.0e5f;
 static const uint WATER_PAUSE_BIT = 0x80000000u;
-static const uint WATER_SPP_MASK  = 0x7FFFFFFFu;
+static const uint SCENE_DYNAMIC_BIT = 0x40000000u;
+static const uint WATER_SPP_MASK  = 0x0000FFFFu;
 
 bool waterPaused() {
     return (push.hipr_reserved0 & WATER_PAUSE_BIT) != 0u;
@@ -107,6 +113,10 @@ bool waterPaused() {
 
 uint waterSppOverride() {
     return push.hipr_reserved0 & WATER_SPP_MASK;
+}
+
+bool sceneHasDynamicUpdates() {
+    return (push.hipr_reserved0 & SCENE_DYNAMIC_BIT) != 0u;
 }
 
 // --- Light: directional sun ---
@@ -276,10 +286,6 @@ float readWaterHeightRaw(int2 coord, int2 dims) {
     return water_height_image[clamp(coord, int2(0, 0), dims - 1)];
 }
 
-float readPreviousWaterHeightRaw(int2 coord, int2 dims) {
-    return water_prev_height_image[clamp(coord, int2(0, 0), dims - 1)];
-}
-
 bool isValidWaterHeight(float value) {
     return value > WATER_HEIGHT_INVALID_THRESHOLD;
 }
@@ -318,36 +324,6 @@ float sampleWaterHeightRaw(float2 uv, int2 dims) {
     return value / weight;
 }
 
-float samplePreviousWaterHeightRaw(float2 uv, int2 dims) {
-    uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
-
-    float2 texel = uv * float2(dims - 1);
-    int2 p0 = int2(floor(texel));
-    int2 p1 = min(p0 + int2(1, 1), dims - 1);
-    float2 f = texel - float2(p0);
-
-    float h00 = readPreviousWaterHeightRaw(p0, dims);
-    float h10 = readPreviousWaterHeightRaw(int2(p1.x, p0.y), dims);
-    float h01 = readPreviousWaterHeightRaw(int2(p0.x, p1.y), dims);
-    float h11 = readPreviousWaterHeightRaw(p1, dims);
-
-    float w00 = (1.0f - f.x) * (1.0f - f.y);
-    float w10 = f.x * (1.0f - f.y);
-    float w01 = (1.0f - f.x) * f.y;
-    float w11 = f.x * f.y;
-
-    float weight = 0.0f;
-    float value = 0.0f;
-    if (isValidWaterHeight(h00)) { value += h00 * w00; weight += w00; }
-    if (isValidWaterHeight(h10)) { value += h10 * w10; weight += w10; }
-    if (isValidWaterHeight(h01)) { value += h01 * w01; weight += w01; }
-    if (isValidWaterHeight(h11)) { value += h11 * w11; weight += w11; }
-    if (weight <= 1.0e-6f) {
-        return WATER_HEIGHT_SENTINEL;
-    }
-    return value / weight;
-}
-
 float sampleWaterHeight(float2 water_xz, int2 dims) {
     float2 uv = water_xz * 0.5f + 0.5f;
     if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
@@ -355,19 +331,6 @@ float sampleWaterHeight(float2 water_xz, int2 dims) {
     }
 
     float sampled = sampleWaterHeightRaw(uv, dims);
-    if (!isValidWaterHeight(sampled)) {
-        return WATER_HEIGHT_SENTINEL;
-    }
-    return sampled * getWaterSurfaceParams().water_height_to_world_scale;
-}
-
-float samplePreviousWaterHeight(float2 water_xz, int2 dims) {
-    float2 uv = water_xz * 0.5f + 0.5f;
-    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
-        return WATER_HEIGHT_SENTINEL;
-    }
-
-    float sampled = samplePreviousWaterHeightRaw(uv, dims);
     if (!isValidWaterHeight(sampled)) {
         return WATER_HEIGHT_SENTINEL;
     }
@@ -399,6 +362,53 @@ float3 waterSurfaceNormal(float2 water_xz, int2 dims) {
     return normal;
 }
 
+float readPreviousWaterHeightRaw(int2 coord, int2 dims) {
+    return water_prev_height_image[clamp(coord, int2(0, 0), dims - 1)];
+}
+
+float samplePreviousWaterHeightRaw(float2 uv, int2 dims) {
+    uv = clamp(uv, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
+
+    float2 texel = uv * float2(dims - 1);
+    int2 p0 = int2(floor(texel));
+    int2 p1 = min(p0 + int2(1, 1), dims - 1);
+    float2 f = texel - float2(p0);
+
+    float h00 = readPreviousWaterHeightRaw(p0, dims);
+    float h10 = readPreviousWaterHeightRaw(int2(p1.x, p0.y), dims);
+    float h01 = readPreviousWaterHeightRaw(int2(p0.x, p1.y), dims);
+    float h11 = readPreviousWaterHeightRaw(p1, dims);
+
+    float w00 = (1.0f - f.x) * (1.0f - f.y);
+    float w10 = f.x * (1.0f - f.y);
+    float w01 = (1.0f - f.x) * f.y;
+    float w11 = f.x * f.y;
+
+    float weight = 0.0f;
+    float value = 0.0f;
+    if (isValidWaterHeight(h00)) { value += h00 * w00; weight += w00; }
+    if (isValidWaterHeight(h10)) { value += h10 * w10; weight += w10; }
+    if (isValidWaterHeight(h01)) { value += h01 * w01; weight += w01; }
+    if (isValidWaterHeight(h11)) { value += h11 * w11; weight += w11; }
+    if (weight <= 1.0e-6f) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+    return value / weight;
+}
+
+float samplePreviousWaterHeight(float2 water_xz, int2 dims) {
+    float2 uv = water_xz * 0.5f + 0.5f;
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+
+    float sampled = samplePreviousWaterHeightRaw(uv, dims);
+    if (!isValidWaterHeight(sampled)) {
+        return WATER_HEIGHT_SENTINEL;
+    }
+    return sampled * getWaterSurfaceParams().water_height_to_world_scale;
+}
+
 float3 previousWaterSurfaceNormal(float2 water_xz, int2 dims) {
     float dx = 2.0f / max(float(dims.x), 1.0f);
     float dz = 2.0f / max(float(dims.y), 1.0f);
@@ -426,6 +436,17 @@ float3 previousWaterSurfaceNormal(float2 water_xz, int2 dims) {
         normal = -normal;
     }
     return normal;
+}
+
+bool isFiniteColor(float3 color) {
+    return all(!isnan(color)) && all(!isinf(color));
+}
+
+float3 sanitizeColor(float3 color, float3 fallback) {
+    if (!isFiniteColor(color)) {
+        return max(fallback, 0.0f.xxx);
+    }
+    return max(color, 0.0f.xxx);
 }
 
 void waterTemporalInfoForHit(Hit water_hit, out float motion, out float blend) {
@@ -613,8 +634,6 @@ GPUMaterial loadWaterMaterial() {
         water = materials_buf[NonUniformResourceIndex(water_material_index)];
     }
 
-    // The UI exposes "Base tint" but not a separate transmission tint, so use
-    // the base color as the visible water tint for both opaque and transmissive looks.
     water.base_color.a = max(water.base_color.a, 1.0f);
     water.transmission_color.rgb *= water.base_color.rgb;
     return water;
@@ -712,12 +731,14 @@ bool intersectWaterSurface(Ray ray, out Hit hit, out GPUMaterial mat) {
 
             bool front_face = dot(ray.dir, geometric_normal) < 0.0f;
             hit.normal = front_face ? geometric_normal : -geometric_normal;
+            hit.geom_normal = hit.normal;
             hit.tangent = tangent;
             hit.bitangent = bitangent;
             hit.uv = hit_local.xz * 0.5f + 0.5f;
             hit.front_face = front_face;
             hit.matIndex = water.water_material_index;
             hit.instanceID = water.water_object_id;
+            hit.primID = -1;
             mat = loadWaterMaterial();
             return true;
         }
@@ -785,7 +806,10 @@ int traceOccluderInstance(float3 origin, float3 normal, float3 dir, float tmax) 
     return -1;
 }
 
-bool traceVisibleMeshHit(Ray ray, out float hit_t, out int object_id) {
+bool traceVisibleMeshHit(Ray ray, out float hit_t, out int instance_id) {
+    hit_t = T_MAX;
+    instance_id = -1;
+
     RayDesc rd;
     rd.Origin    = ray.origin;
     rd.Direction = ray.dir;
@@ -800,64 +824,38 @@ bool traceVisibleMeshHit(Ray ray, out float hit_t, out int object_id) {
             q.CommitNonOpaqueTriangleHit();
     }
 
-    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
-        hit_t = 0.0f;
-        object_id = -1;
-        return false;
-    }
-
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
     hit_t = q.CommittedRayT();
-    object_id = int(q.CommittedInstanceID());
+    instance_id = int(q.CommittedInstanceID());
     return true;
 }
 
-int traceVisibleInstance(Ray ray) {
-    float mesh_hit_t = 0.0f;
-    int mesh_object_id = -1;
-    bool hit_mesh = traceVisibleMeshHit(ray, mesh_hit_t, mesh_object_id);
+int traceVisibleInstance(Ray ray, out bool visible_water, out Hit visible_water_hit) {
+    float mesh_hit_t = T_MAX;
+    int mesh_instance_id = -1;
+    bool hit_mesh = traceVisibleMeshHit(ray, mesh_hit_t, mesh_instance_id);
 
     Hit water_hit;
     GPUMaterial water_mat;
     bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
-
-    const int water_mesh_object_id = getWaterSurfaceParams().water_material_index;
-    const bool mesh_masks_water_hit =
-        hit_mesh && mesh_object_id == water_mesh_object_id;
-    if (hit_water && mesh_masks_water_hit) {
-        return water_hit.instanceID;
-    }
-
-    return hit_mesh ? mesh_object_id : -1;
-}
-
-int traceVisibleObjectId(Ray ray, out bool visible_water, out Hit visible_water_hit) {
-    float mesh_hit_t = 0.0f;
-    int mesh_object_id = -1;
-    bool hit_mesh = traceVisibleMeshHit(ray, mesh_hit_t, mesh_object_id);
-
-    Hit water_hit;
-    GPUMaterial water_mat;
-    bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
-
     visible_water = false;
     visible_water_hit = (Hit)0;
-
     const int water_mesh_object_id = getWaterSurfaceParams().water_material_index;
     const bool mesh_masks_water_hit =
-        hit_mesh && mesh_object_id == water_mesh_object_id;
+        hit_mesh && mesh_instance_id == water_mesh_object_id;
     if (hit_water && mesh_masks_water_hit) {
         visible_water = true;
         visible_water_hit = water_hit;
         return water_hit.instanceID;
     }
 
-    return hit_mesh ? mesh_object_id : -1;
+    return hit_mesh ? mesh_instance_id : -1;
 }
 
-int traceVisibleObjectId(Ray ray) {
+int traceVisibleInstance(Ray ray) {
     bool visible_water;
     Hit visible_water_hit;
-    return traceVisibleObjectId(ray, visible_water, visible_water_hit);
+    return traceVisibleInstance(ray, visible_water, visible_water_hit);
 }
 
 // --- Scene intersection ---
@@ -970,13 +968,14 @@ bool intersectMeshScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     return true;
 }
 
+// --- Texture sampling ---
 bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     Hit mesh_hit;
-    Hit water_hit;
     GPUMaterial mesh_mat;
-    GPUMaterial water_mat;
-
     bool hit_mesh = intersectMeshScene(ray, mesh_hit, mesh_mat);
+
+    Hit water_hit;
+    GPUMaterial water_mat;
     bool hit_water = intersectWaterSurface(ray, water_hit, water_mat);
 
     const int water_mesh_object_id = getWaterSurfaceParams().water_material_index;
@@ -999,9 +998,8 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     return false;
 }
 
-// --- Texture sampling ---
 float4 sample_tex(uint index, float2 uv, float4 fallback) {
-    if (index == NO_TEXTURE || index >= MAX_MAT_TEXTURES) return fallback;
+    if (index == NO_TEXTURE) return fallback;
     return material_textures[NonUniformResourceIndex(index)].SampleLevel(
         g_material_sampler, uv, 0.f);
 }
@@ -1068,7 +1066,7 @@ float3 skyColor(float3 dir) {
 }
 
 // --- Path tracing ---
-float3 tracePath(Ray ray, inout RNG rng) {
+float3 tracePath(Ray ray, inout RNG rng, bool collect_influence) {
     float3 throughput = float3(1, 1, 1);
     float3 radiance   = float3(0, 0, 0);
     float  last_bsdf_pdf   = 0.0f;
@@ -1104,13 +1102,18 @@ float3 tracePath(Ray ray, inout RNG rng) {
             break;
         }
 
+        if (collect_influence && bounce > 0 && hit.instanceID >= 0 &&
+            uint(hit.instanceID) < push.hipr_object_count) {
+            InterlockedAdd(hipr_secondary_counts[uint(hit.instanceID)], 1);
+        }
+
         float3 emissive_sample =
             sample_tex(mat.emissive_tex_index, hit.uv, float4(1.f, 1.f, 1.f, 1.f)).rgb;
         float3 emissive =
             emissive_sample * mat.emission_color.rgb * mat.emission_luminance;
         radiance += throughput * clampRadianceContribution(emissive);
 
-        float3 hitPos   = hit.position;
+        float3 hitPos   = ray.origin + hit.t * ray.dir;
         float3 view_dir = -ray.dir;
 
         // For opaque surfaces, keep the face-forwarded shading normal to avoid
@@ -1140,6 +1143,10 @@ float3 tracePath(Ray ray, inout RNG rng) {
                 float2 sun_rand = float2(rng.nextFloat(), rng.nextFloat());
                 float3 sun_dir = sampleUniformCone(sun_rand, g_sun_dir, sun_cos_theta_max);
                 int occluder_front = traceOccluderInstance(hitPos, hit.normal, sun_dir, T_MAX);
+                if (collect_influence && occluder_front >= 0 &&
+                    uint(occluder_front) < push.hipr_object_count) {
+                    InterlockedAdd(hipr_shadow_counts[uint(occluder_front)], 1);
+                }
                 if (occluder_front < 0) {
                     float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, sun_dir));
                     float bsdf_pdf = max(openpbr_pdf(prepared, sun_dir), 0.0f);
@@ -1154,6 +1161,10 @@ float3 tracePath(Ray ray, inout RNG rng) {
                 float2 sun_rand = float2(rng.nextFloat(), rng.nextFloat());
                 float3 sun_dir = sampleUniformCone(sun_rand, -g_sun_dir, sun_cos_theta_max);
                 int occluder_back = traceOccluderInstance(hitPos, -hit.normal, sun_dir, T_MAX);
+                if (collect_influence && occluder_back >= 0 &&
+                    uint(occluder_back) < push.hipr_object_count) {
+                    InterlockedAdd(hipr_shadow_counts[uint(occluder_back)], 1);
+                }
                 if (occluder_back < 0) {
                     float3 f = openpbr_get_sum_of_diffuse_specular(openpbr_eval(prepared, sun_dir));
                     float bsdf_pdf = max(openpbr_pdf(prepared, sun_dir), 0.0f);
@@ -1240,330 +1251,11 @@ bool isSelectionOutline(uint2 pixel, uint2 dims, int center_instance) {
         }
 
         int neighbor_instance =
-            traceVisibleObjectId(makeRay(uint2(neighbor.x, neighbor.y), dims, float2(0.5f, 0.5f)));
+            traceVisibleInstance(makeRay(uint2(neighbor.x, neighbor.y), dims, float2(0.5f, 0.5f)));
         if (neighbor_instance != push.selected_mesh_index) {
             return true;
         }
     }
 
     return false;
-}
-
-float3 srgbToLinear(float3 color) {
-    float3 cutoff = step(float3(0.04045f, 0.04045f, 0.04045f), color);
-    float3 low    = color / 12.92f;
-    float3 high   = pow((color + 0.055f) / 1.055f, float3(2.4f, 2.4f, 2.4f));
-    return lerp(low, high, cutoff);
-}
-
-float3 unchartedTonemapPartial(float3 color) {
-    float3 x = max(float3(0.0f, 0.0f, 0.0f), color - 0.004f);
-    return (x * (6.2f * x + 0.5f)) / (x * (6.2f * x + 1.7f) + 0.06f);
-}
-
-float3 unchartedTonemapFilmic(float3 color, float exposureBias) {
-    float3 exposed = color * exposureBias;
-    exposed        = unchartedTonemapPartial(exposed);
-    float3 W       = unchartedTonemapPartial(float3(11.2f, 11.2f, 11.2f));
-    float3 whiteScale = 1.0f / max(W, float3(1.0e-6f, 1.0e-6f, 1.0e-6f));
-    return exposed * whiteScale;
-}
-
-static const uint WATER_FILTER_TILE_SIZE = 16u;
-static const float3 LUMA_WEIGHTS = float3(0.2126f, 0.7152f, 0.0722f);
-groupshared float4 g_water_tile_accum[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
-groupshared float  g_water_tile_motion[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
-groupshared uint   g_water_tile_mask[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
-groupshared int    g_tile_object_id[WATER_FILTER_TILE_SIZE * WATER_FILTER_TILE_SIZE];
-
-uint waterTileIndex(uint2 group_thread_id) {
-    return group_thread_id.y * WATER_FILTER_TILE_SIZE + group_thread_id.x;
-}
-
-float luminance(float3 color) {
-    return dot(color, LUMA_WEIGHTS);
-}
-
-bool isFiniteColor(float3 color) {
-    return all(!isnan(color)) && all(!isinf(color));
-}
-
-float3 sanitizeColor(float3 color, float3 fallback) {
-    if (!isFiniteColor(color)) {
-        return max(fallback, 0.0f.xxx);
-    }
-    return max(color, 0.0f.xxx);
-}
-
-bool isDynamicObjectId(int object_id) {
-    const int first_floating_object_id = getWaterSurfaceParams().first_floating_object_id;
-    return first_floating_object_id >= 0 && object_id >= first_floating_object_id;
-}
-
-float historyMismatch(float3 previous_color, float3 current_color) {
-    float previous_luma = luminance(previous_color);
-    float current_luma = luminance(current_color);
-    float luma_denom = max(max(previous_luma, current_luma), 0.12f);
-    float relative_luma_delta = abs(current_luma - previous_luma) / luma_denom;
-
-    float3 rgb_delta = abs(previous_color - current_color);
-    float rgb_denom = max(max(max(previous_color.r, previous_color.g),
-                              max(previous_color.b, max(current_color.r,
-                                                        max(current_color.g, current_color.b)))),
-                          0.12f);
-    float relative_rgb_delta = max(rgb_delta.r, max(rgb_delta.g, rgb_delta.b)) / rgb_denom;
-    float combined_delta = max(relative_luma_delta, relative_rgb_delta * 0.85f);
-    return smoothstep(0.22f, 0.90f, combined_delta);
-}
-
-float3 temporalOutlierClamp(float3 previous_color, float3 current_color, float mismatch) {
-    float history_luma = luminance(previous_color);
-    float floor_value = 0.22f + history_luma * 1.2f;
-    float relaxed_scale = lerp(2.2f, 6.5f, saturate(mismatch));
-    float3 max_color = previous_color * relaxed_scale + floor_value.xxx;
-    float3 guarded_max = max(max_color, current_color * 0.60f);
-    return min(current_color, guarded_max);
-}
-
-float3 filterWaterTile(uint2 group_thread_id, float3 center_accum, float center_motion) {
-    const int2 offsets[8] = {
-        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
-        int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1)
-    };
-    const float base_weights[8] = {
-        2.0f, 2.0f, 2.0f, 2.0f,
-        1.0f, 1.0f, 1.0f, 1.0f
-    };
-
-    float3 sum = center_accum * 4.0f;
-    float total_weight = 4.0f;
-    float center_luma = luminance(center_accum);
-
-    [unroll]
-    for (int sample_index = 0; sample_index < 8; ++sample_index) {
-        int2 neighbor = int2(group_thread_id) + offsets[sample_index];
-        if (neighbor.x < 0 || neighbor.y < 0 ||
-            neighbor.x >= int(WATER_FILTER_TILE_SIZE) ||
-            neighbor.y >= int(WATER_FILTER_TILE_SIZE)) {
-            continue;
-        }
-
-        uint neighbor_index = uint(neighbor.y) * WATER_FILTER_TILE_SIZE + uint(neighbor.x);
-        if (g_water_tile_mask[neighbor_index] == 0u) {
-            continue;
-        }
-
-        float3 neighbor_accum = g_water_tile_accum[neighbor_index].rgb;
-        float neighbor_luma = luminance(neighbor_accum);
-        float luma_delta = abs(neighbor_luma - center_luma);
-        float similarity = rcp(1.0f + luma_delta * lerp(10.0f, 5.0f, center_motion));
-        float motion_similarity =
-            1.0f - saturate(abs(g_water_tile_motion[neighbor_index] - center_motion) * 1.5f);
-        float weight =
-            base_weights[sample_index] * similarity * lerp(0.65f, 1.0f, motion_similarity);
-
-        sum += neighbor_accum * weight;
-        total_weight += weight;
-    }
-
-    return sum / max(total_weight, 1.0e-4f);
-}
-
-float3 filterDynamicObjectTile(uint2 group_thread_id, float3 center_accum, int object_id) {
-    const int2 offsets[8] = {
-        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
-        int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1)
-    };
-    const float base_weights[8] = {
-        2.0f, 2.0f, 2.0f, 2.0f,
-        1.0f, 1.0f, 1.0f, 1.0f
-    };
-
-    float3 sum = center_accum * 5.0f;
-    float total_weight = 5.0f;
-    float center_luma = luminance(center_accum);
-
-    [unroll]
-    for (int sample_index = 0; sample_index < 8; ++sample_index) {
-        int2 neighbor = int2(group_thread_id) + offsets[sample_index];
-        if (neighbor.x < 0 || neighbor.y < 0 ||
-            neighbor.x >= int(WATER_FILTER_TILE_SIZE) ||
-            neighbor.y >= int(WATER_FILTER_TILE_SIZE)) {
-            continue;
-        }
-
-        uint neighbor_index = uint(neighbor.y) * WATER_FILTER_TILE_SIZE + uint(neighbor.x);
-        if (g_tile_object_id[neighbor_index] != object_id) {
-            continue;
-        }
-
-        float3 neighbor_accum = g_water_tile_accum[neighbor_index].rgb;
-        float neighbor_luma = luminance(neighbor_accum);
-        float luma_delta = abs(neighbor_luma - center_luma);
-        float similarity = rcp(1.0f + luma_delta * 8.0f);
-        float weight = base_weights[sample_index] * similarity;
-        sum += neighbor_accum * weight;
-        total_weight += weight;
-    }
-
-    return sum / max(total_weight, 1.0e-4f);
-}
-
-// --- Entry point ---
-
-[shader("compute")]
-[numthreads(16, 16, 1)]
-void main(uint3 dispatch_id : SV_DispatchThreadID, uint3 group_thread_id : SV_GroupThreadID) {
-    uint2 pixel = dispatch_id.xy;
-    uint2 dims;
-    output_image.GetDimensions(dims.x, dims.y);
-
-    bool valid_pixel = all(pixel < dims);
-    if (push.stage == 0) {
-        if (valid_pixel) {
-            int visible_id = traceVisibleObjectId(makeRay(pixel, dims, float2(0.5f, 0.5f)));
-            object_id_image[pixel] = visible_id;
-        }
-        return;
-    }
-
-    if (push.stage != 2) return;
-
-    float3 accum = float3(0.0f, 0.0f, 0.0f);
-    float3 current_color = float3(0.0f, 0.0f, 0.0f);
-    bool center_visible_water = false;
-    Hit center_water_hit = (Hit)0;
-    float center_water_motion = 0.0f;
-    float center_history_mismatch = 0.0f;
-    int visible_object_id = -1;
-    int previous_visible_object_id = -1;
-    bool dynamic_visible_object = false;
-    bool revealed_water_after_dynamic = false;
-    bool used_reprojected_water_history = false;
-    float reprojected_history_confidence = 0.0f;
-    bool water_paused = waterPaused();
-    const int water_object_id = getWaterSurfaceParams().water_object_id;
-
-    if (valid_pixel) {
-        RNG rng = RNG::make(pixel, push.frame);
-        Ray center_ray = makeRay(pixel, dims, float2(0.5f, 0.5f));
-        visible_object_id = traceVisibleObjectId(center_ray, center_visible_water, center_water_hit);
-        dynamic_visible_object = isDynamicObjectId(visible_object_id);
-        if (push.frame > 0u) {
-            previous_visible_object_id = object_id_history_image[pixel];
-        }
-        object_id_image[pixel] = visible_object_id;
-        revealed_water_after_dynamic =
-            center_visible_water && previous_visible_object_id != visible_object_id &&
-            isDynamicObjectId(previous_visible_object_id);
-
-        const uint requested_spp = max(push.spp, 1u);
-        uint spp = requested_spp;
-        if (center_visible_water || dynamic_visible_object) {
-            spp = max(requested_spp, 2u);
-        }
-        if (water_paused && center_visible_water) {
-            // Spend a little more sampling budget while paused so convergence is obvious.
-            spp = max(spp, 4u);
-        }
-
-        float3 colorAccum = float3(0.0f, 0.0f, 0.0f);
-        [loop]
-        for (uint i = 0u; i < spp; ++i) {
-            uint sample_index = push.frame * spp + i;
-            float2 jitter = (dynamic_visible_object && spp == 2u) ?
-                (((i & 1u) == 0u) ? float2(0.375f, 0.375f) : float2(0.625f, 0.625f)) :
-                haltonJitter(sample_index, pixel);
-            colorAccum += tracePath(makeRay(pixel, dims, jitter), rng);
-        }
-
-        float3 color = sanitizeColor(colorAccum / float(spp), float3(0.0f, 0.0f, 0.0f));
-        current_color = color;
-
-        float3 prev  = sanitizeColor(accum_image[pixel].rgb, color);
-        float  blend = 1.f / float(push.frame + 1u);
-        if (center_visible_water) {
-            waterTemporalInfoForHit(center_water_hit, center_water_motion, blend);
-        }
-        if (center_visible_water && !water_paused && push.frame > 0u) {
-            float3 reprojected_prev = float3(0.0f, 0.0f, 0.0f);
-            int reprojected_prev_object_id = -1;
-            if (sampleReprojectedWaterHistory(center_water_hit, dims, reprojected_prev,
-                                              reprojected_prev_object_id,
-                                              reprojected_history_confidence)) {
-                prev = sanitizeColor(reprojected_prev, color);
-                previous_visible_object_id = reprojected_prev_object_id;
-                used_reprojected_water_history = true;
-            }
-        }
-        if (push.frame > 0u && previous_visible_object_id != visible_object_id) {
-            const bool previous_was_water = previous_visible_object_id == water_object_id;
-            const bool suppress_reset_for_paused_water =
-                water_paused && (center_visible_water || previous_was_water);
-            if (!suppress_reset_for_paused_water) {
-                blend = 1.0f;
-            }
-        }
-        if (push.frame > 0u && (center_visible_water || dynamic_visible_object)) {
-            center_history_mismatch = historyMismatch(prev, color);
-            color = temporalOutlierClamp(prev, color, center_history_mismatch);
-        }
-        if (water_paused && center_visible_water && !dynamic_visible_object) {
-            blend = 1.f / float(push.frame + 1u);
-            center_history_mismatch = 0.0f;
-            revealed_water_after_dynamic = false;
-        }
-        if (dynamic_visible_object) {
-            blend = max(blend, lerp(0.12f, 0.42f, center_history_mismatch));
-        } else if (push.frame > 0u && center_visible_water && !water_paused) {
-            if (used_reprojected_water_history) {
-                // Favor current shading when confidence drops to avoid temporal ghosts.
-                float reprojection_guard =
-                    lerp(0.05f, 0.22f, 1.0f - reprojected_history_confidence);
-                blend = max(blend, reprojection_guard);
-                blend = max(blend, lerp(0.03f, 0.70f, center_history_mismatch));
-            } else {
-                blend = max(blend, lerp(0.0f, 0.82f, center_history_mismatch));
-            }
-        }
-
-        accum = sanitizeColor(lerp(prev, color, blend), color);
-        accum_image[pixel] = float4(accum, 1.f);
-    }
-
-    uint tile_index = waterTileIndex(group_thread_id.xy);
-    g_water_tile_accum[tile_index] = float4(accum, 1.0f);
-    g_water_tile_motion[tile_index] =
-        (valid_pixel && center_visible_water) ? center_water_motion : 0.0f;
-    g_water_tile_mask[tile_index] = (valid_pixel && center_visible_water) ? 1u : 0u;
-    g_tile_object_id[tile_index] = valid_pixel ? visible_object_id : -1;
-    GroupMemoryBarrierWithGroupSync();
-
-    if (!valid_pixel) return;
-
-    float3 display = accum;
-    if (dynamic_visible_object) {
-        float3 filtered = filterDynamicObjectTile(group_thread_id.xy, accum, visible_object_id);
-        float filter_strength = lerp(0.42f, 0.20f, center_history_mismatch);
-        float current_mix = lerp(0.08f, 0.24f, center_history_mismatch);
-        display = lerp(accum, filtered, filter_strength);
-        display = lerp(display, current_color, current_mix);
-    }
-    if (center_visible_water) {
-        if (!water_paused) {
-            float3 filtered = filterWaterTile(group_thread_id.xy, accum, center_water_motion);
-            float filter_strength = lerp(0.28f, 0.64f, center_water_motion);
-            if (revealed_water_after_dynamic) {
-                filter_strength = max(filter_strength, 0.82f);
-            }
-            display = lerp(display, filtered, filter_strength);
-        }
-    }
-    if (push.enable_tonemapping != 0u) {
-        display = unchartedTonemapFilmic(display, push.exposure_bias);
-    }
-    if (isSelectionOutline(pixel, dims, visible_object_id)) {
-        display = lerp(display, push.outline_color.rgb, saturate(push.outline_color.a));
-    }
-    output_image[pixel] = float4(display, 1.f);
 }

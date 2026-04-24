@@ -1,3 +1,4 @@
+// Purpose: Shared water simulation types for settings, diagnostics, and floating objects.
 #pragma once
 
 #include <cstdint>

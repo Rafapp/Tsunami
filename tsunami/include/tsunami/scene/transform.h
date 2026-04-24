@@ -1,3 +1,4 @@
+// Purpose: Transform interface for local/world matrix composition and utilities.
 #pragma once
 
 #define GLM_ENABLE_EXPERIMENTAL

@@ -1,3 +1,4 @@
+// Purpose: Window abstraction interface for GLFW lifecycle, events, and framebuffer sizing.
 #pragma once
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>

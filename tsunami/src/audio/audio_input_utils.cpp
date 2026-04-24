@@ -1,4 +1,5 @@
-#include "tsunami/audio/audio_input_utils.h"
+// Purpose: Implements helpers that convert microphone samples into control-friendly audio frames.
+#include "audio/internal/audio_input_utils.h"
 
 #include <algorithm>
 #include <cmath>

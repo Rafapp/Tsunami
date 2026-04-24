@@ -1,3 +1,4 @@
+// Purpose: Bridge interface that exposes water-simulation data to Vulkan rendering code.
 #pragma once
 
 #include <cstdint>

@@ -1,3 +1,4 @@
+// Purpose: Audience control-panel interface for UI state and widget rendering.
 #pragma once
 
 #include <cstdint>

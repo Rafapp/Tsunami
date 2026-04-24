@@ -1,3 +1,4 @@
+// Purpose: Procedural sphere primitive interface for generating spherical meshes.
 #pragma once
 
 #include "tsunami/shapes/shape.h"

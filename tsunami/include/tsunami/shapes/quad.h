@@ -1,3 +1,4 @@
+// Purpose: Procedural quad primitive interface for generating planar meshes.
 #pragma once
 
 #include "tsunami/shapes/shape.h"

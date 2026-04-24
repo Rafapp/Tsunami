@@ -1,3 +1,4 @@
+// Purpose: ImGui runtime interface for Vulkan setup, frame lifecycle, and rendering.
 #pragma once
 
 #include <cstdint>

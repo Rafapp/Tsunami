@@ -1,3 +1,4 @@
+// Purpose: Internal frame-policy declarations shared across Vulkan runtime subsystems.
 #pragma once
 
 #include "tsunami/audio/reactive_audio_controller.h"

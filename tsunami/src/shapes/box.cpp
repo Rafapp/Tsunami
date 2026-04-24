@@ -1,3 +1,4 @@
+// Purpose: Implements procedural generation of box mesh vertices and indices.
 #include "tsunami/shapes/box.h"
 
 Box::Box(Transform transform, std::shared_ptr<Material> material) : Shape(transform, material) {

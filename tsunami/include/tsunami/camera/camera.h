@@ -1,3 +1,4 @@
+// Purpose: Camera state and math interface for view/projection setup and GPU packing.
 #pragma once
 #include <glm/glm.hpp>
 

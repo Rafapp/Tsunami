@@ -1,3 +1,4 @@
+// Purpose: Implements selection UI for picking objects and editing object-level properties.
 #include "tsunami/ui/selection_panel.h"
 
 #include "imgui.h"

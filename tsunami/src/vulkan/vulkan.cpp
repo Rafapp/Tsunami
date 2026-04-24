@@ -1,3 +1,4 @@
+// Purpose: Implements the core Vulkan renderer runtime: init, resources, pipelines, and main loop.
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -32,7 +33,9 @@
 #include "tsunami/scene/scene.h"
 #include "vk_mem_alloc.h"
 
-#include "slang.h"
+#include "app/internal/scene_catalog.h"
+#include "audio/internal/audio_input_utils.h"
+#include "shader/internal/slang_shader_utils.h"
 #include "tsunami/vulkan/vulkan.h"
 
 using vulkan::Runtime;
@@ -113,7 +116,6 @@ struct SceneContext {
 	VkBuffer      hipr_order_buffer           = VK_NULL_HANDLE;
 	VmaAllocation hipr_order_alloc            = VK_NULL_HANDLE;
 } scene_ctx;
-#include "tsunami/audio/audio_input_utils.h"
 #include "tsunami/audio/microphone_input.h"
 #include "tsunami/audio/reactive_audio_controller.h"
 #include "tsunami/simulation/water_scene_support.h"
@@ -122,9 +124,9 @@ struct SceneContext {
 #include "tsunami/ui/audience_overlay.h"
 #include "tsunami/ui/imgui_runtime.h"
 #include "tsunami/ui/selection_panel.h"
-#include "tsunami/vulkan/floating_policy.h"
-#include "tsunami/vulkan/frame_policy.h"
 #include "tsunami/vulkan/water_surface_bridge.h"
+#include "vulkan/internal/floating_policy.h"
+#include "vulkan/internal/frame_policy.h"
 
 struct VulkanContext {
 	vkb::Instance       instance{};
@@ -2160,39 +2162,6 @@ static void upload_material_textures(VmaAllocator alloc, VkDevice dev, VkCommand
 	std::cout << "[INFO] Uploaded " << textures.size() << " material textures\n";
 }
 
-// ============================================================
-// === Shader compilation
-// ============================================================
-static std::vector<uint32_t>
-    compile_slang_shader(const std::string& path, const std::string& entry_point,
-                         const std::vector<std::string>& search_paths = {}) {
-	SlangSession*        session = spCreateSession(nullptr);
-	SlangCompileRequest* req     = spCreateCompileRequest(session);
-	for (const auto& sp : search_paths)
-		spAddSearchPath(req, sp.c_str());
-	int ti = spAddCodeGenTarget(req, SLANG_SPIRV);
-	spSetTargetProfile(req, ti, spFindProfile(session, "spirv_1_4"));
-	int ui = spAddTranslationUnit(req, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	spAddTranslationUnitSourceFile(req, ui, path.c_str());
-	spAddEntryPoint(req, ui, entry_point.c_str(), SLANG_STAGE_COMPUTE);
-	SlangResult res  = spCompile(req);
-	const char* diag = spGetDiagnosticOutput(req);
-	if (diag && diag[0] != '\0')
-		std::cerr << "[SLANG] " << path << ":\n" << diag << "\n";
-	if (res != SLANG_OK) {
-		spDestroyCompileRequest(req);
-		spDestroySession(session);
-		throw std::runtime_error("slang compilation failed: " + path);
-	}
-	size_t                sz   = 0;
-	const void*           data = spGetEntryPointCode(req, 0, &sz);
-	std::vector<uint32_t> spirv(sz / sizeof(uint32_t));
-	memcpy(spirv.data(), data, sz);
-	spDestroyCompileRequest(req);
-	spDestroySession(session);
-	return spirv;
-}
-
 static size_t render_mode_index(ui::RenderDebugViewMode mode) {
 	switch (mode) {
 		case ui::RenderDebugViewMode::HiPR:
@@ -2248,7 +2217,8 @@ static bool create_pipeline_for_mode(ui::RenderDebugViewMode mode, VkPipeline& o
 	const std::string     shader_path =
 	    std::string(SHADERS_DIR) + "/" + render_mode_shader_filename(mode);
 	try {
-		spirv = compile_slang_shader(shader_path, "main", {VENDORS_DIR});
+		spirv = shader::slang::compileSlangShaderOrThrow(shader_path, "main", {VENDORS_DIR},
+		                                                 "spirv_1_4");
 	} catch (const std::exception& e) {
 		std::cerr << "[PIPELINE] " << render_mode_label(mode) << " compile failed: " << e.what()
 		          << "\n";
@@ -2638,63 +2608,6 @@ static void build_tlas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQ
 	as_ctx.tlas_address = vkGetAccelerationStructureDeviceAddressKHR(dev, &address_info);
 }
 
-// =======================
-// === App constructor ===
-// =======================
-static std::string toLowerAscii(std::string value) {
-	std::transform(value.begin(), value.end(), value.begin(),
-	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-	return value;
-}
-
-static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
-	namespace fs = std::filesystem;
-
-	if (scene_argument.empty()) {
-		return "resources/scenes/cornell/cornell.glb";
-	}
-
-	const std::string scene_key = toLowerAscii(scene_argument);
-	if (scene_key == "pool") {
-		return "resources/scenes/poolHouse/poolHouse_optimized.glb";
-	}
-	if (scene_key == "pool_and_water" || scene_key == "poolandwater" ||
-	    scene_key == "inflatable_pool" || scene_key == "inflatablepool") {
-		return "resources/scenes/inflatable_pool/pool_and_water.glb";
-	}
-	if (scene_key == "chess") {
-		return "resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb";
-	}
-	if (scene_key == "cornell") {
-		return "resources/scenes/cornell/cornell.glb";
-	}
-	if (scene_key == "cornellsimple") {
-		return "resources/scenes/cornell/cornell_simple.glb";
-	}
-	if (scene_key == "sponza") {
-		return "resources/scenes/Sponza/glTF/Sponza.gltf";
-	}
-
-	const fs::path    user_path(scene_argument);
-	const std::string ext = toLowerAscii(user_path.extension().string());
-	if (ext != ".gltf" && ext != ".glb") {
-		throw std::runtime_error(
-		    "unknown scene alias '" + scene_argument +
-		    "'. Use one of: pool, pool_and_water, chess, cornell, cornellsimple, sponza, or "
-		    "provide a .gltf/.glb file path.");
-	}
-
-	std::error_code ec;
-	if (!fs::exists(user_path, ec) || ec) {
-		throw std::runtime_error("scene file does not exist: " + user_path.string());
-	}
-	if (!fs::is_regular_file(user_path, ec) || ec) {
-		throw std::runtime_error("scene path is not a regular file: " + user_path.string());
-	}
-
-	return user_path.lexically_normal().string();
-}
-
 Runtime::Runtime(const std::string& scene_argument) {
 	// ==============================
 	// === 0. Scene setup
@@ -2702,7 +2615,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 	m_scene                      = std::make_unique<Scene>();
 	m_scene->m_camera            = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
 	                                      glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
-	const std::string scene_path = resolveScenePathOrThrow(scene_argument);
+	const std::string scene_path = app::scene::resolveScenePathOrThrow(scene_argument);
 	std::cout << "[INFO] Loading scene: " << scene_path << "\n";
 	m_scene->load_gltf(scene_path);
 	if (m_scene->m_meshes.empty()) {
@@ -3806,10 +3719,10 @@ Runtime::~Runtime() {
 // ============================================================
 void Runtime::runMainLoop() {
 	std::cout << "[INFO] Entering main loop\n";
-	MainLoop();
+	runLoop();
 	std::cout << "[INFO] Main loop exited\n";
 }
-void Runtime::MainLoop() {
+void Runtime::runLoop() {
 	const auto sanitize_hipr_ten_step_value = [](uint32_t value) -> uint32_t {
 		// Allowed set: 1, 10, 20, ... 100
 		if (value <= 1u) {

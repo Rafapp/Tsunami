@@ -1,3 +1,4 @@
+// Purpose: Application facade that owns runtime construction and top-level execution.
 #pragma once
 
 #include <memory>

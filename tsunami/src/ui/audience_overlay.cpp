@@ -1,3 +1,4 @@
+// Purpose: Implements on-screen diagnostics overlay drawing and telemetry formatting.
 #include <algorithm>
 
 #include "tsunami/ui/audience_overlay.h"

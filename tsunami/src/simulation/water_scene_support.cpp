@@ -1,3 +1,5 @@
+// Purpose: Implements extraction of water domain placement and floating context from scene
+// geometry.
 #include "tsunami/simulation/water_scene_support.h"
 
 #include <algorithm>

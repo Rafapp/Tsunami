@@ -1,3 +1,4 @@
+// Purpose: Common base interface for procedural shape generators.
 #pragma once
 
 #include <glm/glm.hpp>

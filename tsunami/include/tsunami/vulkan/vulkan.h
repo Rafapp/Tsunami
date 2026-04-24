@@ -1,3 +1,4 @@
+// Purpose: Public Vulkan runtime interface that owns renderer startup and main-loop execution.
 #pragma once
 
 #include <memory>
@@ -36,7 +37,7 @@ class Runtime {
 	void createSwapchainResources();
 	void destroySwapchainResources();
 	void recreateSwapchainResources();
-	void MainLoop();
+	void runLoop();
 
 	std::unique_ptr<audio::ReactiveAudioController>     m_audio_controller;
 	std::unique_ptr<audio::MicrophoneInput>             m_microphone;

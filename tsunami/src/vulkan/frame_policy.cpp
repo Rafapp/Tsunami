@@ -1,8 +1,9 @@
-#include "tsunami/vulkan/frame_policy.h"
+// Purpose: Implements per-frame policy coordination for UI, audio input, and water updates.
+#include "vulkan/internal/frame_policy.h"
 
 #include <algorithm>
 
-#include "tsunami/audio/audio_input_utils.h"
+#include "audio/internal/audio_input_utils.h"
 #include "tsunami/simulation/water_audio_gate.h"
 #include "tsunami/ui/audience_overlay.h"
 

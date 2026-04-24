@@ -1,3 +1,4 @@
+// Purpose: Internal floating-policy declarations for mapping scene assets to simulation settings.
 #pragma once
 
 #include <cstdint>

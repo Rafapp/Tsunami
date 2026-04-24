@@ -10,11 +10,6 @@ set "SLANG_DIR=vendors\slang-bin"
 set "BUILD=true"
 set "BUILD_TYPE=Release"
 set "PRESET=default"
-set SLANG_VERSION=2026.4.2
-set SLANG_DIR=vendors\slang-bin
-set BUILD=true
-set BUILD_TYPE=Release
-set PRESET=default
 set OUTPUT_DIR=build
 
 :: === Args ===
@@ -23,7 +18,7 @@ if "%~1"=="" goto end_args
 if /i "%~1"=="--setup-only" (set BUILD=false & shift & goto parse_args)
 if /i "%~1"=="--debug"      (set BUILD_TYPE=Debug & set PRESET=debug & set OUTPUT_DIR=build-debug & shift & goto parse_args)
 if /i "%~1"=="--help" (
-    echo Usage: setup.bat [options]
+    echo Usage: build.bat [options]
     echo.
     echo Options:
     echo   (no flags)    Pull submodules, download Slang, configure + build ^(default^)
@@ -128,7 +123,7 @@ echo.
 echo Skipping build ^(--setup-only^)
 echo.
 echo When ready to build:
-echo   cmake --preset default ^&^& cmake --build --preset default
+echo   cmake --preset %PRESET% ^&^& cmake --build --preset %PRESET%
 goto done
 
 :do_build
@@ -146,53 +141,8 @@ if errorlevel 1 (
     exit /b 1
 )
 echo.
-echo       OK: Build complete -- binary at build\tsunami.exe
+echo       OK: Build complete -- binary at %OUTPUT_DIR%\bin\tsunami.exe
 goto done
-
-:: =========================================================
-:: find_vcvars
-:: Sets VCVARS_PATH if found
-:: Prefers vswhere, then falls back to common paths
-:: =========================================================
-:find_vcvars
-set "VCVARS_PATH="
-
-:: 1) Try vswhere first
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if exist "!VSWHERE!" (
-    for /f "usebackq delims=" %%I in (`"!VSWHERE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul`) do (
-        if exist "%%~I\VC\Auxiliary\Build\vcvars64.bat" (
-            set "VCVARS_PATH=%%~I\VC\Auxiliary\Build\vcvars64.bat"
-            goto :find_vcvars_done
-        )
-    )
-
-    :: If -latest fails for some odd reason, try all matching installs
-    for /f "usebackq delims=" %%I in (`"!VSWHERE!" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul`) do (
-        if exist "%%~I\VC\Auxiliary\Build\vcvars64.bat" (
-            set "VCVARS_PATH=%%~I\VC\Auxiliary\Build\vcvars64.bat"
-            goto :find_vcvars_done
-        )
-    )
-)
-
-:: 2) Fallback: common editions / versions / roots
-for %%R in ("%ProgramFiles%" "%ProgramFiles(x86)%") do (
-    for %%V in (2022 2019) do (
-        for %%E in (BuildTools Community Professional Enterprise) do (
-            if exist "%%~R\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat" (
-                set "VCVARS_PATH=%%~R\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat"
-                goto :find_vcvars_done
-            )
-        )
-    )
-)
-
-:find_vcvars_done
-if defined VCVARS_PATH (
-    exit /b 0
-)
-exit /b 1
 
 :done
 echo.

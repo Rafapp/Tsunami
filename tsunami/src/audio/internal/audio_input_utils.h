@@ -1,3 +1,4 @@
+// Purpose: Internal audio utility declarations shared by frame policy and audio subsystems.
 #pragma once
 
 #include "tsunami/audio/reactive_audio_controller.h"

@@ -1,3 +1,4 @@
+// Purpose: Scene-to-simulation helper interface for deriving water placement and context.
 #pragma once
 
 #include <cstdint>

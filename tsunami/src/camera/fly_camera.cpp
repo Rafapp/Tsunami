@@ -1,3 +1,4 @@
+// Purpose: Implements free-fly camera motion integration from runtime input state.
 #include "tsunami/camera/fly_camera.h"
 #include "tsunami/camera/camera.h"
 

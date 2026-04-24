@@ -1,10 +1,11 @@
+// Purpose: Implements GPU water and floating-object simulation resources, pipelines, and command
+// recording.
 #include "tsunami/simulation/water_surface_simulation.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
@@ -15,7 +16,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "slang.h"
+#include "shader/internal/slang_shader_utils.h"
 
 namespace {
 
@@ -232,62 +233,6 @@ void createBuffer(VkDevice device, VmaAllocator allocator, VkDeviceSize size,
 	    VK_SUCCESS) {
 		throw std::runtime_error("failed to create water simulation buffer");
 	}
-}
-
-std::string resolveShaderPath(const std::string& relative_path) {
-	namespace fs = std::filesystem;
-
-	const std::array<fs::path, 5> candidates = {
-	    fs::path(relative_path),
-	    fs::path("tsunami") / relative_path,
-	    fs::path("bin") / relative_path,
-	    fs::path("build/bin") / relative_path,
-	    fs::path("build-debug/bin") / relative_path,
-	};
-
-	for (const fs::path& candidate : candidates) {
-		if (fs::exists(candidate)) {
-			return candidate.string();
-		}
-	}
-
-	throw std::runtime_error("could not find shader source: " + relative_path);
-}
-
-std::vector<uint32_t> compileSlangShader(const std::string& path, const std::string& entry_point) {
-	const std::string resolved_path = resolveShaderPath(path);
-
-	SlangSession*        session = spCreateSession(nullptr);
-	SlangCompileRequest* request = spCreateCompileRequest(session);
-
-	const int target_index = spAddCodeGenTarget(request, SLANG_SPIRV);
-	spSetTargetProfile(request, target_index, spFindProfile(session, "spirv_1_3"));
-
-	const int unit_index = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	spAddTranslationUnitSourceFile(request, unit_index, resolved_path.c_str());
-	spAddEntryPoint(request, unit_index, entry_point.c_str(), SLANG_STAGE_COMPUTE);
-
-	const SlangResult result      = spCompile(request);
-	const char*       diagnostics = spGetDiagnosticOutput(request);
-	if (diagnostics != nullptr && diagnostics[0] != '\0') {
-		std::cerr << "[SLANG] " << resolved_path << ":\n" << diagnostics << "\n";
-	}
-
-	if (result != SLANG_OK) {
-		spDestroyCompileRequest(request);
-		spDestroySession(session);
-		throw std::runtime_error("slang compilation failed: " + resolved_path);
-	}
-
-	size_t                spirv_size = 0;
-	const void*           spirv_data = spGetEntryPointCode(request, 0, &spirv_size);
-	std::vector<uint32_t> spirv(spirv_size / sizeof(uint32_t));
-	std::memcpy(spirv.data(), spirv_data, spirv_size);
-
-	spDestroyCompileRequest(request);
-	spDestroySession(session);
-
-	return spirv;
 }
 
 void createImage(VkDevice device, VmaAllocator allocator, VkExtent2D extent, VkFormat format,
@@ -1240,14 +1185,18 @@ void WaterSurfaceSimulation::createDescriptors() {
 }
 
 void WaterSurfaceSimulation::createPipeline() {
+	const std::string object_shader_path =
+	    shader::slang::resolveShaderPathOrThrow("shaders/floating_objects.slang");
 	const std::vector<uint32_t> object_spirv =
-	    compileSlangShader("shaders/floating_objects.slang", "main");
+	    shader::slang::compileSlangShaderOrThrow(object_shader_path, "main", {}, "spirv_1_3");
 	m_object_pipeline =
 	    createComputePipeline(m_device, object_spirv, m_object_descriptor_set_layout,
 	                          sizeof(FloatingObjectPushConstants), m_object_pipeline_layout);
 
+	const std::string water_shader_path =
+	    shader::slang::resolveShaderPathOrThrow("shaders/water_surface.slang");
 	const std::vector<uint32_t> water_spirv =
-	    compileSlangShader("shaders/water_surface.slang", "main");
+	    shader::slang::compileSlangShaderOrThrow(water_shader_path, "main", {}, "spirv_1_3");
 	m_water_pipeline = createComputePipeline(m_device, water_spirv, m_water_descriptor_set_layout,
 	                                         sizeof(WaterPushConstants), m_water_pipeline_layout);
 }

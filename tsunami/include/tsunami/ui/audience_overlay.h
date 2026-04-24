@@ -1,3 +1,4 @@
+// Purpose: Audience overlay interface for runtime telemetry and HUD drawing.
 #pragma once
 
 #include <cstdint>

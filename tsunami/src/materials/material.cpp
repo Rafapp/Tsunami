@@ -1,3 +1,4 @@
+// Purpose: Implements material defaults, conversions, and renderer-facing data packing.
 #include "tsunami/materials/material.h"
 
 GPUMaterial Material::pack() const {
