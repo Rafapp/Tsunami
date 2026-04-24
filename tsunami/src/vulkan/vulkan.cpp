@@ -113,12 +113,18 @@ struct SceneContext {
 	VkBuffer      hipr_order_buffer           = VK_NULL_HANDLE;
 	VmaAllocation hipr_order_alloc            = VK_NULL_HANDLE;
 } scene_ctx;
+#include "tsunami/audio/audio_input_utils.h"
 #include "tsunami/audio/microphone_input.h"
 #include "tsunami/audio/reactive_audio_controller.h"
+#include "tsunami/simulation/water_scene_support.h"
 #include "tsunami/simulation/water_surface_simulation.h"
 #include "tsunami/ui/audience_control_panel.h"
 #include "tsunami/ui/audience_overlay.h"
+#include "tsunami/ui/imgui_runtime.h"
 #include "tsunami/ui/selection_panel.h"
+#include "tsunami/vulkan/frame_policy.h"
+#include "tsunami/vulkan/floating_policy.h"
+#include "tsunami/vulkan/water_surface_bridge.h"
 
 struct VulkanContext {
 	vkb::Instance       instance{};
@@ -254,43 +260,7 @@ static_assert(sizeof(PathTracerPushConstants) == 124);
 static constexpr uint32_t kWaterPauseBit   = 0x80000000u;
 static constexpr uint32_t kSceneDynamicBit = 0x40000000u;
 static constexpr uint32_t kWaterSppMask    = 0x0000FFFFu;
-
-struct WaterSurfaceParamsGpu {
-	glm::vec4 center_trace_half_height    = glm::vec4(0.0f);
-	glm::vec4 axis_u_half_extent          = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-	glm::vec4 axis_v_half_extent          = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
-	glm::vec4 normal                      = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-	int32_t   water_object_id             = -1;
-	uint32_t  water_enabled               = 0;
-	int32_t   water_material_index        = -1;
-	float     water_height_to_world_scale = 1.0f;
-	int32_t   first_floating_object_id    = -1;
-	uint32_t  _pad0                       = 0;
-	uint32_t  _pad1                       = 0;
-	uint32_t  _pad2                       = 0;
-};
-
-static_assert(sizeof(WaterSurfaceParamsGpu) == 96);
-
-struct WaterSurfaceRenderPlacement {
-	bool      enabled                    = false;
-	int32_t   mesh_index                 = -1;
-	glm::vec3 center                     = glm::vec3(0.0f);
-	float     trace_half_height          = 0.45f;
-	glm::vec3 axis_u                     = glm::vec3(1.0f, 0.0f, 0.0f);
-	float     half_extent_u              = 1.0f;
-	glm::vec3 axis_v                     = glm::vec3(0.0f, 0.0f, 1.0f);
-	float     half_extent_v              = 1.0f;
-	glm::vec3 normal                     = glm::vec3(0.0f, 1.0f, 0.0f);
-	float     floating_surface_bounds    = 0.94f;
-	float     floating_boundary_exponent = 2.0f;
-};
-
-struct FloatingMeshGroup {
-	std::string      display_name;
-	std::vector<int> mesh_indices;
-	int              simulation_index = -1;
-};
+static_assert(sizeof(vulkan::waterbridge::WaterSurfaceParamsGpu) == 96);
 
 struct Bounds3 {
 	glm::vec3 min   = glm::vec3(0.0f);
@@ -298,7 +268,7 @@ struct Bounds3 {
 	bool      valid = false;
 };
 
-WaterSurfaceRenderPlacement                     water_surface_render_ctx{};
+simulation::WaterSurfaceRenderPlacement         water_surface_render_ctx{};
 std::vector<glm::mat4>                          mesh_pose_transforms;
 std::vector<glm::mat4>                          mesh_base_transforms;
 std::vector<float>                              mesh_user_scales;
@@ -306,7 +276,7 @@ std::vector<glm::vec3>                          mesh_user_translations;
 std::vector<glm::vec3>                          mesh_user_rotations_deg;
 std::vector<glm::vec3>                          mesh_user_rotation_pivots;
 std::vector<int>                                mesh_floating_group_index;
-std::vector<FloatingMeshGroup>                  floating_mesh_groups;
+std::vector<vulkan::floating::FloatingMeshGroup> floating_mesh_groups;
 std::vector<float>                              floating_group_user_scales;
 std::vector<glm::vec3>                          floating_group_user_translations;
 std::vector<glm::vec3>                          floating_group_user_rotations_deg;
@@ -315,24 +285,10 @@ std::vector<simulation::FloatingObjectSettings> floating_simulation_settings;
 bool                                            floating_settings_dirty = false;
 bool                                            tlas_update_pending     = false;
 
-constexpr std::string_view kWaterMeshLabel              = "water";
-constexpr float            kWaterTraceHalfHeightWorld   = 0.45f;
-constexpr float            kWaterBoundaryInsetWorld     = 0.02f;
-constexpr float            kWaterBoundaryExponentCircle = 2.0f;
-constexpr float            kWaterBoundaryExponentSquare = 16.0f;
 constexpr float            kEditorTranslationMin        = -2.0f;
 constexpr float            kEditorTranslationMax        = 2.0f;
 constexpr float            kEditorRotationMinDeg        = -180.0f;
 constexpr float            kEditorRotationMaxDeg        = 180.0f;
-
-constexpr glm::vec3 kWaterBaseColor              = glm::vec3(0.02f, 0.12f, 0.16f);
-constexpr glm::vec3 kWaterTransmissionColor      = glm::vec3(0.72f, 0.92f, 0.98f);
-constexpr float     kWaterSpecularRoughness      = 0.015f;
-constexpr float     kWaterTransmissionWeight     = 1.0f;
-constexpr float     kWaterTransmissionDepth      = 6.0f;
-constexpr float     kWaterTransmissionScatter    = 0.004f;
-constexpr float     kWaterTransmissionAnisotropy = 0.0f;
-constexpr float     kWaterIor                    = 1.333f;
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -385,200 +341,25 @@ void check_vk_result(VkResult result) {
 	}
 }
 
-void create_overlay_render_pass() {
-	VkAttachmentDescription color_attachment{};
-	color_attachment.format         = swapchain_ctx.image_format;
-	color_attachment.samples        = VK_SAMPLE_COUNT_1_BIT;
-	color_attachment.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
-	color_attachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-	color_attachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	color_attachment.initialLayout  = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	color_attachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-	VkAttachmentReference color_attachment_ref{};
-	color_attachment_ref.attachment = 0;
-	color_attachment_ref.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments    = &color_attachment_ref;
-
-	VkSubpassDependency dependency{};
-	dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass    = 0;
-	dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.srcAccessMask = 0;
-	dependency.dstAccessMask =
-	    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	VkRenderPassCreateInfo render_pass_info{};
-	render_pass_info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	render_pass_info.attachmentCount = 1;
-	render_pass_info.pAttachments    = &color_attachment;
-	render_pass_info.subpassCount    = 1;
-	render_pass_info.pSubpasses      = &subpass;
-	render_pass_info.dependencyCount = 1;
-	render_pass_info.pDependencies   = &dependency;
-
-	if (vkCreateRenderPass(vulkan_ctx.device, &render_pass_info, nullptr,
-	                       &overlay_ctx.render_pass) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create overlay render pass");
-	}
-
-	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-		VkImageView attachments[] = {swapchain_ctx.image_views[i]};
-
-		VkFramebufferCreateInfo framebuffer_info{};
-		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		framebuffer_info.renderPass      = overlay_ctx.render_pass;
-		framebuffer_info.attachmentCount = 1;
-		framebuffer_info.pAttachments    = attachments;
-		framebuffer_info.width           = swapchain_ctx.extent.width;
-		framebuffer_info.height          = swapchain_ctx.extent.height;
-		framebuffer_info.layers          = 1;
-
-		if (vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                        &overlay_ctx.framebuffers[i]) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create overlay framebuffer");
-		}
-	}
+ui::ImGuiRendererInitInfo makeImGuiRendererInitInfo() {
+	ui::ImGuiRendererInitInfo init_info{};
+	init_info.instance             = vulkan_ctx.instance.instance;
+	init_info.physical_device      = vulkan_ctx.phys_device.physical_device;
+	init_info.device               = vulkan_ctx.device;
+	init_info.graphics_queue_family = vulkan_ctx.graphics_queue_family;
+	init_info.graphics_queue       = vulkan_ctx.graphics_queue;
+	init_info.image_count          = static_cast<uint32_t>(swapchain_ctx.images.size());
+	init_info.render_pass          = overlay_ctx.render_pass;
+	init_info.check_vk_result      = check_vk_result;
+	return init_info;
 }
 
-void destroy_overlay_render_resources() {
-	for (VkFramebuffer framebuffer : overlay_ctx.framebuffers) {
-		if (framebuffer != VK_NULL_HANDLE) {
-			vkDestroyFramebuffer(vulkan_ctx.device, framebuffer, nullptr);
-		}
-	}
-	overlay_ctx.framebuffers.clear();
-
-	if (overlay_ctx.render_pass != VK_NULL_HANDLE) {
-		vkDestroyRenderPass(vulkan_ctx.device, overlay_ctx.render_pass, nullptr);
-		overlay_ctx.render_pass = VK_NULL_HANDLE;
-	}
-}
-
-void initialize_imgui_context(GLFWwindow* window) {
-	IMGUI_CHECKVERSION();
-	ImGui::CreateContext();
-
-	ImGuiIO& io    = ImGui::GetIO();
-	io.IniFilename = nullptr;
-
-	ImGui::StyleColorsDark();
-
-	if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
-		throw std::runtime_error("failed to initialize ImGui for Vulkan");
-	}
-}
-
-void initialize_imgui_renderer() {
-	ImGui_ImplVulkan_InitInfo init_info{};
-	init_info.ApiVersion                   = VK_API_VERSION_1_3;
-	init_info.Instance                     = vulkan_ctx.instance.instance;
-	init_info.PhysicalDevice               = vulkan_ctx.phys_device.physical_device;
-	init_info.Device                       = vulkan_ctx.device;
-	init_info.QueueFamily                  = vulkan_ctx.graphics_queue_family;
-	init_info.Queue                        = vulkan_ctx.graphics_queue;
-	init_info.DescriptorPoolSize           = 16;
-	init_info.MinImageCount                = static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.ImageCount                   = static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.CheckVkResultFn              = check_vk_result;
-	init_info.MinAllocationSize            = 1024 * 1024;
-	init_info.PipelineInfoMain.RenderPass  = overlay_ctx.render_pass;
-	init_info.PipelineInfoMain.Subpass     = 0;
-	init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-
-	if (!ImGui_ImplVulkan_Init(&init_info)) {
-		throw std::runtime_error("failed to initialize ImGui Vulkan backend");
-	}
-}
-
-void shutdown_imgui_renderer() {
-	if (ImGui::GetCurrentContext() == nullptr) {
-		return;
-	}
-
-	ImGui_ImplVulkan_Shutdown();
-}
-
-void shutdown_imgui() {
-	if (ImGui::GetCurrentContext() == nullptr) {
-		return;
-	}
-
-	shutdown_imgui_renderer();
-	ImGui_ImplGlfw_Shutdown();
-	ImGui::DestroyContext();
-}
-
-audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput* microphone,
-                                                    float                         time_seconds) {
-	audio::ReactiveAudioInputFrame input_frame{};
-	input_frame.source_available = microphone != nullptr && microphone->isAvailable();
-	input_frame.raw_level        = input_frame.source_available ? microphone->latestLevel() : 0.0f;
-	input_frame.time_seconds     = time_seconds;
-	input_frame.source_name =
-	    microphone != nullptr ? microphone->deviceName() : std::string("Unavailable");
-	input_frame.source_status = microphone != nullptr ?
-	                                microphone->statusMessage() :
-	                                std::string("Microphone capture is unavailable.");
-	return input_frame;
-}
-
-float clampUnit(float value) {
-	return std::clamp(value, 0.0f, 1.0f);
-}
-
-float normalizeMicrophoneLevelForSelection(const audio::ReactiveAudioSettings& settings,
-                                           float                               raw_level) {
-	const float noise_floor = clampUnit(settings.noise_floor);
-	const float sensitivity = std::max(settings.sensitivity, 0.0f);
-	return clampUnit((raw_level - noise_floor) * sensitivity);
-}
-
-float updateSelectionVoiceLoudness(const audio::ReactiveAudioSettings&   settings,
-                                   const audio::ReactiveAudioInputFrame& input_frame,
-                                   float previous_smoothed_loudness, float delta_time) {
-	const float target_loudness =
-	    input_frame.source_available ?
-	        normalizeMicrophoneLevelForSelection(settings, input_frame.raw_level) :
-	        0.0f;
-	const float smoothing = std::clamp(settings.smoothing, 0.01f, 1.0f);
-	const float dt_steps  = std::clamp(delta_time * 60.0f, 0.0f, 8.0f);
-	const float alpha     = 1.0f - std::pow(1.0f - smoothing, dt_steps);
-	const float smoothed_loudness =
-	    previous_smoothed_loudness + (target_loudness - previous_smoothed_loudness) * alpha;
-	return clampUnit(smoothed_loudness);
-}
-
-float gatedWaterLevel(float water_audio_level) {
-	return clampUnit((water_audio_level - 0.010f) / 0.990f);
-}
-
-bool shouldAutoPauseWaterWhenCalm(const ui::AudienceControlPanelState& controls,
-                                  float water_audio_level, bool currently_auto_paused) {
-	if (controls.water.drive_mode != simulation::WaterDriveMode::ArtistLinear) {
-		return false;
-	}
-
-	const float     gated_level      = gatedWaterLevel(water_audio_level);
-	constexpr float kPauseThreshold  = 0.002f;
-	constexpr float kResumeThreshold = 0.010f;
-	if (currently_auto_paused) {
-		return gated_level < kResumeThreshold;
-	}
-	return gated_level <= kPauseThreshold;
-}
-
-void applyOverlayLevel(float value) {
-	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
-	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
-	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
+vulkan::waterbridge::WaterSurfaceParamsBufferContext makeWaterSurfaceParamsBufferContext() {
+	return vulkan::waterbridge::WaterSurfaceParamsBufferContext{
+	    .params_mapped = render_target_ctx.water_surface_params_mapped,
+	    .allocator     = render_target_ctx.allocator,
+	    .params_alloc  = render_target_ctx.water_surface_params_alloc,
+	};
 }
 
 struct CpuRay {
@@ -875,15 +656,6 @@ static std::string toLowerCopy(std::string value) {
 	return value;
 }
 
-static std::string trimAsciiWhitespace(std::string value) {
-	const size_t first = value.find_first_not_of(" \t\r\n");
-	if (first == std::string::npos) {
-		return {};
-	}
-	const size_t last = value.find_last_not_of(" \t\r\n");
-	return value.substr(first, last - first + 1);
-}
-
 static glm::vec3 transformPoint(const glm::mat4& transform, const glm::vec3& point) {
 	return glm::vec3(transform * glm::vec4(point, 1.0f));
 }
@@ -1132,534 +904,6 @@ static void initializeMeshTransformMetadata(const Scene* scene) {
 	}
 }
 
-static int waterSurfaceObjectId(const Scene* scene) {
-	return (scene != nullptr && water_surface_render_ctx.enabled) ?
-	           water_surface_render_ctx.mesh_index :
-	           -1;
-}
-
-static int firstFloatingObjectId() {
-	int first_object_id = -1;
-	for (const FloatingMeshGroup& group : floating_mesh_groups) {
-		for (int mesh_index : group.mesh_indices) {
-			if (mesh_index < 0) {
-				continue;
-			}
-			first_object_id =
-			    first_object_id < 0 ? mesh_index : std::min(first_object_id, mesh_index);
-		}
-	}
-	return first_object_id;
-}
-
-static int resolveWaterSurfaceMeshIndex(const Scene* scene) {
-	if (scene == nullptr) {
-		return -1;
-	}
-
-	const auto name_matches = [&](const std::string& mesh_name) {
-		const std::string lowered = toLowerCopy(mesh_name);
-		size_t            start   = 0;
-		while (start <= lowered.size()) {
-			const size_t slash = lowered.find('/', start);
-			std::string  part = (slash == std::string::npos) ? lowered.substr(start) :
-			                                                   lowered.substr(start, slash - start);
-			part              = trimAsciiWhitespace(part);
-			if (part == kWaterMeshLabel) {
-				return true;
-			}
-			if (slash == std::string::npos) {
-				break;
-			}
-			start = slash + 1;
-		}
-		return false;
-	};
-
-	int  resolved_mesh_index = -1;
-	bool warned_multi_match  = false;
-	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
-		const auto& mesh = scene->m_meshes[mesh_index];
-		if (mesh == nullptr || !name_matches(mesh->m_name)) {
-			continue;
-		}
-		if (resolved_mesh_index < 0) {
-			resolved_mesh_index = mesh_index;
-			continue;
-		}
-		if (!warned_multi_match) {
-			std::cout << "[WARN] Multiple meshes named '" << kWaterMeshLabel
-			          << "' found. Using first match at object " << resolved_mesh_index << "\n";
-			warned_multi_match = true;
-		}
-	}
-
-	return resolved_mesh_index;
-}
-
-static WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
-	WaterSurfaceRenderPlacement placement{};
-
-	const int mesh_index = resolveWaterSurfaceMeshIndex(scene);
-	if (mesh_index < 0 || scene == nullptr ||
-	    mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
-	    scene->m_meshes[mesh_index] == nullptr) {
-		std::cout << "[WARN] Unable to resolve water mesh placement. "
-		             "Add a mesh named 'water' in the scene.\n";
-		return placement;
-	}
-
-	const Mesh&     mesh       = *scene->m_meshes[mesh_index];
-	const glm::mat4 transform  = mesh.m_transform.m_transform;
-	const glm::vec3 local_min  = mesh.m_local_bounds_min;
-	const glm::vec3 local_max  = mesh.m_local_bounds_max;
-	const glm::vec3 local_size = glm::max(local_max - local_min, glm::vec3(0.0f));
-
-	int normal_axis = 0;
-	if (local_size.y < local_size.x) {
-		normal_axis = 1;
-	}
-	if (local_size.z < local_size[normal_axis]) {
-		normal_axis = 2;
-	}
-
-	std::array<int, 2> surface_axes{};
-	for (int axis = 0, surface_axis_count = 0; axis < 3; ++axis) {
-		if (axis == normal_axis) {
-			continue;
-		}
-		surface_axes[surface_axis_count++] = axis;
-	}
-
-	std::array<glm::vec3, 3> world_axes = {
-	    glm::vec3(transform[0]),
-	    glm::vec3(transform[1]),
-	    glm::vec3(transform[2]),
-	};
-	std::array<float, 3> world_axis_scales = {
-	    glm::length(world_axes[0]),
-	    glm::length(world_axes[1]),
-	    glm::length(world_axes[2]),
-	};
-
-	for (int axis = 0; axis < 3; ++axis) {
-		if (world_axis_scales[axis] <= 1.0e-5f) {
-			std::cout << "[WARN] Water mesh has a degenerate transform axis at object "
-			          << mesh_index << "\n";
-			return placement;
-		}
-		world_axes[axis] /= world_axis_scales[axis];
-	}
-
-	glm::vec3  normal                = world_axes[normal_axis];
-	const bool normal_axis_points_up = glm::dot(normal, glm::vec3(0.0f, 1.0f, 0.0f)) >= 0.0f;
-	if (!normal_axis_points_up) {
-		normal = -normal;
-	}
-
-	glm::vec3 axis_u = world_axes[surface_axes[0]];
-	glm::vec3 axis_v = world_axes[surface_axes[1]];
-	if (glm::dot(glm::cross(axis_u, axis_v), normal) < 0.0f) {
-		axis_v = -axis_v;
-	}
-
-	const float half_extent_u =
-	    0.5f * local_size[surface_axes[0]] * world_axis_scales[surface_axes[0]];
-	const float half_extent_v =
-	    0.5f * local_size[surface_axes[1]] * world_axis_scales[surface_axes[1]];
-	if (half_extent_u <= 1.0e-4f || half_extent_v <= 1.0e-4f) {
-		std::cout << "[WARN] Water mesh produced invalid half-extents for object " << mesh_index
-		          << "\n";
-		return placement;
-	}
-
-	glm::vec3 surface_local = 0.5f * (local_min + local_max);
-	surface_local[normal_axis] =
-	    normal_axis_points_up ? local_max[normal_axis] : local_min[normal_axis];
-	glm::vec3 center_world = transformPoint(transform, surface_local);
-
-	int   corner_vertex_count = 0;
-	float max_l1_span         = 0.0f;
-	for (const GPUVertex& vertex : mesh.gpuVertices) {
-		const glm::vec3 world_position = transformPoint(transform, vertex.position);
-		const glm::vec3 delta          = world_position - center_world;
-		const float u_norm = std::abs(glm::dot(delta, axis_u) / std::max(half_extent_u, 1.0e-4f));
-		const float v_norm = std::abs(glm::dot(delta, axis_v) / std::max(half_extent_v, 1.0e-4f));
-		max_l1_span        = std::max(max_l1_span, u_norm + v_norm);
-		if (u_norm > 0.85f && v_norm > 0.85f) {
-			++corner_vertex_count;
-		}
-	}
-
-	const bool  likely_square_boundary = corner_vertex_count >= 4 || max_l1_span > 1.70f;
-	const float min_half_extent        = std::max(std::min(half_extent_u, half_extent_v), 1.0e-4f);
-	const float boundary_inset_world = std::min(kWaterBoundaryInsetWorld, min_half_extent * 0.25f);
-	const float floating_surface_bounds =
-	    std::clamp(1.0f - boundary_inset_world / min_half_extent, 0.70f, 0.99f);
-	const float floating_boundary_exponent =
-	    likely_square_boundary ? kWaterBoundaryExponentSquare : kWaterBoundaryExponentCircle;
-
-	placement.enabled                    = true;
-	placement.mesh_index                 = mesh_index;
-	placement.center                     = center_world;
-	placement.trace_half_height          = kWaterTraceHalfHeightWorld;
-	placement.axis_u                     = axis_u;
-	placement.half_extent_u              = half_extent_u;
-	placement.axis_v                     = axis_v;
-	placement.half_extent_v              = half_extent_v;
-	placement.normal                     = normal;
-	placement.floating_surface_bounds    = floating_surface_bounds;
-	placement.floating_boundary_exponent = floating_boundary_exponent;
-	return placement;
-}
-
-static float signedTriangleArea2D(const glm::vec2& a, const glm::vec2& b, const glm::vec2& c) {
-	return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
-}
-
-static void rasterizeTriangleMask(std::vector<float>& mask, uint32_t width, uint32_t height,
-                                  const glm::vec2& p0, const glm::vec2& p1, const glm::vec2& p2) {
-	if (width == 0 || height == 0) {
-		return;
-	}
-
-	const float area = signedTriangleArea2D(p0, p1, p2);
-	if (std::abs(area) <= 1.0e-8f) {
-		return;
-	}
-
-	const float min_xf = std::min({p0.x, p1.x, p2.x});
-	const float max_xf = std::max({p0.x, p1.x, p2.x});
-	const float min_yf = std::min({p0.y, p1.y, p2.y});
-	const float max_yf = std::max({p0.y, p1.y, p2.y});
-
-	const int min_x = std::max(0, static_cast<int>(std::floor(min_xf - 0.5f)));
-	const int max_x =
-	    std::min(static_cast<int>(width) - 1, static_cast<int>(std::ceil(max_xf - 0.5f)));
-	const int min_y = std::max(0, static_cast<int>(std::floor(min_yf - 0.5f)));
-	const int max_y =
-	    std::min(static_cast<int>(height) - 1, static_cast<int>(std::ceil(max_yf - 0.5f)));
-	if (min_x > max_x || min_y > max_y) {
-		return;
-	}
-
-	const bool positive_area = area > 0.0f;
-	for (int y = min_y; y <= max_y; ++y) {
-		for (int x = min_x; x <= max_x; ++x) {
-			const glm::vec2 sample(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-			const float     e0     = signedTriangleArea2D(p1, p2, sample);
-			const float     e1     = signedTriangleArea2D(p2, p0, sample);
-			const float     e2     = signedTriangleArea2D(p0, p1, sample);
-			const bool      inside = positive_area ? (e0 >= 0.0f && e1 >= 0.0f && e2 >= 0.0f) :
-			                                         (e0 <= 0.0f && e1 <= 0.0f && e2 <= 0.0f);
-			if (!inside) {
-				continue;
-			}
-			mask[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] =
-			    1.0f;
-		}
-	}
-}
-
-static glm::vec2 projectWaterVertexToDomainPixel(const glm::vec3&                   world_position,
-                                                 const WaterSurfaceRenderPlacement& placement,
-                                                 VkExtent2D                         extent) {
-	const glm::vec3 delta = world_position - placement.center;
-	const float     u =
-	    0.5f *
-	    (glm::dot(delta, placement.axis_u) / std::max(placement.half_extent_u, 1.0e-4f) + 1.0f);
-	const float v =
-	    0.5f *
-	    (glm::dot(delta, placement.axis_v) / std::max(placement.half_extent_v, 1.0e-4f) + 1.0f);
-	return glm::vec2(u * static_cast<float>(extent.width), v * static_cast<float>(extent.height));
-}
-
-static std::vector<float> buildWaterSurfaceDomainMask(const Scene*                       scene,
-                                                      const WaterSurfaceRenderPlacement& placement,
-                                                      VkExtent2D                         extent) {
-	const size_t texel_count = static_cast<size_t>(extent.width) * extent.height;
-	if (texel_count == 0) {
-		return {};
-	}
-
-	std::vector<float> mask(texel_count, 1.0f);
-	if (scene == nullptr || !placement.enabled || placement.mesh_index < 0 ||
-	    placement.mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
-	    scene->m_meshes[placement.mesh_index] == nullptr) {
-		return mask;
-	}
-
-	mask.assign(texel_count, 0.0f);
-	const Mesh& mesh = *scene->m_meshes[placement.mesh_index];
-
-	if (mesh.gpuVertices.empty()) {
-		return std::vector<float>(texel_count, 1.0f);
-	}
-
-	const auto project_vertex = [&](uint32_t vertex_index) {
-		const glm::vec3 world_position =
-		    transformPoint(mesh.m_transform.m_transform, mesh.gpuVertices[vertex_index].position);
-		return projectWaterVertexToDomainPixel(world_position, placement, extent);
-	};
-
-	bool had_triangle = false;
-	if (!mesh.gpuIndices.empty()) {
-		for (size_t index = 0; index + 2 < mesh.gpuIndices.size(); index += 3) {
-			const uint32_t i0 = mesh.gpuIndices[index + 0];
-			const uint32_t i1 = mesh.gpuIndices[index + 1];
-			const uint32_t i2 = mesh.gpuIndices[index + 2];
-			if (i0 >= mesh.gpuVertices.size() || i1 >= mesh.gpuVertices.size() ||
-			    i2 >= mesh.gpuVertices.size()) {
-				continue;
-			}
-			rasterizeTriangleMask(mask, extent.width, extent.height, project_vertex(i0),
-			                      project_vertex(i1), project_vertex(i2));
-			had_triangle = true;
-		}
-	} else {
-		for (size_t index = 0; index + 2 < mesh.gpuVertices.size(); index += 3) {
-			rasterizeTriangleMask(mask, extent.width, extent.height,
-			                      project_vertex(static_cast<uint32_t>(index + 0)),
-			                      project_vertex(static_cast<uint32_t>(index + 1)),
-			                      project_vertex(static_cast<uint32_t>(index + 2)));
-			had_triangle = true;
-		}
-	}
-
-	if (!had_triangle) {
-		return std::vector<float>(texel_count, 1.0f);
-	}
-
-	size_t active_texels = 0;
-	for (float value : mask) {
-		if (value > 0.5f) {
-			++active_texels;
-		}
-	}
-	if (active_texels == 0) {
-		return std::vector<float>(texel_count, 1.0f);
-	}
-
-	// Dilate one texel to avoid tiny raster gaps around triangle edges.
-	std::vector<float> dilated = mask;
-	for (uint32_t y = 0; y < extent.height; ++y) {
-		for (uint32_t x = 0; x < extent.width; ++x) {
-			const size_t index = static_cast<size_t>(y) * extent.width + x;
-			if (mask[index] > 0.5f) {
-				continue;
-			}
-			bool neighbor_active = false;
-			for (int oy = -1; oy <= 1 && !neighbor_active; ++oy) {
-				for (int ox = -1; ox <= 1; ++ox) {
-					const int nx = static_cast<int>(x) + ox;
-					const int ny = static_cast<int>(y) + oy;
-					if (nx < 0 || ny < 0 || nx >= static_cast<int>(extent.width) ||
-					    ny >= static_cast<int>(extent.height)) {
-						continue;
-					}
-					const size_t neighbor_index =
-					    static_cast<size_t>(ny) * extent.width + static_cast<size_t>(nx);
-					if (mask[neighbor_index] > 0.5f) {
-						neighbor_active = true;
-						break;
-					}
-				}
-			}
-			if (neighbor_active) {
-				dilated[index] = 1.0f;
-			}
-		}
-	}
-
-	return dilated;
-}
-
-static void applyDedicatedWaterMaterial(Scene* scene) {
-	if (scene == nullptr || !water_surface_render_ctx.enabled) {
-		return;
-	}
-
-	const int mesh_index = water_surface_render_ctx.mesh_index;
-	if (mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
-	    scene->m_meshes[mesh_index] == nullptr ||
-	    scene->m_meshes[mesh_index]->m_material == nullptr) {
-		return;
-	}
-
-	GPUMaterial& water_material           = scene->m_meshes[mesh_index]->m_material->m_gpu;
-	water_material.base_color             = glm::vec4(kWaterBaseColor, 1.0f);
-	water_material.base_metalness         = 0.0f;
-	water_material.base_diffuse_roughness = 0.0f;
-	water_material.specular_color         = glm::vec4(1.0f);
-	water_material.specular_roughness     = kWaterSpecularRoughness;
-	water_material.specular_ior           = kWaterIor;
-	water_material.specular_anisotropy    = 0.0f;
-	water_material.transmission_weight    = kWaterTransmissionWeight;
-	water_material.transmission_depth     = kWaterTransmissionDepth;
-	water_material.transmission_color     = glm::vec4(kWaterTransmissionColor, 1.0f);
-	water_material.transmission_scatter   = glm::vec4(
-	    kWaterTransmissionScatter, kWaterTransmissionScatter, kWaterTransmissionScatter, 0.0f);
-	water_material.transmission_scatter_anisotropy = kWaterTransmissionAnisotropy;
-	water_material.geometry_opacity                = 1.0f;
-	water_material.emission_color                  = glm::vec4(0.0f);
-	water_material.emission_luminance              = 0.0f;
-	water_material.coat_weight                     = 0.0f;
-	water_material.fuzz_weight                     = 0.0f;
-	water_material.thin_film_weight                = 0.0f;
-	water_material.albedo_tex_index                = std::numeric_limits<uint32_t>::max();
-	water_material.normal_tex_index                = std::numeric_limits<uint32_t>::max();
-	water_material.roughness_tex_index             = std::numeric_limits<uint32_t>::max();
-	water_material.emissive_tex_index              = std::numeric_limits<uint32_t>::max();
-}
-
-static glm::vec2 floatingAnchorForIndex(uint32_t index) {
-	static constexpr std::array<glm::vec2, simulation::kMaxFloatingObjects> kAnchors = {
-	    glm::vec2(-0.52f, -0.28f), glm::vec2(0.46f, -0.30f), glm::vec2(-0.18f, 0.10f),
-	    glm::vec2(0.28f, 0.16f),   glm::vec2(-0.46f, 0.32f), glm::vec2(0.06f, -0.46f),
-	    glm::vec2(0.54f, 0.34f),   glm::vec2(-0.08f, 0.46f),
-	};
-	return kAnchors[std::min<size_t>(index, kAnchors.size() - 1)];
-}
-
-static float floatingYawForIndex(uint32_t index) {
-	static constexpr std::array<float, simulation::kMaxFloatingObjects> kYaws = {
-	    15.0f, -24.0f, 36.0f, -48.0f, 62.0f, -80.0f, 102.0f, -128.0f,
-	};
-	return glm::radians(kYaws[std::min<size_t>(index, kYaws.size() - 1)]);
-}
-
-static float floatingTargetMajorWorldSize(const std::string& asset_name_lower) {
-	const float pool_span_world = 2.0f * std::min(water_surface_render_ctx.half_extent_u,
-	                                              water_surface_render_ctx.half_extent_v);
-	if (asset_name_lower.find("duck") != std::string::npos) {
-		return pool_span_world * 0.12f;
-	}
-	if (asset_name_lower.find("teapot") != std::string::npos) {
-		return pool_span_world * 0.10f;
-	}
-	if (asset_name_lower.find("ring") != std::string::npos) {
-		return pool_span_world * 0.18f;
-	}
-	return pool_span_world * 0.14f;
-}
-
-static float floatingDesiredDraftFraction(const std::string& asset_name_lower) {
-	(void) asset_name_lower;
-	// Keep all floaters at the same draft ratio as ring floaties.
-	return 0.18f;
-}
-
-static simulation::FloatingObjectSettings
-    makeFloatingObjectSettings(const std::string& asset_name, const glm::vec3& asset_world_size,
-                               float default_scale, uint32_t simulation_index) {
-	const std::string asset_name_lower = toLowerCopy(asset_name);
-	const bool        is_ring          = asset_name_lower.find("ring") != std::string::npos;
-	const bool        is_duck          = asset_name_lower.find("duck") != std::string::npos;
-	const bool        is_teapot        = asset_name_lower.find("teapot") != std::string::npos;
-	const glm::vec3   scaled_world_size =
-	    glm::max(asset_world_size * default_scale, glm::vec3(0.03f, 0.03f, 0.03f));
-	glm::vec3 effective_world_size = scaled_world_size;
-	if (is_duck) {
-		// The rubber duck asset has an attached tether/tag that inflates its bounds,
-		// so compact the physical hull to avoid unstable torques and collisions.
-		const float planar_mean    = 0.5f * (scaled_world_size.x + scaled_world_size.z);
-		const float compact_planar = std::max(planar_mean * 0.78f, 0.03f);
-		effective_world_size.x     = compact_planar;
-		effective_world_size.z     = compact_planar;
-	}
-
-	simulation::FloatingObjectSettings settings{};
-	settings.anchor           = floatingAnchorForIndex(simulation_index);
-	settings.base_height      = 0.02f + effective_world_size.y * 0.10f;
-	settings.base_yaw_radians = floatingYawForIndex(simulation_index);
-	settings.size.x =
-	    effective_world_size.x / std::max(water_surface_render_ctx.half_extent_u, 1.0e-4f);
-	settings.size.z =
-	    effective_world_size.z / std::max(water_surface_render_ctx.half_extent_v, 1.0e-4f);
-	settings.size.y    = effective_world_size.y;
-	const float volume = effective_world_size.x * effective_world_size.y * effective_world_size.z;
-	settings.mass      = std::clamp(volume * 30.0f, 0.35f, 1.80f);
-	settings.color     = glm::vec3(0.86f, 0.58f, 0.28f);
-	const float desired_draft = std::max(
-	    settings.size.y * floatingDesiredDraftFraction(asset_name_lower), settings.size.y * 0.12f);
-	settings.buoyancy_strength =
-	    std::clamp((4.5f * settings.mass) / std::max(desired_draft * 5.0f, 1.0e-4f), 16.0f, 46.0f);
-	settings.buoyancy_damping      = 7.5f;
-	settings.linear_damping        = 1.8f;
-	settings.angular_strength      = 9.5f;
-	settings.angular_damping       = 5.5f;
-	settings.self_righting         = 4.5f;
-	settings.max_tilt_radians      = 0.42f;
-	settings.planar_drift_strength = 2.4f;
-	settings.planar_damping        = 1.4f;
-	settings.anchor_pull_strength  = 0.45f;
-	settings.drift_radius          = 0.56f;
-	settings.footprint_roundness = is_ring ? 1.0f : (is_teapot ? 0.72f : (is_duck ? 0.86f : 0.90f));
-	settings.footprint_hole_ratio = is_ring ? 0.52f : 0.0f;
-	settings.waterline_offset     = -settings.size.y * 0.08f;
-	settings.yaw_follow_strength  = 2.2f;
-	if (is_duck) {
-		settings.buoyancy_damping      = 11.5f;
-		settings.linear_damping        = 3.2f;
-		settings.angular_strength      = 5.0f;
-		settings.angular_damping       = 10.5f;
-		settings.self_righting         = 8.0f;
-		settings.max_tilt_radians      = 0.24f;
-		settings.planar_drift_strength = 1.1f;
-		settings.planar_damping        = 3.0f;
-		settings.anchor_pull_strength  = 0.95f;
-		settings.drift_radius          = 0.22f;
-		settings.waterline_offset      = -settings.size.y * 0.06f;
-		settings.yaw_follow_strength   = 1.2f;
-	}
-	return settings;
-}
-
-static glm::mat4 makeFloatingWorldPose(const simulation::FloatingObjectSettings& settings) {
-	const glm::vec3 axis_y = water_surface_render_ctx.normal;
-	glm::vec3       axis_x = water_surface_render_ctx.axis_u;
-	glm::vec3       axis_z = water_surface_render_ctx.axis_v;
-	const float     c      = std::cos(settings.base_yaw_radians);
-	const float     s      = std::sin(settings.base_yaw_radians);
-	const glm::vec3 rot_x  = glm::normalize(axis_x * c + axis_z * s);
-	const glm::vec3 rot_z  = glm::normalize(-axis_x * s + axis_z * c);
-	const glm::vec3 center = water_surface_render_ctx.center +
-	                         water_surface_render_ctx.axis_u *
-	                             (settings.anchor.x * water_surface_render_ctx.half_extent_u) +
-	                         water_surface_render_ctx.axis_v *
-	                             (settings.anchor.y * water_surface_render_ctx.half_extent_v) +
-	                         water_surface_render_ctx.normal * settings.base_height;
-
-	glm::mat4 pose(1.0f);
-	pose[0] = glm::vec4(rot_x, 0.0f);
-	pose[1] = glm::vec4(axis_y, 0.0f);
-	pose[2] = glm::vec4(rot_z, 0.0f);
-	pose[3] = glm::vec4(center, 1.0f);
-	return pose;
-}
-
-static glm::mat4 makeFloatingWorldPose(const simulation::FloatingObjectRenderData& render_data) {
-	const auto to_world_axis = [](const glm::vec3& axis) {
-		return glm::normalize(water_surface_render_ctx.axis_u * axis.x +
-		                      water_surface_render_ctx.normal * axis.y +
-		                      water_surface_render_ctx.axis_v * axis.z);
-	};
-
-	const glm::vec3 center = water_surface_render_ctx.center +
-	                         water_surface_render_ctx.axis_u *
-	                             (render_data.center.x * water_surface_render_ctx.half_extent_u) +
-	                         water_surface_render_ctx.axis_v *
-	                             (render_data.center.z * water_surface_render_ctx.half_extent_v) +
-	                         water_surface_render_ctx.normal * render_data.center.y;
-
-	glm::mat4 pose(1.0f);
-	pose[0] = glm::vec4(to_world_axis(glm::vec3(render_data.axis_x)), 0.0f);
-	pose[1] = glm::vec4(to_world_axis(glm::vec3(render_data.axis_y)), 0.0f);
-	pose[2] = glm::vec4(to_world_axis(glm::vec3(render_data.axis_z)), 0.0f);
-	pose[3] = glm::vec4(center, 1.0f);
-	return pose;
-}
-
 static void syncFloatingSimulationSettings(simulation::WaterSurfaceSimulation* water_surface) {
 	if (water_surface == nullptr || floating_simulation_settings.empty()) {
 		return;
@@ -1717,25 +961,30 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 		const std::string asset_name       = asset_path.stem().string();
 		const std::string asset_name_lower = toLowerCopy(asset_name);
 		const float       target_major_world =
-		    std::max(floatingTargetMajorWorldSize(asset_name_lower), 0.08f);
+		    std::max(vulkan::floating::floatingTargetMajorWorldSize(water_surface_render_ctx,
+		                                                            asset_name_lower),
+		             0.08f);
 		const float source_major_world = std::max(asset_world_size.x, asset_world_size.z);
 		const float default_scale      = target_major_world / std::max(source_major_world, 1.0e-4f);
 
-		FloatingMeshGroup group{};
+		vulkan::floating::FloatingMeshGroup group{};
 		group.display_name     = asset_name;
 		group.simulation_index = static_cast<int>(floating_simulation_settings.size());
 		const simulation::FloatingObjectSettings settings =
-		    makeFloatingObjectSettings(asset_name, asset_world_size, default_scale,
-		                               static_cast<uint32_t>(group.simulation_index));
+		    vulkan::floating::makeFloatingObjectSettings(
+		        water_surface_render_ctx, asset_name, asset_world_size, default_scale,
+		        static_cast<uint32_t>(group.simulation_index));
 		floating_simulation_settings.push_back(settings);
 		floating_group_base_settings.push_back(settings);
 		floating_group_user_scales.push_back(1.0f);
 		floating_group_user_translations.push_back(glm::vec3(0.0f));
 		floating_group_user_rotations_deg.push_back(glm::vec3(0.0f));
-		const glm::mat4 pose = makeFloatingWorldPose(settings);
+		const glm::mat4 pose =
+		    vulkan::floating::makeFloatingWorldPose(water_surface_render_ctx, settings);
 
 		for (int mesh_index = mesh_start; mesh_index < mesh_end; ++mesh_index) {
-			const glm::mat4 pose = makeFloatingWorldPose(settings);
+			const glm::mat4 pose =
+			    vulkan::floating::makeFloatingWorldPose(water_surface_render_ctx, settings);
 			auto&           mesh = scene->m_meshes[mesh_index];
 			if (mesh == nullptr) {
 				continue;
@@ -1770,7 +1019,7 @@ static bool updateFloatingMeshTransformsFromSimulation(
 		return std::isfinite(length) && length > 1.0e-4f;
 	};
 
-	for (const FloatingMeshGroup& group : floating_mesh_groups) {
+	for (const vulkan::floating::FloatingMeshGroup& group : floating_mesh_groups) {
 		if (group.simulation_index < 0 ||
 		    group.simulation_index >= static_cast<int>(render_data.size())) {
 			continue;
@@ -1784,7 +1033,8 @@ static bool updateFloatingMeshTransformsFromSimulation(
 			continue;
 		}
 
-		const glm::mat4 pose = makeFloatingWorldPose(object_render_data);
+		const glm::mat4 pose =
+		    vulkan::floating::makeFloatingWorldPose(water_surface_render_ctx, object_render_data);
 		for (int mesh_index : group.mesh_indices) {
 			if (mesh_index < 0 || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
 			    mesh_index >= static_cast<int>(mesh_pose_transforms.size()) ||
@@ -1946,73 +1196,8 @@ static bool applySelectedTransformEditor(Scene* scene, VmaAllocator allocator) {
 	}
 	flushMeshTransforms(allocator);
 	tlas_update_pending      = true;
-	water_surface_render_ctx = buildWaterSurfacePlacement(scene);
+	water_surface_render_ctx = simulation::buildWaterSurfacePlacement(scene);
 	return true;
-}
-
-static void
-    updateWaterSurfaceParamsBuffer(Scene*                                    scene,
-                                   const simulation::WaterSurfaceSimulation* water_surface) {
-	if (render_target_ctx.water_surface_params_mapped == nullptr) {
-		return;
-	}
-
-	WaterSurfaceParamsGpu params{};
-	params.center_trace_half_height =
-	    glm::vec4(water_surface_render_ctx.center, water_surface_render_ctx.trace_half_height);
-	params.axis_u_half_extent =
-	    glm::vec4(water_surface_render_ctx.axis_u, water_surface_render_ctx.half_extent_u);
-	params.axis_v_half_extent =
-	    glm::vec4(water_surface_render_ctx.axis_v, water_surface_render_ctx.half_extent_v);
-	params.normal          = glm::vec4(water_surface_render_ctx.normal, 0.0f);
-	params.water_object_id = waterSurfaceObjectId(scene);
-	params.water_enabled = (water_surface != nullptr && water_surface_render_ctx.enabled) ? 1u : 0u;
-	params.water_material_index =
-	    (scene != nullptr && water_surface_render_ctx.mesh_index >= 0 &&
-	     water_surface_render_ctx.mesh_index < static_cast<int>(scene->m_meshes.size())) ?
-	        water_surface_render_ctx.mesh_index :
-	        -1;
-	params.water_height_to_world_scale =
-	    water_surface != nullptr ? water_surface->heightToWorldScale() : 1.0f;
-	params.first_floating_object_id = firstFloatingObjectId();
-
-	std::memcpy(render_target_ctx.water_surface_params_mapped, &params, sizeof(params));
-	vmaFlushAllocation(render_target_ctx.allocator, render_target_ctx.water_surface_params_alloc, 0,
-	                   sizeof(params));
-}
-
-static void
-    updateWaterSurfaceImageDescriptors(const simulation::WaterSurfaceSimulation* water_surface) {
-	if (render_target_ctx.descriptor_set == VK_NULL_HANDLE || water_surface == nullptr) {
-		return;
-	}
-
-	VkDescriptorImageInfo current_height_info{};
-	current_height_info.imageView   = water_surface->currentHeightImageView();
-	current_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-	VkDescriptorImageInfo previous_height_info{};
-	previous_height_info.imageView   = water_surface->previousHeightImageView();
-	previous_height_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-	VkWriteDescriptorSet writes[2]{};
-	writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-	             nullptr,
-	             render_target_ctx.descriptor_set,
-	             20,
-	             0,
-	             1,
-	             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-	             &current_height_info};
-	writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-	             nullptr,
-	             render_target_ctx.descriptor_set,
-	             21,
-	             0,
-	             1,
-	             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-	             &previous_height_info};
-	vkUpdateDescriptorSets(vulkan_ctx.device, 2, writes, 0, nullptr);
 }
 
 void Runtime::createSwapchainResources() {
@@ -2050,11 +1235,13 @@ void Runtime::createSwapchainResources() {
 	swapchain_ctx.image_views = image_views_ret.value();
 	std::cout << "[INFO] Created swapchain image views\n";
 
-	create_overlay_render_pass();
+	ui::createOverlayRenderPassAndFramebuffers(vulkan_ctx.device, swapchain_ctx.image_format,
+	                                           swapchain_ctx.extent, swapchain_ctx.image_views,
+	                                           overlay_ctx.render_pass, overlay_ctx.framebuffers);
 
 	render_target_ctx.extent =
 	    computeRenderExtent(swapchain_ctx.extent, overlay_ctx.controls.render_scale);
-	std::vector<float> water_domain_mask = buildWaterSurfaceDomainMask(
+	std::vector<float> water_domain_mask = simulation::buildWaterSurfaceDomainMask(
 	    m_scene.get(), water_surface_render_ctx, render_target_ctx.extent);
 	m_water_surface =
 	    std::make_unique<simulation::WaterSurfaceSimulation>(simulation::WaterSurfaceCreateInfo{
@@ -2072,7 +1259,8 @@ void Runtime::createSwapchainResources() {
 
 void Runtime::destroySwapchainResources() {
 	m_water_surface.reset();
-	destroy_overlay_render_resources();
+	ui::destroyOverlayRenderResources(vulkan_ctx.device, overlay_ctx.render_pass,
+	                                  overlay_ctx.framebuffers);
 
 	if (!swapchain_ctx.image_views.empty()) {
 		swapchain_ctx.swapchain.destroy_image_views(swapchain_ctx.image_views);
@@ -2168,10 +1356,10 @@ void Runtime::recreateSwapchainResources() {
 	}
 
 	check_vk_result(vkDeviceWaitIdle(vulkan_ctx.device));
-	shutdown_imgui_renderer();
+	ui::shutdownImGuiRenderer();
 	destroySwapchainResources();
 	createSwapchainResources();
-	initialize_imgui_renderer();
+	ui::initializeImGuiRenderer(makeImGuiRendererInitInfo());
 
 	{
 		const uint32_t image_count = static_cast<uint32_t>(swapchain_ctx.images.size());
@@ -2344,8 +1532,12 @@ void Runtime::recreateSwapchainResources() {
 		             &object_id_history_img};
 		vkUpdateDescriptorSets(vulkan_ctx.device, 5, writes, 0, nullptr);
 	}
-	updateWaterSurfaceImageDescriptors(m_water_surface.get());
-	updateWaterSurfaceParamsBuffer(m_scene.get(), m_water_surface.get());
+	vulkan::waterbridge::updateWaterSurfaceImageDescriptors(vulkan_ctx.device,
+	                                                       render_target_ctx.descriptor_set,
+	                                                       m_water_surface.get());
+	vulkan::waterbridge::updateWaterSurfaceParamsBuffer(
+	    makeWaterSurfaceParamsBufferContext(), water_surface_render_ctx, m_scene.get(),
+	    m_water_surface.get(), vulkan::floating::firstFloatingObjectId(floating_mesh_groups));
 
 	render_target_ctx.storage_image_initialized = false;
 }
@@ -2776,23 +1968,8 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	}
 
 	// Recreate overlay framebuffers for the new swapchain image views / extent
-	for (VkFramebuffer fb : overlay_ctx.framebuffers)
-		vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
-	overlay_ctx.framebuffers.clear();
-	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-		VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
-		VkFramebufferCreateInfo framebuffer_info{};
-		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		framebuffer_info.renderPass      = overlay_ctx.render_pass;
-		framebuffer_info.attachmentCount = 1;
-		framebuffer_info.pAttachments    = attachments;
-		framebuffer_info.width           = swapchain_ctx.extent.width;
-		framebuffer_info.height          = swapchain_ctx.extent.height;
-		framebuffer_info.layers          = 1;
-		vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                    &overlay_ctx.framebuffers[i]);
-	}
+	ui::recreateOverlayFramebuffers(vulkan_ctx.device, overlay_ctx.render_pass, swapchain_ctx.extent,
+	                                swapchain_ctx.image_views, overlay_ctx.framebuffers);
 
 	render_target_ctx.storage_image_initialized = false;
 	frame_number                                = 0;        // reset temporal accumulation
@@ -3532,8 +2709,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 	if (m_scene->m_meshes.empty()) {
 		throw std::runtime_error("failed to load scene: " + scene_path);
 	}
-	water_surface_render_ctx = buildWaterSurfacePlacement(m_scene.get());
-	applyDedicatedWaterMaterial(m_scene.get());
+	water_surface_render_ctx = simulation::buildWaterSurfacePlacement(m_scene.get());
+	simulation::applyDedicatedWaterMaterial(m_scene.get(), water_surface_render_ctx);
 	initializeMeshTransformMetadata(m_scene.get());
 	addFloatingMeshesFromResources(m_scene.get());
 	ui::rebuildObjectIdMap(m_scene.get());
@@ -3551,6 +2728,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 	m_window = std::make_unique<core::Window>(
 	    core::WindowConfig{.width = 1280, .height = 720, .title = "tsunami 🌊"});
 	std::cout << "[INFO] Window created\n";
+	glfwPollEvents();
 
 	// ==================================
 	// === III. Vulkan instance/device
@@ -3898,7 +3076,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 	}
 
 	{
-		WaterSurfaceParamsGpu initial_water_params{};
+		vulkan::waterbridge::WaterSurfaceParamsGpu initial_water_params{};
 		render_target_ctx.water_surface_params_buffer = create_and_upload_buffer(
 		    allocator, sizeof(initial_water_params), &initial_water_params,
 		    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, render_target_ctx.water_surface_params_alloc);
@@ -3911,7 +3089,9 @@ Runtime::Runtime(const std::string& scene_argument) {
 		                 &render_target_ctx.water_surface_params_mapped) != VK_SUCCESS) {
 			throw std::runtime_error("failed to map water surface params buffer");
 		}
-		updateWaterSurfaceParamsBuffer(m_scene.get(), m_water_surface.get());
+		vulkan::waterbridge::updateWaterSurfaceParamsBuffer(
+		    makeWaterSurfaceParamsBufferContext(), water_surface_render_ctx, m_scene.get(),
+		    m_water_surface.get(), vulkan::floating::firstFloatingObjectId(floating_mesh_groups));
 	}
 
 	// ===================================================
@@ -4213,7 +3393,9 @@ Runtime::Runtime(const std::string& scene_argument) {
 		                  &material_sampler_info});
 		vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t) writes.size(), writes.data(), 0,
 		                       nullptr);
-		updateWaterSurfaceImageDescriptors(m_water_surface.get());
+		vulkan::waterbridge::updateWaterSurfaceImageDescriptors(vulkan_ctx.device,
+		                                                       render_target_ctx.descriptor_set,
+		                                                       m_water_surface.get());
 		std::cout << "[INFO] Descriptor sets updated\n";
 	}
 
@@ -4256,8 +3438,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 	}
 	std::cout << "[INFO] Allocated command buffer\n";
 
-	initialize_imgui_context(m_window->handle());
-	initialize_imgui_renderer();
+	ui::initializeImGuiContext(m_window->handle());
+	ui::initializeImGuiRenderer(makeImGuiRendererInitInfo());
 	std::cout << "[INFO] Initialized ImGui overlay\n";
 
 	m_audio_controller = std::make_unique<audio::ReactiveAudioController>();
@@ -4342,7 +3524,7 @@ Runtime::~Runtime() {
 	m_audio_controller.reset();
 	m_microphone.reset();
 
-	shutdown_imgui();
+	ui::shutdownImGui();
 	destroySwapchainResources();
 
 	for (size_t pipeline_index = 0; pipeline_index < compute_ctx.pipelines.size();
@@ -4625,7 +3807,9 @@ Runtime::~Runtime() {
 // === Main loop
 // ============================================================
 void Runtime::runMainLoop() {
+	std::cout << "[INFO] Entering main loop\n";
 	MainLoop();
+	std::cout << "[INFO] Main loop exited\n";
 }
 void Runtime::MainLoop() {
 	const auto sanitize_hipr_ten_step_value = [](uint32_t value) -> uint32_t {
@@ -4642,6 +3826,10 @@ void Runtime::MainLoop() {
 		snapped          = std::min(snapped, 100u);
 		return snapped;
 	};
+
+	std::cout << "[INFO] Main loop startup state: should_close="
+	          << (m_window->shouldClose() ? 1 : 0) << " framebuffer=" << m_window->width()
+	          << "x" << m_window->height() << "\n";
 
 	double last_frame_time = glfwGetTime();
 
@@ -4731,15 +3919,8 @@ void Runtime::MainLoop() {
 		ImGui::NewFrame();
 
 		const audio::ReactiveAudioInputFrame audio_input =
-		    buildAudioInputFrame(m_microphone.get(), time_seconds);
+		    audio::buildAudioInputFrame(m_microphone.get(), time_seconds);
 
-		bool       effective_water_paused        = overlay_ctx.controls.water_paused;
-		const auto compute_effective_water_pause = [&](float water_audio_level) {
-			auto_water_paused = shouldAutoPauseWaterWhenCalm(overlay_ctx.controls,
-			                                                 water_audio_level, auto_water_paused);
-			effective_water_paused = overlay_ctx.controls.water_paused || auto_water_paused;
-			return effective_water_paused;
-		};
 		const auto handle_water_pause_transition = [&](bool water_paused_now) {
 			if (water_paused_now != last_water_paused) {
 				frame_number           = 0;
@@ -4749,42 +3930,22 @@ void Runtime::MainLoop() {
 				reset_hipr_object_sampling();
 			}
 		};
-		const auto update_water_and_floaters = [&](float water_audio_level,
-		                                           bool  water_paused_effective) {
-			if (m_water_surface != nullptr && !water_paused_effective) {
-				overlay_ctx.diagnostics.water = m_water_surface->prepareFrame(
-				    overlay_ctx.controls.water, water_audio_level, time_seconds, delta_time);
-			} else {
-				overlay_ctx.diagnostics.water.audio_drive_level = 0.0f;
-				overlay_ctx.diagnostics.water.impulse_strength  = 0.0f;
-			}
+
+		const auto run_audio_water_policy = [&]() {
+			syncFloatingSimulationBoundary(m_water_surface.get());
+			const auto policy = vulkan::framepolicy::updateAudioWaterPolicy(
+			    m_audio_controller.get(), m_water_surface.get(), overlay_ctx.controls,
+			    overlay_ctx.diagnostics, audio_input, time_seconds, delta_time,
+			    selection_voice_loudness, auto_water_paused);
+			handle_water_pause_transition(policy.effective_water_paused);
+			return policy;
 		};
 
-		float audio_level = 0.0f;
-		if (m_audio_controller != nullptr) {
-			audio_level =
-			    m_audio_controller->update(overlay_ctx.controls.audio, audio_input, delta_time);
-			overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
-		}
-		selection_voice_loudness = updateSelectionVoiceLoudness(
-		    overlay_ctx.controls.audio, audio_input, selection_voice_loudness, delta_time);
-		const float water_audio_level = overlay_ctx.controls.water_voice_control_enabled ?
-		                                    overlay_ctx.diagnostics.audio.smoothed_level :
-		                                    0.0f;
-		const bool  current_effective_water_paused =
-		    compute_effective_water_pause(water_audio_level);
-		applyOverlayLevel(audio_level);
-		syncFloatingSimulationBoundary(m_water_surface.get());
-		update_water_and_floaters(water_audio_level, current_effective_water_paused);
-		handle_water_pause_transition(current_effective_water_paused);
+		bool effective_water_paused = run_audio_water_policy().effective_water_paused;
 
-		if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
-			show_all_gui = !show_all_gui;
-			if (show_all_gui) {
-				overlay_ctx.show_control_panel = true;
-				show_selection_panel           = true;
-			}
-		}
+		vulkan::framepolicy::handleGuiVisibilityHotkey(
+		    ImGui::IsKeyPressed(ImGuiKey_F1, false), show_all_gui,
+		    overlay_ctx.show_control_panel, show_selection_panel);
 
 		bool controls_changed = false;
 		if (show_all_gui && overlay_ctx.show_control_panel) {
@@ -4856,23 +4017,7 @@ void Runtime::MainLoop() {
 		}
 
 		if (controls_changed) {
-			if (m_audio_controller != nullptr) {
-				audio_level =
-				    m_audio_controller->update(overlay_ctx.controls.audio, audio_input, delta_time);
-				overlay_ctx.diagnostics.audio = m_audio_controller->diagnostics();
-			}
-			selection_voice_loudness = updateSelectionVoiceLoudness(
-			    overlay_ctx.controls.audio, audio_input, selection_voice_loudness, delta_time);
-			const float updated_water_audio_level =
-			    overlay_ctx.controls.water_voice_control_enabled ?
-			        overlay_ctx.diagnostics.audio.smoothed_level :
-			        0.0f;
-			const bool updated_effective_water_paused =
-			    compute_effective_water_pause(updated_water_audio_level);
-			applyOverlayLevel(audio_level);
-			syncFloatingSimulationBoundary(m_water_surface.get());
-			update_water_and_floaters(updated_water_audio_level, updated_effective_water_paused);
-			handle_water_pause_transition(updated_effective_water_paused);
+			effective_water_paused = run_audio_water_policy().effective_water_paused;
 		}
 
 		if (selection_panel_result.material_edit_active && !material_edit_mode) {
@@ -4979,7 +4124,9 @@ void Runtime::MainLoop() {
 			}
 			overlay_ctx.controls.reset_objects_requested = false;
 		}
-		updateWaterSurfaceParamsBuffer(m_scene.get(), m_water_surface.get());
+		vulkan::waterbridge::updateWaterSurfaceParamsBuffer(
+		    makeWaterSurfaceParamsBufferContext(), water_surface_render_ctx, m_scene.get(),
+		    m_water_surface.get(), vulkan::floating::firstFloatingObjectId(floating_mesh_groups));
 
 		if (show_all_gui && overlay_ctx.controls.show_overlay) {
 			ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_ctx.controls.overlay,
@@ -5193,7 +4340,8 @@ void Runtime::MainLoop() {
 		if (m_water_surface != nullptr &&
 		    (!effective_water_paused || !m_water_surface->hasRecordedFrame())) {
 			m_water_surface->record(cmd);
-			updateWaterSurfaceImageDescriptors(m_water_surface.get());
+			vulkan::waterbridge::updateWaterSurfaceImageDescriptors(
+			    vulkan_ctx.device, render_target_ctx.descriptor_set, m_water_surface.get());
 		}
 		if (gpu_timing_ctx.query_pool != VK_NULL_HANDLE) {
 			vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,

@@ -15,6 +15,9 @@ Window::Window(const WindowConfig& config) : m_config(config) {
 	if (!m_window)
 		throw std::runtime_error("glfwCreateWindow failed");
 
+	// Force visibility immediately so long startup work doesn't look like a launch failure.
+	glfwShowWindow(m_window);
+
 	m_width  = config.width;
 	m_height = config.height;
 

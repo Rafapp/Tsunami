@@ -4,6 +4,11 @@
 #include "tsunami/app/app.h"
 
 int main(int argc, char** argv) {
+	// Keep diagnostics visible even if the process terminates abruptly.
+	std::cout << std::unitbuf;
+	std::cerr << std::unitbuf;
+	std::cerr << "[INFO] main() entered\n";
+
 	try {
 		if (argc > 2) {
 			std::cerr << "Usage: tsunami "
@@ -17,6 +22,9 @@ int main(int argc, char** argv) {
 		app.run();
 	} catch (const std::exception& e) {
 		std::cerr << "[Tsunami] fatal: " << e.what() << "\n";
+		return 1;
+	} catch (...) {
+		std::cerr << "[Tsunami] fatal: unknown exception\n";
 		return 1;
 	}
 
