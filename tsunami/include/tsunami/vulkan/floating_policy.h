@@ -21,16 +21,17 @@ struct FloatingMeshGroup {
 int firstFloatingObjectId(const std::vector<FloatingMeshGroup>& groups);
 
 float floatingTargetMajorWorldSize(const simulation::WaterSurfaceRenderPlacement& placement,
-                                   const std::string& asset_name_lower);
+                                   const std::string&                             asset_name_lower);
 
-simulation::FloatingObjectSettings makeFloatingObjectSettings(
-    const simulation::WaterSurfaceRenderPlacement& placement, const std::string& asset_name,
-    const glm::vec3& asset_world_size, float default_scale, uint32_t simulation_index);
-
-glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& placement,
-                                const simulation::FloatingObjectSettings&       settings);
+simulation::FloatingObjectSettings
+    makeFloatingObjectSettings(const simulation::WaterSurfaceRenderPlacement& placement,
+                               const std::string& asset_name, const glm::vec3& asset_world_size,
+                               float default_scale, uint32_t simulation_index);
 
 glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& placement,
-                                const simulation::FloatingObjectRenderData&     render_data);
+                                const simulation::FloatingObjectSettings&      settings);
+
+glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& placement,
+                                const simulation::FloatingObjectRenderData&    render_data);
 
 }        // namespace vulkan::floating

@@ -34,8 +34,9 @@ constexpr float     kWaterTransmissionAnisotropy = 0.0f;
 constexpr float     kWaterIor                    = 1.333f;
 
 std::string toLowerCopy(std::string value) {
-	std::transform(value.begin(), value.end(), value.begin(),
-	               [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+		return static_cast<char>(std::tolower(character));
+	});
 	return value;
 }
 
@@ -147,9 +148,9 @@ void rasterizeTriangleMask(std::vector<float>& mask, uint32_t width, uint32_t he
 	}
 }
 
-glm::vec2 projectWaterVertexToDomainPixel(const glm::vec3& world_position,
+glm::vec2 projectWaterVertexToDomainPixel(const glm::vec3&                   world_position,
                                           const WaterSurfaceRenderPlacement& placement,
-                                          VkExtent2D extent) {
+                                          VkExtent2D                         extent) {
 	const glm::vec3 delta = world_position - placement.center;
 	const float     u =
 	    0.5f *
@@ -170,7 +171,8 @@ WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
 	WaterSurfaceRenderPlacement placement{};
 
 	const int mesh_index = resolveWaterSurfaceMeshIndex(scene);
-	if (mesh_index < 0 || scene == nullptr || mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
+	if (mesh_index < 0 || scene == nullptr ||
+	    mesh_index >= static_cast<int>(scene->m_meshes.size()) ||
 	    scene->m_meshes[mesh_index] == nullptr) {
 		std::cout << "[WARN] Unable to resolve water mesh placement. "
 		             "Add a mesh named 'water' in the scene.\n";
@@ -212,8 +214,8 @@ WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
 
 	for (int axis = 0; axis < 3; ++axis) {
 		if (world_axis_scales[axis] <= 1.0e-5f) {
-			std::cout << "[WARN] Water mesh has a degenerate transform axis at object " << mesh_index
-			          << "\n";
+			std::cout << "[WARN] Water mesh has a degenerate transform axis at object "
+			          << mesh_index << "\n";
 			return placement;
 		}
 		world_axes[axis] /= world_axis_scales[axis];
@@ -281,9 +283,9 @@ WaterSurfaceRenderPlacement buildWaterSurfacePlacement(const Scene* scene) {
 	return placement;
 }
 
-std::vector<float> buildWaterSurfaceDomainMask(const Scene* scene,
+std::vector<float> buildWaterSurfaceDomainMask(const Scene*                       scene,
                                                const WaterSurfaceRenderPlacement& placement,
-                                               VkExtent2D extent) {
+                                               VkExtent2D                         extent) {
 	const size_t texel_count = static_cast<size_t>(extent.width) * extent.height;
 	if (texel_count == 0) {
 		return {};

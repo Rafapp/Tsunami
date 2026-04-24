@@ -6,8 +6,7 @@ namespace audio {
 
 class MicrophoneInput;
 
-ReactiveAudioInputFrame buildAudioInputFrame(const MicrophoneInput* microphone,
-                                             float                  time_seconds);
+ReactiveAudioInputFrame buildAudioInputFrame(const MicrophoneInput* microphone, float time_seconds);
 
 float updateSelectionVoiceLoudness(const ReactiveAudioSettings&   settings,
                                    const ReactiveAudioInputFrame& input_frame,

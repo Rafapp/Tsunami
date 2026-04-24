@@ -65,16 +65,17 @@ float floatingTargetMajorWorldSize(const simulation::WaterSurfaceRenderPlacement
 	return pool_span_world * 0.14f;
 }
 
-simulation::FloatingObjectSettings makeFloatingObjectSettings(
-    const simulation::WaterSurfaceRenderPlacement& placement, const std::string& asset_name,
-    const glm::vec3& asset_world_size, float default_scale, uint32_t simulation_index) {
+simulation::FloatingObjectSettings
+    makeFloatingObjectSettings(const simulation::WaterSurfaceRenderPlacement& placement,
+                               const std::string& asset_name, const glm::vec3& asset_world_size,
+                               float default_scale, uint32_t simulation_index) {
 	std::string asset_name_lower = asset_name;
 	std::transform(
 	    asset_name_lower.begin(), asset_name_lower.end(), asset_name_lower.begin(),
 	    [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-	const bool is_ring   = asset_name_lower.find("ring") != std::string::npos;
-	const bool is_duck   = asset_name_lower.find("duck") != std::string::npos;
-	const bool is_teapot = asset_name_lower.find("teapot") != std::string::npos;
+	const bool      is_ring   = asset_name_lower.find("ring") != std::string::npos;
+	const bool      is_duck   = asset_name_lower.find("duck") != std::string::npos;
+	const bool      is_teapot = asset_name_lower.find("teapot") != std::string::npos;
 	const glm::vec3 scaled_world_size =
 	    glm::max(asset_world_size * default_scale, glm::vec3(0.03f, 0.03f, 0.03f));
 	glm::vec3 effective_world_size = scaled_world_size;
@@ -91,9 +92,9 @@ simulation::FloatingObjectSettings makeFloatingObjectSettings(
 	settings.anchor           = floatingAnchorForIndex(simulation_index);
 	settings.base_height      = 0.02f + effective_world_size.y * 0.10f;
 	settings.base_yaw_radians = floatingYawForIndex(simulation_index);
-	settings.size.x = effective_world_size.x / std::max(placement.half_extent_u, 1.0e-4f);
-	settings.size.z = effective_world_size.z / std::max(placement.half_extent_v, 1.0e-4f);
-	settings.size.y = effective_world_size.y;
+	settings.size.x           = effective_world_size.x / std::max(placement.half_extent_u, 1.0e-4f);
+	settings.size.z           = effective_world_size.z / std::max(placement.half_extent_v, 1.0e-4f);
+	settings.size.y           = effective_world_size.y;
 	const float volume = effective_world_size.x * effective_world_size.y * effective_world_size.z;
 	settings.mass      = std::clamp(volume * 30.0f, 0.35f, 1.80f);
 	settings.color     = glm::vec3(0.86f, 0.58f, 0.28f);
@@ -133,7 +134,7 @@ simulation::FloatingObjectSettings makeFloatingObjectSettings(
 }
 
 glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& placement,
-                                const simulation::FloatingObjectSettings&       settings) {
+                                const simulation::FloatingObjectSettings&      settings) {
 	const glm::vec3 axis_y = placement.normal;
 	glm::vec3       axis_x = placement.axis_u;
 	glm::vec3       axis_z = placement.axis_v;
@@ -141,7 +142,8 @@ glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& p
 	const float     s      = std::sin(settings.base_yaw_radians);
 	const glm::vec3 rot_x  = glm::normalize(axis_x * c + axis_z * s);
 	const glm::vec3 rot_z  = glm::normalize(-axis_x * s + axis_z * c);
-	const glm::vec3 center = placement.center + placement.axis_u * (settings.anchor.x * placement.half_extent_u) +
+	const glm::vec3 center = placement.center +
+	                         placement.axis_u * (settings.anchor.x * placement.half_extent_u) +
 	                         placement.axis_v * (settings.anchor.y * placement.half_extent_v) +
 	                         placement.normal * settings.base_height;
 
@@ -154,13 +156,14 @@ glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& p
 }
 
 glm::mat4 makeFloatingWorldPose(const simulation::WaterSurfaceRenderPlacement& placement,
-                                const simulation::FloatingObjectRenderData&     render_data) {
+                                const simulation::FloatingObjectRenderData&    render_data) {
 	const auto to_world_axis = [&](const glm::vec3& axis) {
 		return glm::normalize(placement.axis_u * axis.x + placement.normal * axis.y +
 		                      placement.axis_v * axis.z);
 	};
 
-	const glm::vec3 center = placement.center + placement.axis_u * (render_data.center.x * placement.half_extent_u) +
+	const glm::vec3 center = placement.center +
+	                         placement.axis_u * (render_data.center.x * placement.half_extent_u) +
 	                         placement.axis_v * (render_data.center.z * placement.half_extent_v) +
 	                         placement.normal * render_data.center.y;
 

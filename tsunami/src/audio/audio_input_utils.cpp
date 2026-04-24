@@ -30,8 +30,9 @@ ReactiveAudioInputFrame buildAudioInputFrame(const MicrophoneInput* microphone,
 	input_frame.time_seconds     = time_seconds;
 	input_frame.source_name =
 	    microphone != nullptr ? microphone->deviceName() : std::string("Unavailable");
-	input_frame.source_status = microphone != nullptr ? microphone->statusMessage() :
-	                                                    std::string("Microphone capture is unavailable.");
+	input_frame.source_status = microphone != nullptr ?
+	                                microphone->statusMessage() :
+	                                std::string("Microphone capture is unavailable.");
 	return input_frame;
 }
 

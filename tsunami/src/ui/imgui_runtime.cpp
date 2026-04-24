@@ -8,12 +8,11 @@
 
 namespace ui {
 
-void createOverlayRenderPassAndFramebuffers(VkDevice                         device,
-                                            VkFormat                         image_format,
-                                            VkExtent2D                       extent,
+void createOverlayRenderPassAndFramebuffers(VkDevice device, VkFormat image_format,
+                                            VkExtent2D                      extent,
                                             const std::vector<VkImageView>& image_views,
-                                            VkRenderPass&                    render_pass,
-                                            std::vector<VkFramebuffer>&      framebuffers) {
+                                            VkRenderPass&                   render_pass,
+                                            std::vector<VkFramebuffer>&     framebuffers) {
 	VkAttachmentDescription color_attachment{};
 	color_attachment.format         = image_format;
 	color_attachment.samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -75,11 +74,9 @@ void createOverlayRenderPassAndFramebuffers(VkDevice                         dev
 	}
 }
 
-void recreateOverlayFramebuffers(VkDevice                         device,
-                                 VkRenderPass                     render_pass,
-                                 VkExtent2D                       extent,
+void recreateOverlayFramebuffers(VkDevice device, VkRenderPass render_pass, VkExtent2D extent,
                                  const std::vector<VkImageView>& image_views,
-                                 std::vector<VkFramebuffer>&      framebuffers) {
+                                 std::vector<VkFramebuffer>&     framebuffers) {
 	for (VkFramebuffer framebuffer : framebuffers) {
 		if (framebuffer != VK_NULL_HANDLE) {
 			vkDestroyFramebuffer(device, framebuffer, nullptr);

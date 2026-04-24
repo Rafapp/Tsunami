@@ -9,6 +9,8 @@ Manual:  python scripts/cppformat.py
 
 import subprocess
 import sys
+import os
+import shutil
 from pathlib import Path
 
 
@@ -16,8 +18,46 @@ CPP_EXTENSIONS = {".cpp", ".cc", ".h", ".hpp"}
 
 
 def find_clang_format():
-    """Return the clang-format binary name if found on PATH, else None."""
+    """Return a working clang-format executable path/name, else None."""
+    candidates = []
+
+    # Highest priority: explicit override.
+    explicit = os.environ.get("CLANG_FORMAT")
+    if explicit:
+        candidates.append(explicit)
+
+    # PATH lookup (portable).
     for name in ["clang-format", "clang-format-18", "clang-format-17", "clang-format-16"]:
+        resolved = shutil.which(name)
+        if resolved:
+            candidates.append(resolved)
+        candidates.append(name)
+
+    # Windows fallbacks for common LLVM installs when PATH differs across shells.
+    if os.name == "nt":
+        candidates.extend(
+            [
+                r"C:\Program Files\LLVM\bin\clang-format.exe",
+                r"C:\Program Files (x86)\LLVM\bin\clang-format.exe",
+                r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-format.exe",
+                r"C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\Llvm\x64\bin\clang-format.exe",
+                r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin\clang-format.exe",
+                r"C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang-format.exe",
+            ]
+        )
+
+    seen = set()
+    ordered = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        key = str(candidate).lower() if os.name == "nt" else str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(candidate)
+
+    for name in ordered:
         try:
             subprocess.run([name, "--version"], capture_output=True, check=True)
             return name

@@ -7,9 +7,9 @@
 namespace vulkan::framepolicy {
 
 struct AudioWaterUpdateOutput {
-	float audio_level             = 0.0f;
-	float water_audio_level       = 0.0f;
-	bool  effective_water_paused  = false;
+	float audio_level            = 0.0f;
+	float water_audio_level      = 0.0f;
+	bool  effective_water_paused = false;
 };
 
 void handleGuiVisibilityHotkey(bool f1_pressed, bool& show_all_gui, bool& show_control_panel,
@@ -18,14 +18,9 @@ void handleGuiVisibilityHotkey(bool f1_pressed, bool& show_all_gui, bool& show_c
 void applyOverlayLevelFromAudio(float value, ui::AudienceControlPanelState& controls);
 
 AudioWaterUpdateOutput updateAudioWaterPolicy(
-    audio::ReactiveAudioController*       audio_controller,
-    simulation::WaterSurfaceSimulation*   water_surface,
-    ui::AudienceControlPanelState&        controls,
-    ui::AudienceDiagnostics&              diagnostics,
-    const audio::ReactiveAudioInputFrame& input_frame,
-    float                                  time_seconds,
-    float                                  delta_time,
-    float&                                 selection_voice_loudness,
-    bool&                                  auto_water_paused);
+    audio::ReactiveAudioController*     audio_controller,
+    simulation::WaterSurfaceSimulation* water_surface, ui::AudienceControlPanelState& controls,
+    ui::AudienceDiagnostics& diagnostics, const audio::ReactiveAudioInputFrame& input_frame,
+    float time_seconds, float delta_time, float& selection_voice_loudness, bool& auto_water_paused);
 
 }        // namespace vulkan::framepolicy

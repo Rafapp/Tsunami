@@ -42,11 +42,11 @@ struct WaterSurfaceParamsBufferContext {
 	VmaAllocation params_alloc  = VK_NULL_HANDLE;
 };
 
-void updateWaterSurfaceParamsBuffer(const WaterSurfaceParamsBufferContext&      context,
+void updateWaterSurfaceParamsBuffer(const WaterSurfaceParamsBufferContext&         context,
                                     const simulation::WaterSurfaceRenderPlacement& placement,
                                     const Scene*                                   scene,
                                     const simulation::WaterSurfaceSimulation*      water_surface,
-                                    int                                            first_floating_object_id);
+                                    int first_floating_object_id);
 
 void updateWaterSurfaceImageDescriptors(VkDevice device, VkDescriptorSet descriptor_set,
                                         const simulation::WaterSurfaceSimulation* water_surface);

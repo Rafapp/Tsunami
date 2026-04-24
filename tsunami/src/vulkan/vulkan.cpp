@@ -122,8 +122,8 @@ struct SceneContext {
 #include "tsunami/ui/audience_overlay.h"
 #include "tsunami/ui/imgui_runtime.h"
 #include "tsunami/ui/selection_panel.h"
-#include "tsunami/vulkan/frame_policy.h"
 #include "tsunami/vulkan/floating_policy.h"
+#include "tsunami/vulkan/frame_policy.h"
 #include "tsunami/vulkan/water_surface_bridge.h"
 
 struct VulkanContext {
@@ -268,27 +268,27 @@ struct Bounds3 {
 	bool      valid = false;
 };
 
-simulation::WaterSurfaceRenderPlacement         water_surface_render_ctx{};
-std::vector<glm::mat4>                          mesh_pose_transforms;
-std::vector<glm::mat4>                          mesh_base_transforms;
-std::vector<float>                              mesh_user_scales;
-std::vector<glm::vec3>                          mesh_user_translations;
-std::vector<glm::vec3>                          mesh_user_rotations_deg;
-std::vector<glm::vec3>                          mesh_user_rotation_pivots;
-std::vector<int>                                mesh_floating_group_index;
+simulation::WaterSurfaceRenderPlacement          water_surface_render_ctx{};
+std::vector<glm::mat4>                           mesh_pose_transforms;
+std::vector<glm::mat4>                           mesh_base_transforms;
+std::vector<float>                               mesh_user_scales;
+std::vector<glm::vec3>                           mesh_user_translations;
+std::vector<glm::vec3>                           mesh_user_rotations_deg;
+std::vector<glm::vec3>                           mesh_user_rotation_pivots;
+std::vector<int>                                 mesh_floating_group_index;
 std::vector<vulkan::floating::FloatingMeshGroup> floating_mesh_groups;
-std::vector<float>                              floating_group_user_scales;
-std::vector<glm::vec3>                          floating_group_user_translations;
-std::vector<glm::vec3>                          floating_group_user_rotations_deg;
-std::vector<simulation::FloatingObjectSettings> floating_group_base_settings;
-std::vector<simulation::FloatingObjectSettings> floating_simulation_settings;
-bool                                            floating_settings_dirty = false;
-bool                                            tlas_update_pending     = false;
+std::vector<float>                               floating_group_user_scales;
+std::vector<glm::vec3>                           floating_group_user_translations;
+std::vector<glm::vec3>                           floating_group_user_rotations_deg;
+std::vector<simulation::FloatingObjectSettings>  floating_group_base_settings;
+std::vector<simulation::FloatingObjectSettings>  floating_simulation_settings;
+bool                                             floating_settings_dirty = false;
+bool                                             tlas_update_pending     = false;
 
-constexpr float            kEditorTranslationMin        = -2.0f;
-constexpr float            kEditorTranslationMax        = 2.0f;
-constexpr float            kEditorRotationMinDeg        = -180.0f;
-constexpr float            kEditorRotationMaxDeg        = 180.0f;
+constexpr float kEditorTranslationMin = -2.0f;
+constexpr float kEditorTranslationMax = 2.0f;
+constexpr float kEditorRotationMinDeg = -180.0f;
+constexpr float kEditorRotationMaxDeg = 180.0f;
 
 struct FrameTimingHistory {
 	static constexpr size_t kSampleWindow = 120;
@@ -343,14 +343,14 @@ void check_vk_result(VkResult result) {
 
 ui::ImGuiRendererInitInfo makeImGuiRendererInitInfo() {
 	ui::ImGuiRendererInitInfo init_info{};
-	init_info.instance             = vulkan_ctx.instance.instance;
-	init_info.physical_device      = vulkan_ctx.phys_device.physical_device;
-	init_info.device               = vulkan_ctx.device;
+	init_info.instance              = vulkan_ctx.instance.instance;
+	init_info.physical_device       = vulkan_ctx.phys_device.physical_device;
+	init_info.device                = vulkan_ctx.device;
 	init_info.graphics_queue_family = vulkan_ctx.graphics_queue_family;
-	init_info.graphics_queue       = vulkan_ctx.graphics_queue;
-	init_info.image_count          = static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.render_pass          = overlay_ctx.render_pass;
-	init_info.check_vk_result      = check_vk_result;
+	init_info.graphics_queue        = vulkan_ctx.graphics_queue;
+	init_info.image_count           = static_cast<uint32_t>(swapchain_ctx.images.size());
+	init_info.render_pass           = overlay_ctx.render_pass;
+	init_info.check_vk_result       = check_vk_result;
 	return init_info;
 }
 
@@ -960,10 +960,9 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 		const glm::vec3   asset_world_size = glm::max(bounds.max - bounds.min, glm::vec3(0.01f));
 		const std::string asset_name       = asset_path.stem().string();
 		const std::string asset_name_lower = toLowerCopy(asset_name);
-		const float       target_major_world =
-		    std::max(vulkan::floating::floatingTargetMajorWorldSize(water_surface_render_ctx,
-		                                                            asset_name_lower),
-		             0.08f);
+		const float target_major_world = std::max(vulkan::floating::floatingTargetMajorWorldSize(
+		                                              water_surface_render_ctx, asset_name_lower),
+		                                          0.08f);
 		const float source_major_world = std::max(asset_world_size.x, asset_world_size.z);
 		const float default_scale      = target_major_world / std::max(source_major_world, 1.0e-4f);
 
@@ -985,7 +984,7 @@ static void addFloatingMeshesFromResources(Scene* scene) {
 		for (int mesh_index = mesh_start; mesh_index < mesh_end; ++mesh_index) {
 			const glm::mat4 pose =
 			    vulkan::floating::makeFloatingWorldPose(water_surface_render_ctx, settings);
-			auto&           mesh = scene->m_meshes[mesh_index];
+			auto& mesh = scene->m_meshes[mesh_index];
 			if (mesh == nullptr) {
 				continue;
 			}
@@ -1532,9 +1531,8 @@ void Runtime::recreateSwapchainResources() {
 		             &object_id_history_img};
 		vkUpdateDescriptorSets(vulkan_ctx.device, 5, writes, 0, nullptr);
 	}
-	vulkan::waterbridge::updateWaterSurfaceImageDescriptors(vulkan_ctx.device,
-	                                                       render_target_ctx.descriptor_set,
-	                                                       m_water_surface.get());
+	vulkan::waterbridge::updateWaterSurfaceImageDescriptors(
+	    vulkan_ctx.device, render_target_ctx.descriptor_set, m_water_surface.get());
 	vulkan::waterbridge::updateWaterSurfaceParamsBuffer(
 	    makeWaterSurfaceParamsBufferContext(), water_surface_render_ctx, m_scene.get(),
 	    m_water_surface.get(), vulkan::floating::firstFloatingObjectId(floating_mesh_groups));
@@ -1968,8 +1966,9 @@ static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb
 	}
 
 	// Recreate overlay framebuffers for the new swapchain image views / extent
-	ui::recreateOverlayFramebuffers(vulkan_ctx.device, overlay_ctx.render_pass, swapchain_ctx.extent,
-	                                swapchain_ctx.image_views, overlay_ctx.framebuffers);
+	ui::recreateOverlayFramebuffers(vulkan_ctx.device, overlay_ctx.render_pass,
+	                                swapchain_ctx.extent, swapchain_ctx.image_views,
+	                                overlay_ctx.framebuffers);
 
 	render_target_ctx.storage_image_initialized = false;
 	frame_number                                = 0;        // reset temporal accumulation
@@ -3393,9 +3392,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 		                  &material_sampler_info});
 		vkUpdateDescriptorSets(vulkan_ctx.device, (uint32_t) writes.size(), writes.data(), 0,
 		                       nullptr);
-		vulkan::waterbridge::updateWaterSurfaceImageDescriptors(vulkan_ctx.device,
-		                                                       render_target_ctx.descriptor_set,
-		                                                       m_water_surface.get());
+		vulkan::waterbridge::updateWaterSurfaceImageDescriptors(
+		    vulkan_ctx.device, render_target_ctx.descriptor_set, m_water_surface.get());
 		std::cout << "[INFO] Descriptor sets updated\n";
 	}
 
@@ -3828,8 +3826,8 @@ void Runtime::MainLoop() {
 	};
 
 	std::cout << "[INFO] Main loop startup state: should_close="
-	          << (m_window->shouldClose() ? 1 : 0) << " framebuffer=" << m_window->width()
-	          << "x" << m_window->height() << "\n";
+	          << (m_window->shouldClose() ? 1 : 0) << " framebuffer=" << m_window->width() << "x"
+	          << m_window->height() << "\n";
 
 	double last_frame_time = glfwGetTime();
 
@@ -3943,9 +3941,9 @@ void Runtime::MainLoop() {
 
 		bool effective_water_paused = run_audio_water_policy().effective_water_paused;
 
-		vulkan::framepolicy::handleGuiVisibilityHotkey(
-		    ImGui::IsKeyPressed(ImGuiKey_F1, false), show_all_gui,
-		    overlay_ctx.show_control_panel, show_selection_panel);
+		vulkan::framepolicy::handleGuiVisibilityHotkey(ImGui::IsKeyPressed(ImGuiKey_F1, false),
+		                                               show_all_gui, overlay_ctx.show_control_panel,
+		                                               show_selection_panel);
 
 		bool controls_changed = false;
 		if (show_all_gui && overlay_ctx.show_control_panel) {

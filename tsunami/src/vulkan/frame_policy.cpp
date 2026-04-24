@@ -16,27 +16,25 @@ void handleGuiVisibilityHotkey(bool f1_pressed, bool& show_all_gui, bool& show_c
 
 	show_all_gui = !show_all_gui;
 	if (show_all_gui) {
-		show_control_panel  = true;
+		show_control_panel   = true;
 		show_selection_panel = true;
 	}
 }
 
 void applyOverlayLevelFromAudio(float value, ui::AudienceControlPanelState& controls) {
-	controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
-	controls.overlay.selected_index = ui::quantizeSelection(
-	    controls.overlay.volume_level, controls.overlay.selection_count);
+	controls.overlay.volume_level = std::clamp(value, 0.0f, 1.0f);
+	controls.overlay.selected_index =
+	    ui::quantizeSelection(controls.overlay.volume_level, controls.overlay.selection_count);
 }
 
-AudioWaterUpdateOutput updateAudioWaterPolicy(
-    audio::ReactiveAudioController*       audio_controller,
-    simulation::WaterSurfaceSimulation*   water_surface,
-    ui::AudienceControlPanelState&        controls,
-    ui::AudienceDiagnostics&              diagnostics,
-    const audio::ReactiveAudioInputFrame& input_frame,
-    float                                  time_seconds,
-    float                                  delta_time,
-    float&                                 selection_voice_loudness,
-    bool&                                  auto_water_paused) {
+AudioWaterUpdateOutput updateAudioWaterPolicy(audio::ReactiveAudioController*     audio_controller,
+                                              simulation::WaterSurfaceSimulation* water_surface,
+                                              ui::AudienceControlPanelState&      controls,
+                                              ui::AudienceDiagnostics&            diagnostics,
+                                              const audio::ReactiveAudioInputFrame& input_frame,
+                                              float time_seconds, float delta_time,
+                                              float& selection_voice_loudness,
+                                              bool&  auto_water_paused) {
 	AudioWaterUpdateOutput output{};
 
 	if (audio_controller != nullptr) {
@@ -55,8 +53,8 @@ AudioWaterUpdateOutput updateAudioWaterPolicy(
 
 	applyOverlayLevelFromAudio(output.audio_level, controls);
 	if (water_surface != nullptr && !output.effective_water_paused) {
-		diagnostics.water =
-		    water_surface->prepareFrame(controls.water, output.water_audio_level, time_seconds, delta_time);
+		diagnostics.water = water_surface->prepareFrame(controls.water, output.water_audio_level,
+		                                                time_seconds, delta_time);
 	} else {
 		diagnostics.water.audio_drive_level = 0.0f;
 		diagnostics.water.impulse_strength  = 0.0f;
