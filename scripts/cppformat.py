@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 cppformat.py - runs clang-format on changed C++ files before a push
-If any files get reformatted, the push is aborted so you can commit the fixes
+If any files get reformatted, they are auto-amended into the last commit and
+the push continues without requiring manual intervention.
 
 Install: python scripts/install_cppformat.py
 Manual:  python scripts/cppformat.py
@@ -95,11 +96,14 @@ def main():
     print()
 
     if reformatted:
-        print("  cppformat: files were reformatted. Commit the fixes and push again:")
-        print(f"    git add {' '.join(str(f) for f in reformatted)}")
-        print( "    git commit -m \"style: apply clang-format\"")
-        print( "    git push\n")
-        return 1
+        rel_paths = [str(f) for f in reformatted]
+        subprocess.run(["git", "add"] + rel_paths, check=True, cwd=repo_root)
+        subprocess.run(
+            ["git", "commit", "--amend", "--no-edit"],
+            check=True, cwd=repo_root
+        )
+        print("  cppformat: reformatted files amended into last commit - push continuing.\n")
+        return 0
 
     print("  All files clean - push allowed.\n")
     return 0
