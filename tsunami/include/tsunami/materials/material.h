@@ -27,7 +27,7 @@ struct alignas(16) GPUMaterial {
 	// Emission
 	glm::vec4 emission_color;
 	float     emission_luminance;
-	float     geometry_thin_walled;        // store as float/int for alignment simplicity
+	float     geometry_thin_walled;
 	float     transmission_dispersion_scale;
 	float     transmission_dispersion_abbe_number;
 
@@ -57,8 +57,6 @@ struct alignas(16) GPUMaterial {
 	uint32_t emissive_tex_index;
 };
 
-// Single material class — set only the fields you need; the rest default to
-// OpenPBR 1.0 spec values.  No subclasses needed.
 class Material {
   public:
 	Material() {

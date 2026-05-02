@@ -3,8 +3,6 @@
 #include "tsunami/materials/material.h"
 #include "tsunami/scene/scene.h"
 
-#include "vk_mem_alloc.h"
-
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
@@ -106,14 +104,11 @@ struct SelectionPanelResult {
 	bool path_tracing_settings_changed = false;
 };
 
-extern SelectionContext selection_ctx;
-
-std::string meshDisplayName(const Scene* scene, int mesh_index);
-void        rebuildObjectIdMap(const Scene* scene);
-bool        selectMesh(const Scene* scene, int mesh_index);
-void        applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* material_mapped,
-                                        uint32_t material_count, VmaAllocation material_alloc);
-SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness,
-                                        bool* is_open = nullptr);
+std::string          meshDisplayName(const Scene* scene, int mesh_index);
+void                 rebuildObjectIdMap(SelectionContext& selection, const Scene* scene);
+bool                 selectMesh(SelectionContext& selection, const Scene* scene, int mesh_index);
+void                 applySelectedMaterialEditor(SelectionContext& selection, Scene* scene);
+SelectionPanelResult drawSelectionPanel(SelectionContext& selection, const Scene* scene,
+                                        float voice_loudness, bool* is_open = nullptr);
 
 }        // namespace ui

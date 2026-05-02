@@ -36,9 +36,6 @@ class Scene {
 	std::vector<std::unique_ptr<Shape>> m_shapes;
 	std::vector<std::unique_ptr<Mesh>>  m_meshes;
 	int load_texture_if_needed(const std::shared_ptr<Texture>& texture);
-
-	// CPU-side textures loaded from glTF materials via Assimp + stb.
-	// These are ready for future GPU upload / material-index wiring.
 	std::vector<std::shared_ptr<Texture>> m_textures;
 
   private:

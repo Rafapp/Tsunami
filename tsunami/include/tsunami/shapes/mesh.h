@@ -33,18 +33,13 @@ struct alignas(16) GPUMesh {
 
 class Mesh {
   public:
-	// Load a single .obj (collapses all sub-meshes as before)
 	Mesh(const std::string& path, Transform transform, std::shared_ptr<Material> material);
 
-	// Construct from already-built buffers (used by load_gltf)
 	Mesh(std::vector<GPUVertex> vertices, std::vector<uint32_t> indices, Transform transform,
 	     std::shared_ptr<Material> material, std::string name = {});
 
 	~Mesh() = default;
 
-	// Load a glTF file via assimp — returns one Mesh per primitive,
-	// each with its own material resolved from the glTF.
-	// Texture paths are stored in the material but not uploaded yet (stb stub).
 	static std::vector<std::unique_ptr<Mesh>> load_gltf(const std::string& path);
 
 	GPUMesh pack(int matIndex, int vertexOffset, int indexOffset) const;

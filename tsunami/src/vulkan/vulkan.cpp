@@ -1,9 +1,7 @@
 #include <algorithm>
-#include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -24,631 +22,171 @@
 #define VMA_IMPLEMENTATION
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+
 #include "VkBootstrap.h"
-#include "tsunami/camera/fly_camera.h"
-#include "tsunami/core/window.h"
-#include "tsunami/scene/scene.h"
 #include "vk_mem_alloc.h"
 
-#include "slang.h"
+#include "tsunami/core/window.h"
+#include "tsunami/scene/scene.h"
+#include "tsunami/simulation/water_surface_simulation.h"
 #include "tsunami/vulkan/vulkan.h"
 
 using vulkan::Runtime;
+using vulkan::RuntimeFrameInput;
+using vulkan::RuntimeFrameOutput;
 
-// ============================================================
-// === OpenPBR LUT data — C++ array mode
-// ============================================================
-// The shader uses OPENPBR_USE_TEXTURE_LUTS=1. Here on the CPU side we include
-// openpbr in C++ + array mode (OPENPBR_USE_TEXTURE_LUTS=0) so the raw LUT
-// data arrays are accessible as plain C++ statics for GPU upload.
-#define OPENPBR_LANGUAGE_TARGET_CPP 1
-#define OPENPBR_USE_TEXTURE_LUTS 0
-#define OPENPBR_ENERGY_TABLES_USE_UINT16 0        // uint32 for broadest platform compat
-#include "openpbr.h"
-#include <glm/glm.hpp>
-// Raw data headers — these define the C arrays we will upload.
-// HOW TO USE:
-//   1. Open openpbr_data_constants.h     → table resolution constants
-//   2. Open impl/data/openpbr_energy_arrays.h → the 7 energy table uint32 arrays
-//   3. Open impl/data/openpbr_ltc_array.h     → the float3 LTC table array
-// Then fill in upload_openpbr_luts() below.
-#include "impl/data/openpbr_energy_arrays.h"
-#include "impl/data/openpbr_ltc_array.h"
-#include "openpbr_data_constants.h"
-// Remove macros so they don't leak.
-#undef OPENPBR_LANGUAGE_TARGET_CPP
-#undef OPENPBR_USE_TEXTURE_LUTS
-#undef OPENPBR_ENERGY_TABLES_USE_UINT16
+// Module headers — struct definitions + extern globals + all helper functions.
+// VOLK_IMPLEMENTATION and VMA_IMPLEMENTATION are defined above in this TU only.
+#include "tsunami/vulkan/internal/vk_context.h"
+#include "tsunami/vulkan/vk_acceleration.h"
+#include "tsunami/vulkan/vk_helpers.h"
+#include "tsunami/vulkan/vk_overlay.h"
+#include "tsunami/vulkan/vk_pipeline.h"
+#include "tsunami/vulkan/vk_resources.h"
+#include "tsunami/vulkan/vk_scene.h"
 
-// ============================================================
-// === LUT / texture structs
-// ============================================================
-struct LutTexture2D {
-	VkImage       image = VK_NULL_HANDLE;
-	VmaAllocation alloc = VK_NULL_HANDLE;
-	VkImageView   view  = VK_NULL_HANDLE;
-	uint32_t      width = 0, height = 0;
-};
-struct LutTexture3D {
-	VkImage       image = VK_NULL_HANDLE;
-	VmaAllocation alloc = VK_NULL_HANDLE;
-	VkImageView   view  = VK_NULL_HANDLE;
-	uint32_t      width = 0, height = 0, depth = 0;
-};
-static constexpr uint32_t NUM_LUTS              = 8;
-static constexpr uint32_t MAX_MATERIAL_TEXTURES = 256;
-static constexpr uint32_t HIPR_TOP_K            = 16;
+class Runtime::Impl {
+  public:
+	Impl(core::Window& window, const Scene& scene);
+	~Impl();
 
-// =======================
-// === Context structs ===
-// =======================
-struct SceneContext {
-	void*         camera_mapped               = nullptr;
-	VkBuffer      camera_buffer               = VK_NULL_HANDLE;
-	VmaAllocation camera_alloc                = VK_NULL_HANDLE;
-	void*         material_mapped             = nullptr;
-	VkBuffer      material_buffer             = VK_NULL_HANDLE;
-	VmaAllocation material_alloc              = VK_NULL_HANDLE;
-	uint32_t      material_count              = 0;
-	VkBuffer      mesh_buffer                 = VK_NULL_HANDLE;
-	VmaAllocation mesh_alloc                  = VK_NULL_HANDLE;
-	VkBuffer      vertex_buffer               = VK_NULL_HANDLE;
-	VmaAllocation vertex_alloc                = VK_NULL_HANDLE;
-	VkBuffer      index_buffer                = VK_NULL_HANDLE;
-	VmaAllocation index_alloc                 = VK_NULL_HANDLE;
-	uint32_t      mesh_count                  = 0;
-	uint32_t      hipr_top_k                  = HIPR_TOP_K;
-	VkBuffer      hipr_visible_count_buffer   = VK_NULL_HANDLE;
-	VmaAllocation hipr_visible_count_alloc    = VK_NULL_HANDLE;
-	VkBuffer      hipr_secondary_count_buffer = VK_NULL_HANDLE;
-	VmaAllocation hipr_secondary_count_alloc  = VK_NULL_HANDLE;
-	VkBuffer      hipr_shadow_count_buffer    = VK_NULL_HANDLE;
-	VmaAllocation hipr_shadow_count_alloc     = VK_NULL_HANDLE;
-	VkBuffer      hipr_score_buffer           = VK_NULL_HANDLE;
-	VmaAllocation hipr_score_alloc            = VK_NULL_HANDLE;
-	VkBuffer      hipr_order_buffer           = VK_NULL_HANDLE;
-	VmaAllocation hipr_order_alloc            = VK_NULL_HANDLE;
-	float         selection_voice_loudness    = 0.0f;
-} scene_ctx;
-#include "tsunami/audio/microphone_input.h"
-#include "tsunami/audio/reactive_audio_controller.h"
-#include "tsunami/simulation/water_surface_simulation.h"
-#include "tsunami/ui/audience_control_panel.h"
-#include "tsunami/ui/audience_overlay.h"
-#include "tsunami/ui/selection_panel.h"
+	void                               createSwapchainResources();
+	void                               destroySwapchainResources();
+	void                               recreateSwapchainResources();
+	RuntimeFrameOutput                 beginFrame();
+	void                               renderFrame(const RuntimeFrameInput& input);
+	simulation::WaterSurfaceCreateInfo waterSurfaceCreateInfo() const;
+	void uploadMaterial(int material_index, const GPUMaterial& material);
+	bool rebuildPipeline(ui::RenderDebugViewMode mode);
+	void updateCamera(const GPUCamera& camera);
+	void waitIdle();
 
-struct VulkanContext {
-	vkb::Instance       instance{};
-	vkb::PhysicalDevice phys_device{};
-	vkb::Device         log_device{};
-	uint32_t            scratch_alignment;
-	VkDevice            device                = VK_NULL_HANDLE;
-	VkSurfaceKHR        surface               = VK_NULL_HANDLE;
-	VkQueue             graphics_queue        = VK_NULL_HANDLE;
-	uint32_t            graphics_queue_family = 0;
-} vulkan_ctx{};
+	void resetHiPRObjectSampling() {
+		m_hipr_object_sampling_active = false;
+		m_hipr_object_sampling_done   = false;
+		m_hipr_object_sampling_rank   = 0;
+		m_hipr_object_sampling_frame  = 0;
+		m_hipr_full_scene_frame       = 0;
+	}
 
-struct SwapchainContext {
-	vkb::Swapchain           swapchain{};
-	std::vector<VkImage>     images;
-	std::vector<VkImageView> image_views;
-	std::vector<bool>        image_initialized;
-	VkFormat                 image_format = VK_FORMAT_UNDEFINED;
-	VkExtent2D               extent{};
-} swapchain_ctx{};
+	void restartHiPRObjectSampling() {
+		m_hipr_object_sampling_active = true;
+		m_hipr_object_sampling_done   = false;
+		m_hipr_object_sampling_rank   = 0;
+		m_hipr_object_sampling_frame  = 0;
+		m_hipr_full_scene_frame       = 0;
+	}
 
-struct RenderResourcesContext {
-	VmaAllocator allocator = nullptr;
-} render_resources_ctx{};
-
-struct RenderTargetContext {
-	VmaAllocator                       allocator;
-	VkImage                            storage_image;
-	VmaAllocation                      storage_image_alloc;
-	VkImageView                        storage_image_view;
-	bool                               storage_image_initialized = false;
-	VkImage                            object_id_image           = VK_NULL_HANDLE;
-	VmaAllocation                      object_id_image_alloc     = VK_NULL_HANDLE;
-	VkImageView                        object_id_image_view      = VK_NULL_HANDLE;
-	VkImage                            accum_image;
-	VmaAllocation                      accum_image_alloc;
-	VkImageView                        accum_image_view;
-	VkImage                            dummy_image_2d;
-	VmaAllocation                      dummy_image_2d_alloc;
-	VkImageView                        dummy_image_2d_view;
-	VkImage                            dummy_image_3d;
-	VmaAllocation                      dummy_image_3d_alloc;
-	VkImageView                        dummy_image_3d_view;
-	VkSampler                          lut_sampler      = VK_NULL_HANDLE;
-	VkSampler                          material_sampler = VK_NULL_HANDLE;
-	std::array<LutTexture2D, NUM_LUTS> lut_textures_2d;
-	std::array<LutTexture3D, NUM_LUTS> lut_textures_3d;
-	std::vector<VkImage>               mat_images;
-	std::vector<VmaAllocation>         mat_allocs;
-	std::vector<VkImageView>           mat_views;
-	VkDescriptorSetLayout              descriptor_set_layout;
-	VkDescriptorPool                   descriptor_pool;
-	VkDescriptorSet                    descriptor_set;
-} render_target_ctx;
-
-struct ComputePipelineContext {
-	VkPipelineLayout          pipeline_layout = VK_NULL_HANDLE;
-	std::array<VkPipeline, 4> pipelines{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE,
-	                                    VK_NULL_HANDLE};
-	std::array<bool, 4>       compiled{false, false, false, false};
-} compute_ctx{};
-
-struct CommandContext {
-	VkCommandPool   command_pool   = VK_NULL_HANDLE;
-	VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-} command_ctx{};
-
-struct SyncContext {
-	std::vector<VkSemaphore> image_available;
-	std::vector<VkSemaphore> render_finished;
-	VkFence                  in_flight = VK_NULL_HANDLE;
-} sync_ctx{};
-
-struct OverlayContext {
-	VkRenderPass                  render_pass = VK_NULL_HANDLE;
-	std::vector<VkFramebuffer>    framebuffers;
-	ui::AudienceControlPanelState controls{};
-	ui::AudienceDiagnostics       diagnostics{};
-	bool                          show_control_panel = true;
-} overlay_ctx{};
-
-struct PathTracerPushConstants {
-	uint32_t  frame               = 0;
-	uint32_t  material_count      = 0;
-	int32_t   selected_mesh_index = -1;
-	uint32_t  outline_width       = 1;
-	int32_t   debug_view_mode     = static_cast<int32_t>(ui::RenderDebugViewMode::HiPR);
-	uint32_t  stage               = 0;        // 0 = visibility pass, 1 = path trace selected object
-	uint32_t  spp                 = 1;
-	uint32_t  max_bounces         = 8;
-	glm::vec4 outline_color       = glm::vec4(1.0f, 0.65f, 0.15f, 1.0f);
-	uint32_t  enable_tonemapping  = 1;
-	float     exposure_bias       = 2.0f;
-	uint32_t  hipr_object_count   = 0;
-	uint32_t  hipr_top_k          = HIPR_TOP_K;
-	int32_t   hipr_render_rank    = -1;
-	uint32_t  hipr_incremental_sort     = 1;
-	uint32_t  hipr_clear_order          = 1;
-	uint32_t  hipr_vis_enable_tint      = 1;
-	uint32_t  hipr_vis_rainbow_tint     = 1;
-	uint32_t  hipr_reserved0            = 0;
-	uint32_t  hipr_frames_per_object    = 10;
-	float     hipr_score_blend          = 0.25f;
-	float     hipr_vis_tint_strength    = 0.5f;
-	uint32_t  skybox_enabled            = 1;
-	uint32_t  directional_light_enabled = 1;
-	float     sun_dir_x                 = 0.0f;
-	float     sun_dir_y                 = 1.0f;
-	float     sun_dir_z                 = 0.0f;
-	float     sun_intensity             = 10.0f;
+	core::Window*                          m_window = nullptr;
+	vulkan::internal::RuntimeContextBundle m_contexts{};
+	float                                  m_last_frame_time        = 0.0f;
+	uint32_t                               m_frame_number           = 0;
+	bool                                   m_needs_visibility_pass  = true;
+	bool                                   m_material_edit_mode     = false;
+	bool                                   m_camera_was_moving      = false;
+	bool                                   m_hipr_force_clear_order = true;
+	ui::RenderDebugViewMode                m_last_render_mode       = ui::RenderDebugViewMode::HiPR;
+	ui::LightingSettings                   m_last_lighting{};
+	bool                                   m_hipr_object_sampling_active = false;
+	bool                                   m_hipr_object_sampling_done   = false;
+	uint32_t                               m_hipr_object_sampling_rank   = 0;
+	uint32_t                               m_hipr_object_sampling_frame  = 0;
+	uint32_t                               m_hipr_full_scene_frame       = 0;
+	bool                                   m_surface_recreation_pending  = false;
+	GPUCamera                              m_current_camera{};
+	bool                                   m_has_current_camera = false;
+	bool                                   m_camera_changed     = false;
 };
 
-static_assert(sizeof(PathTracerPushConstants) == 124);
+namespace {
 
-struct FrameTimingHistory {
-	static constexpr size_t kSampleWindow = 120;
+vulkan::internal::RuntimeContextBundle* g_active_runtime_contexts = nullptr;
 
-	std::array<float, kSampleWindow> frame_times_ms{};
-	size_t                           next_index       = 0;
-	size_t                           sample_count     = 0;
-	float                            current_fps      = 0.0f;
-	float                            average_fps      = 0.0f;
-	float                            min_fps          = 0.0f;
-	float                            max_fps          = 0.0f;
-	float                            current_frame_ms = 0.0f;
-	float                            average_frame_ms = 0.0f;
-	float                            min_frame_ms     = 0.0f;
-	float                            max_frame_ms     = 0.0f;
-
-	void pushFrame(float delta_time_seconds) {
-		const float clamped_delta_time = std::max(delta_time_seconds, 1.0e-6f);
-		current_frame_ms               = clamped_delta_time * 1000.0f;
-		current_fps                    = 1.0f / clamped_delta_time;
-
-		frame_times_ms[next_index] = current_frame_ms;
-		next_index                 = (next_index + 1) % frame_times_ms.size();
-		sample_count               = std::min(sample_count + 1, frame_times_ms.size());
-
-		float total_ms = 0.0f;
-		min_frame_ms   = frame_times_ms[0];
-		max_frame_ms   = frame_times_ms[0];
-		for (size_t index = 0; index < sample_count; ++index) {
-			total_ms += frame_times_ms[index];
-			min_frame_ms = std::min(min_frame_ms, frame_times_ms[index]);
-			max_frame_ms = std::max(max_frame_ms, frame_times_ms[index]);
-		}
-
-		average_frame_ms = total_ms / static_cast<float>(sample_count);
-		min_fps          = 1000.0f / std::max(max_frame_ms, 1.0e-6f);
-		max_fps          = 1000.0f / std::max(min_frame_ms, 1.0e-6f);
-		average_fps      = 1000.0f / std::max(average_frame_ms, 1.0e-6f);
+vulkan::internal::RuntimeContextBundle& requireActiveRuntimeContexts() {
+	if (g_active_runtime_contexts == nullptr) {
+		throw std::runtime_error("vulkan runtime is not active");
 	}
-} frame_timing_history{};
-
-void check_vk_result(VkResult result) {
-	if (result == VK_SUCCESS) {
-		return;
-	}
-
-	std::cerr << "[Vulkan] VkResult = " << result << "\n";
-	if (result < 0) {
-		throw std::runtime_error("Vulkan call failed");
-	}
+	return *g_active_runtime_contexts;
 }
 
-void create_overlay_render_pass() {
-	VkAttachmentDescription color_attachment{};
-	color_attachment.format         = swapchain_ctx.image_format;
-	color_attachment.samples        = VK_SAMPLE_COUNT_1_BIT;
-	color_attachment.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
-	color_attachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-	color_attachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	color_attachment.initialLayout  = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	color_attachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+constexpr float kMinFrameDelta = 1.0f / 240.0f;
 
-	VkAttachmentReference color_attachment_ref{};
-	color_attachment_ref.attachment = 0;
-	color_attachment_ref.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments    = &color_attachment_ref;
-
-	VkSubpassDependency dependency{};
-	dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass    = 0;
-	dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.srcAccessMask = 0;
-	dependency.dstAccessMask =
-	    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	VkRenderPassCreateInfo render_pass_info{};
-	render_pass_info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	render_pass_info.attachmentCount = 1;
-	render_pass_info.pAttachments    = &color_attachment;
-	render_pass_info.subpassCount    = 1;
-	render_pass_info.pSubpasses      = &subpass;
-	render_pass_info.dependencyCount = 1;
-	render_pass_info.pDependencies   = &dependency;
-
-	if (vkCreateRenderPass(vulkan_ctx.device, &render_pass_info, nullptr,
-	                       &overlay_ctx.render_pass) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create overlay render pass");
+uint32_t sanitize_hipr_ten_step_value(uint32_t value) {
+	if (value <= 1u) {
+		return 1u;
+	}
+	if (value >= 100u) {
+		return 100u;
 	}
 
-	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-		VkImageView attachments[] = {swapchain_ctx.image_views[i]};
-
-		VkFramebufferCreateInfo framebuffer_info{};
-		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		framebuffer_info.renderPass      = overlay_ctx.render_pass;
-		framebuffer_info.attachmentCount = 1;
-		framebuffer_info.pAttachments    = attachments;
-		framebuffer_info.width           = swapchain_ctx.extent.width;
-		framebuffer_info.height          = swapchain_ctx.extent.height;
-		framebuffer_info.layers          = 1;
-
-		if (vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                        &overlay_ctx.framebuffers[i]) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create overlay framebuffer");
-		}
-	}
+	uint32_t snapped = ((value + 5u) / 10u) * 10u;
+	snapped          = std::max(snapped, 10u);
+	snapped          = std::min(snapped, 100u);
+	return snapped;
 }
 
-void destroy_overlay_render_resources() {
-	for (VkFramebuffer framebuffer : overlay_ctx.framebuffers) {
-		if (framebuffer != VK_NULL_HANDLE) {
-			vkDestroyFramebuffer(vulkan_ctx.device, framebuffer, nullptr);
-		}
-	}
-	overlay_ctx.framebuffers.clear();
-
-	if (overlay_ctx.render_pass != VK_NULL_HANDLE) {
-		vkDestroyRenderPass(vulkan_ctx.device, overlay_ctx.render_pass, nullptr);
-		overlay_ctx.render_pass = VK_NULL_HANDLE;
-	}
-}
-
-void initialize_imgui_context(GLFWwindow* window) {
-	IMGUI_CHECKVERSION();
-	ImGui::CreateContext();
-
-	ImGuiIO& io    = ImGui::GetIO();
-	io.IniFilename = nullptr;
-
-	ImGui::StyleColorsDark();
-
-	if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
-		throw std::runtime_error("failed to initialize ImGui for Vulkan");
-	}
-}
-
-void initialize_imgui_renderer() {
-	ImGui_ImplVulkan_InitInfo init_info{};
-	init_info.ApiVersion                   = VK_API_VERSION_1_3;
-	init_info.Instance                     = vulkan_ctx.instance.instance;
-	init_info.PhysicalDevice               = vulkan_ctx.phys_device.physical_device;
-	init_info.Device                       = vulkan_ctx.device;
-	init_info.QueueFamily                  = vulkan_ctx.graphics_queue_family;
-	init_info.Queue                        = vulkan_ctx.graphics_queue;
-	init_info.DescriptorPoolSize           = 16;
-	init_info.MinImageCount                = static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.ImageCount                   = static_cast<uint32_t>(swapchain_ctx.images.size());
-	init_info.CheckVkResultFn              = check_vk_result;
-	init_info.MinAllocationSize            = 1024 * 1024;
-	init_info.PipelineInfoMain.RenderPass  = overlay_ctx.render_pass;
-	init_info.PipelineInfoMain.Subpass     = 0;
-	init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-
-	if (!ImGui_ImplVulkan_Init(&init_info)) {
-		throw std::runtime_error("failed to initialize ImGui Vulkan backend");
-	}
-}
-
-void shutdown_imgui_renderer() {
-	if (ImGui::GetCurrentContext() == nullptr) {
-		return;
-	}
-
-	ImGui_ImplVulkan_Shutdown();
-}
-
-void shutdown_imgui() {
-	if (ImGui::GetCurrentContext() == nullptr) {
-		return;
-	}
-
-	shutdown_imgui_renderer();
-	ImGui_ImplGlfw_Shutdown();
-	ImGui::DestroyContext();
-}
-
-audio::ReactiveAudioInputFrame buildAudioInputFrame(const audio::MicrophoneInput* microphone,
-                                                    float                         time_seconds) {
-	audio::ReactiveAudioInputFrame input_frame{};
-	input_frame.source_available = microphone != nullptr && microphone->isAvailable();
-	input_frame.raw_level        = input_frame.source_available ? microphone->latestLevel() : 0.0f;
-	input_frame.time_seconds     = time_seconds;
-	input_frame.source_name =
-	    microphone != nullptr ? microphone->deviceName() : std::string("Unavailable");
-	input_frame.source_status = microphone != nullptr ?
-	                                microphone->statusMessage() :
-	                                std::string("Microphone capture is unavailable.");
-	return input_frame;
-}
-
-void applyOverlayLevel(float value) {
-	overlay_ctx.controls.overlay.volume_level   = std::clamp(value, 0.0f, 1.0f);
-	overlay_ctx.controls.overlay.selected_index = ui::quantizeSelection(
-	    overlay_ctx.controls.overlay.volume_level, overlay_ctx.controls.overlay.selection_count);
-}
-
-struct CpuRay {
-	glm::vec3 origin{};
-	glm::vec3 direction{};
-};
-
-glm::vec2 cursorPositionInFramebuffer(GLFWwindow* window, uint32_t framebuffer_width,
-                                      uint32_t framebuffer_height) {
-	double cursor_x = 0.0;
-	double cursor_y = 0.0;
-	glfwGetCursorPos(window, &cursor_x, &cursor_y);
-
-	int window_width  = 1;
-	int window_height = 1;
-	glfwGetWindowSize(window, &window_width, &window_height);
-
-	const float scale_x = window_width > 0 ? static_cast<float>(framebuffer_width) /
-	                                             static_cast<float>(window_width) :
-	                                         1.0f;
-	const float scale_y = window_height > 0 ? static_cast<float>(framebuffer_height) /
-	                                              static_cast<float>(window_height) :
-	                                          1.0f;
-
-	return glm::vec2(static_cast<float>(cursor_x) * scale_x,
-	                 static_cast<float>(cursor_y) * scale_y);
-}
-
-CpuRay buildPickRay(const GPUCamera& camera, uint32_t framebuffer_width,
-                    uint32_t framebuffer_height, const glm::vec2& cursor_position) {
-	const glm::vec3 origin = glm::vec3(camera.position);
-	const glm::vec3 target = glm::vec3(camera.target);
-	const glm::vec3 up     = glm::normalize(glm::vec3(camera.up));
-	const float     fov    = camera.fov_near_far.x;
-	const float     aspect = static_cast<float>(framebuffer_width) /
-	                     static_cast<float>(std::max(framebuffer_height, 1u));
-
-	const float half_height = std::tan(glm::radians(fov) * 0.5f);
-	const float half_width  = aspect * half_height;
-
-	const glm::vec3 forward = glm::normalize(target - origin);
-	const glm::vec3 right   = glm::normalize(glm::cross(forward, up));
-	const glm::vec3 up_axis = glm::cross(right, forward);
-
-	const glm::vec2 clamped_cursor = glm::clamp(
-	    cursor_position, glm::vec2(0.0f),
-	    glm::vec2(static_cast<float>(framebuffer_width), static_cast<float>(framebuffer_height)));
-	const glm::vec2 uv =
-	    glm::vec2(clamped_cursor.x / static_cast<float>(std::max(framebuffer_width, 1u)),
-	              clamped_cursor.y / static_cast<float>(std::max(framebuffer_height, 1u)));
-
-	const float u = (2.0f * uv.x - 1.0f) * half_width;
-	const float v = (1.0f - 2.0f * uv.y) * half_height;
-
-	return CpuRay{origin, glm::normalize(forward + u * right + v * up_axis)};
-}
-
-bool intersectRayAabb(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& min,
-                      const glm::vec3& max, float& out_t_min, float& out_t_max) {
-	float t_min = 0.0f;
-	float t_max = std::numeric_limits<float>::infinity();
-
-	for (int axis = 0; axis < 3; ++axis) {
-		const float dir = direction[axis];
-		const float ori = origin[axis];
-
-		if (std::abs(dir) < 1.0e-8f) {
-			if (ori < min[axis] || ori > max[axis]) {
-				return false;
-			}
-			continue;
-		}
-
-		float t0 = (min[axis] - ori) / dir;
-		float t1 = (max[axis] - ori) / dir;
-		if (t0 > t1) {
-			std::swap(t0, t1);
-		}
-
-		t_min = std::max(t_min, t0);
-		t_max = std::min(t_max, t1);
-		if (t_min > t_max) {
-			return false;
-		}
-	}
-
-	out_t_min = t_min;
-	out_t_max = t_max;
-	return t_max >= 0.0f;
-}
-
-bool intersectRayTriangle(const CpuRay& ray, const glm::vec3& v0, const glm::vec3& v1,
-                          const glm::vec3& v2, float& out_t) {
-	constexpr float kEpsilon = 1.0e-7f;
-
-	const glm::vec3 edge1 = v1 - v0;
-	const glm::vec3 edge2 = v2 - v0;
-	const glm::vec3 pvec  = glm::cross(ray.direction, edge2);
-	const float     det   = glm::dot(edge1, pvec);
-
-	if (std::abs(det) < kEpsilon) {
-		return false;
-	}
-
-	const float     inv_det = 1.0f / det;
-	const glm::vec3 tvec    = ray.origin - v0;
-	const float     u       = glm::dot(tvec, pvec) * inv_det;
-	if (u < 0.0f || u > 1.0f) {
-		return false;
-	}
-
-	const glm::vec3 qvec = glm::cross(tvec, edge1);
-	const float     v    = glm::dot(ray.direction, qvec) * inv_det;
-	if (v < 0.0f || (u + v) > 1.0f) {
-		return false;
-	}
-
-	const float t = glm::dot(edge2, qvec) * inv_det;
-	if (t <= kEpsilon) {
-		return false;
-	}
-
-	out_t = t;
-	return true;
-}
-
-int pickMeshAtCursor(const Scene* scene, GLFWwindow* window, const GPUCamera& camera,
-                     uint32_t framebuffer_width, uint32_t framebuffer_height) {
-	if (scene == nullptr || window == nullptr || framebuffer_width == 0 ||
-	    framebuffer_height == 0) {
-		return -1;
-	}
-
-	const glm::vec2 cursor =
-	    cursorPositionInFramebuffer(window, framebuffer_width, framebuffer_height);
-	if (cursor.x < 0.0f || cursor.y < 0.0f || cursor.x >= static_cast<float>(framebuffer_width) ||
-	    cursor.y >= static_cast<float>(framebuffer_height)) {
-		return -1;
-	}
-
-	const CpuRay world_ray    = buildPickRay(camera, framebuffer_width, framebuffer_height, cursor);
-	float        best_t       = std::numeric_limits<float>::infinity();
-	int          best_mesh_id = -1;
-
-	for (int mesh_index = 0; mesh_index < static_cast<int>(scene->m_meshes.size()); ++mesh_index) {
-		const auto& mesh = scene->m_meshes[mesh_index];
-		if (mesh == nullptr || mesh->gpuIndices.size() < 3 || mesh->gpuVertices.empty()) {
-			continue;
-		}
-
-		const glm::mat4& inverse_transform = mesh->m_transform.m_inverseTransform;
-		const CpuRay     local_ray{
-            glm::vec3(inverse_transform * glm::vec4(world_ray.origin, 1.0f)),
-            glm::vec3(inverse_transform * glm::vec4(world_ray.direction, 0.0f)),
-        };
-
-		if (glm::dot(local_ray.direction, local_ray.direction) < 1.0e-12f) {
-			continue;
-		}
-
-		float aabb_t_min = 0.0f;
-		float aabb_t_max = 0.0f;
-		if (!intersectRayAabb(local_ray.origin, local_ray.direction, mesh->m_local_bounds_min,
-		                      mesh->m_local_bounds_max, aabb_t_min, aabb_t_max) ||
-		    aabb_t_min > best_t) {
-			continue;
-		}
-
-		for (size_t index = 0; index + 2 < mesh->gpuIndices.size(); index += 3) {
-			const glm::vec3& v0 = mesh->gpuVertices[mesh->gpuIndices[index + 0]].position;
-			const glm::vec3& v1 = mesh->gpuVertices[mesh->gpuIndices[index + 1]].position;
-			const glm::vec3& v2 = mesh->gpuVertices[mesh->gpuIndices[index + 2]].position;
-
-			float hit_t = 0.0f;
-			if (intersectRayTriangle(local_ray, v0, v1, v2, hit_t) && hit_t < best_t) {
-				best_t       = hit_t;
-				best_mesh_id = mesh_index;
-			}
-		}
-	}
-
-	return best_mesh_id;
-}
-
-bool isSwapchainRecreationResult(VkResult result) {
-	return result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
-}
-
-void updateRenderDiagnostics(float delta_time_seconds) {
+ui::AudienceRenderDiagnostics buildRenderDiagnostics(float delta_time_seconds) {
 	frame_timing_history.pushFrame(delta_time_seconds);
 
-	ui::AudienceRenderDiagnostics& render = overlay_ctx.diagnostics.render;
-	render.current_fps                    = frame_timing_history.current_fps;
-	render.average_fps                    = frame_timing_history.average_fps;
-	render.min_fps                        = frame_timing_history.min_fps;
-	render.max_fps                        = frame_timing_history.max_fps;
-	render.current_frame_time_ms          = frame_timing_history.current_frame_ms;
-	render.average_frame_time_ms          = frame_timing_history.average_frame_ms;
-	render.min_frame_time_ms              = frame_timing_history.min_frame_ms;
-	render.max_frame_time_ms              = frame_timing_history.max_frame_ms;
+	ui::AudienceRenderDiagnostics render{};
+	render.current_fps           = frame_timing_history.current_fps;
+	render.average_fps           = frame_timing_history.average_fps;
+	render.min_fps               = frame_timing_history.min_fps;
+	render.max_fps               = frame_timing_history.max_fps;
+	render.current_frame_time_ms = frame_timing_history.current_frame_ms;
+	render.average_frame_time_ms = frame_timing_history.average_frame_ms;
+	render.min_frame_time_ms     = frame_timing_history.min_frame_ms;
+	render.max_frame_time_ms     = frame_timing_history.max_frame_ms;
 	render.frame_sample_count    = static_cast<uint32_t>(frame_timing_history.sample_count);
 	render.render_width          = swapchain_ctx.extent.width;
 	render.render_height         = swapchain_ctx.extent.height;
 	render.swapchain_image_count = static_cast<uint32_t>(swapchain_ctx.images.size());
 
-	if (ImGui::GetCurrentContext() == nullptr) {
-		render.imgui_vertex_count = 0;
-		render.imgui_index_count  = 0;
-		render.imgui_window_count = 0;
-		return;
+	if (ImGui::GetCurrentContext() != nullptr) {
+		const ImGuiIO& io         = ImGui::GetIO();
+		render.imgui_vertex_count = io.MetricsRenderVertices;
+		render.imgui_index_count  = io.MetricsRenderIndices;
+		render.imgui_window_count = io.MetricsRenderWindows;
 	}
 
-	const ImGuiIO& io         = ImGui::GetIO();
-	render.imgui_vertex_count = io.MetricsRenderVertices;
-	render.imgui_index_count  = io.MetricsRenderIndices;
-	render.imgui_window_count = io.MetricsRenderWindows;
+	return render;
 }
 
-void Runtime::createSwapchainResources() {
+}        // namespace
+
+namespace vulkan::internal {
+
+RuntimeContextBundle& current_contexts() {
+	return requireActiveRuntimeContexts();
+}
+
+}        // namespace vulkan::internal
+
+void FrameTimingHistory::pushFrame(float delta_time_seconds) {
+	const float clamped_delta_time = std::max(delta_time_seconds, 1.0e-6f);
+	current_frame_ms               = clamped_delta_time * 1000.0f;
+	current_fps                    = 1.0f / clamped_delta_time;
+
+	frame_times_ms[next_index] = current_frame_ms;
+	next_index                 = (next_index + 1) % frame_times_ms.size();
+	sample_count               = std::min(sample_count + 1, frame_times_ms.size());
+
+	float total_ms = 0.0f;
+	min_frame_ms   = frame_times_ms[0];
+	max_frame_ms   = frame_times_ms[0];
+	for (size_t index = 0; index < sample_count; ++index) {
+		total_ms += frame_times_ms[index];
+		min_frame_ms = std::min(min_frame_ms, frame_times_ms[index]);
+		max_frame_ms = std::max(max_frame_ms, frame_times_ms[index]);
+	}
+
+	average_frame_ms = total_ms / static_cast<float>(sample_count);
+	min_fps          = 1000.0f / std::max(max_frame_ms, 1.0e-6f);
+	max_fps          = 1000.0f / std::max(min_frame_ms, 1.0e-6f);
+	average_fps      = 1000.0f / std::max(average_frame_ms, 1.0e-6f);
+}
+
+void Runtime::Impl::createSwapchainResources() {
 	vkb::SwapchainBuilder swapchain_builder{vulkan_ctx.log_device};
 	auto                  swap_ret =
 	    swapchain_builder
@@ -684,18 +222,9 @@ void Runtime::createSwapchainResources() {
 	std::cout << "[INFO] Created swapchain image views\n";
 
 	create_overlay_render_pass();
-
-	m_water_surface =
-	    std::make_unique<simulation::WaterSurfaceSimulation>(simulation::WaterSurfaceCreateInfo{
-	        .device        = vulkan_ctx.device,
-	        .allocator     = render_target_ctx.allocator,
-	        .output_extent = swapchain_ctx.extent,
-	    });
-	std::cout << "[INFO] Created water surface simulation resources\n";
 }
 
-void Runtime::destroySwapchainResources() {
-	m_water_surface.reset();
+void Runtime::Impl::destroySwapchainResources() {
 	destroy_overlay_render_resources();
 
 	if (!swapchain_ctx.image_views.empty()) {
@@ -715,14 +244,7 @@ void Runtime::destroySwapchainResources() {
 	swapchain_ctx.extent       = {};
 }
 
-static VkImageView create_image_view(VkDevice, VkImage, VkFormat, VkImageViewType,
-                                     VkImageAspectFlags);
-static void transition_layout(VkCommandBuffer, VkImage, VkImageLayout, VkImageLayout, VkAccessFlags,
-                              VkAccessFlags, VkPipelineStageFlags, VkPipelineStageFlags);
-static VkCommandBuffer begin_one_time_cmd(VkDevice, VkCommandPool);
-static void            end_one_time_cmd(VkDevice, VkCommandPool, VkQueue, VkCommandBuffer);
-
-void Runtime::recreateSwapchainResources() {
+void Runtime::Impl::recreateSwapchainResources() {
 	uint32_t framebuffer_width  = m_window->width();
 	uint32_t framebuffer_height = m_window->height();
 	while (framebuffer_width == 0 || framebuffer_height == 0) {
@@ -737,7 +259,6 @@ void Runtime::recreateSwapchainResources() {
 	createSwapchainResources();
 	initialize_imgui_renderer();
 
-	// Recreate pathtracer storage/accum/object_id images at the new swapchain extent
 	VmaAllocator allocator = render_target_ctx.allocator;
 	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
 	vmaDestroyImage(allocator, render_target_ctx.storage_image,
@@ -797,7 +318,6 @@ void Runtime::recreateSwapchainResources() {
 		                 cmd);
 	}
 
-	// Update descriptor set bindings 0 (output), 1 (accum), 13 (object_id)
 	{
 		VkDescriptorImageInfo out_img{};
 		out_img.imageView   = render_target_ctx.storage_image_view;
@@ -839,1038 +359,203 @@ void Runtime::recreateSwapchainResources() {
 	render_target_ctx.storage_image_initialized = false;
 }
 
-struct BLAS {
-	VkAccelerationStructureKHR handle         = VK_NULL_HANDLE;
-	VkBuffer                   buffer         = VK_NULL_HANDLE;
-	VmaAllocation              buffer_alloc   = VK_NULL_HANDLE;
-	VkDeviceAddress            device_address = 0;
-};
-struct AccelerationStructureContext {
-	std::vector<BLAS>          blases;
-	VkAccelerationStructureKHR tlas              = VK_NULL_HANDLE;
-	VkBuffer                   tlas_buffer       = VK_NULL_HANDLE;
-	VmaAllocation              tlas_buffer_alloc = VK_NULL_HANDLE;
-	VkDeviceAddress            tlas_address      = 0;
-} as_ctx;
-
-// ============================================================
-// === Buffer helpers
-// ============================================================
-static VkBuffer create_gpu_buffer(VmaAllocator alloc, VkDeviceSize sz, VkBufferUsageFlags usage,
-                                  VmaAllocation& out, VkDeviceSize align = 0) {
-	VkBufferCreateInfo bi{};
-	bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bi.size  = sz;
-	bi.usage = usage;
-	VmaAllocationCreateInfo ai{};
-	ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	VkBuffer buf;
-	VkResult r = align > 0 ?
-	                 vmaCreateBufferWithAlignment(alloc, &bi, &ai, align, &buf, &out, nullptr) :
-	                 vmaCreateBuffer(alloc, &bi, &ai, &buf, &out, nullptr);
-	if (r != VK_SUCCESS)
-		throw std::runtime_error("failed to create gpu buffer");
-	return buf;
-}
-static VkBuffer create_and_upload_buffer(VmaAllocator alloc, VkDeviceSize sz, const void* data,
-                                         VkBufferUsageFlags usage, VmaAllocation& out) {
-	VkBufferCreateInfo bi{};
-	bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bi.size  = sz;
-	bi.usage = usage;
-	VmaAllocationCreateInfo ai{};
-	ai.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-	ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-	VkBuffer          buf;
-	VmaAllocationInfo info;
-	if (vmaCreateBuffer(alloc, &bi, &ai, &buf, &out, &info) != VK_SUCCESS)
-		throw std::runtime_error("failed to create+upload buffer");
-	memcpy(info.pMappedData, data, sz);
-	return buf;
-}
-static VkDeviceAddress get_bda(VkDevice dev, VkBuffer buf) {
-	VkBufferDeviceAddressInfo i{};
-	i.sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-	i.buffer = buf;
-	return vkGetBufferDeviceAddress(dev, &i);
-}
-
-// ============================================================
-// === Image helpers
-// ============================================================
-static VkImageView create_image_view(VkDevice dev, VkImage img, VkFormat fmt, VkImageViewType type,
-                                     VkImageAspectFlags asp = VK_IMAGE_ASPECT_COLOR_BIT) {
-	VkImageViewCreateInfo vi{};
-	vi.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	vi.image            = img;
-	vi.viewType         = type;
-	vi.format           = fmt;
-	vi.subresourceRange = {asp, 0, 1, 0, 1};
-	VkImageView v       = VK_NULL_HANDLE;
-	if (vkCreateImageView(dev, &vi, nullptr, &v) != VK_SUCCESS)
-		throw std::runtime_error("failed to create image view");
-	return v;
-}
-static void transition_layout(VkCommandBuffer cmd, VkImage img, VkImageLayout old, VkImageLayout n,
-                              VkAccessFlags src, VkAccessFlags dst, VkPipelineStageFlags sp,
-                              VkPipelineStageFlags dp) {
-	VkImageMemoryBarrier b{};
-	b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	b.oldLayout           = old;
-	b.newLayout           = n;
-	b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	b.image                                       = img;
-	b.subresourceRange                            = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-	b.srcAccessMask                               = src;
-	b.dstAccessMask                               = dst;
-	vkCmdPipelineBarrier(cmd, sp, dp, 0, 0, nullptr, 0, nullptr, 1, &b);
-}
-// Keep old name as alias for callers
-static void transition_image_layout(VkCommandBuffer cmd, VkImage img, VkImageLayout o,
-                                    VkImageLayout n, VkAccessFlags sa, VkAccessFlags da,
-                                    VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
-	transition_layout(cmd, img, o, n, sa, da, ss, ds);
-}
-
-// ============================================================
-// === Command helpers
-// ============================================================
-static VkCommandBuffer begin_one_time_cmd(VkDevice dev, VkCommandPool pool) {
-	VkCommandBufferAllocateInfo ai{};
-	ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	ai.commandPool        = pool;
-	ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	ai.commandBufferCount = 1;
-	VkCommandBuffer cmd;
-	vkAllocateCommandBuffers(dev, &ai, &cmd);
-	VkCommandBufferBeginInfo bi{};
-	bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	vkBeginCommandBuffer(cmd, &bi);
-	return cmd;
-}
-static void end_one_time_cmd(VkDevice dev, VkCommandPool pool, VkQueue q, VkCommandBuffer cmd) {
-	vkEndCommandBuffer(cmd);
-	VkSubmitInfo si{};
-	si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	si.commandBufferCount = 1;
-	si.pCommandBuffers    = &cmd;
-	vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE);
-	vkQueueWaitIdle(q);
-	vkFreeCommandBuffers(dev, pool, 1, &cmd);
-}
-
-// ============================================================
-// === Generic RGBA32F image upload
-// ============================================================
-static void upload_rgba32f_2d(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q,
-                              const float* rgba, uint32_t w, uint32_t h, LutTexture2D& out) {
-	VkDeviceSize  sz = (VkDeviceSize) w * h * 4 * sizeof(float);
-	VmaAllocation sa;
-	VkBuffer stg = create_and_upload_buffer(alloc, sz, rgba, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sa);
-	VkImageCreateInfo ii{};
-	ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-	ii.imageType     = VK_IMAGE_TYPE_2D;
-	ii.format        = VK_FORMAT_R32G32B32A32_SFLOAT;
-	ii.extent        = {w, h, 1};
-	ii.mipLevels     = 1;
-	ii.arrayLayers   = 1;
-	ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-	ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-	ii.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-	ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	VmaAllocationCreateInfo ai{};
-	ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	vmaCreateImage(alloc, &ii, &ai, &out.image, &out.alloc, nullptr);
-	VkCommandBuffer cmd = begin_one_time_cmd(dev, pool);
-	transition_layout(cmd, out.image, VK_IMAGE_LAYOUT_UNDEFINED,
-	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-	                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-	VkBufferImageCopy r{};
-	r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-	r.imageExtent      = {w, h, 1};
-	vkCmdCopyBufferToImage(cmd, stg, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
-	transition_layout(cmd, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-	                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-	                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-	                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-	end_one_time_cmd(dev, pool, q, cmd);
-	out.view =
-	    create_image_view(dev, out.image, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D);
-	out.width  = w;
-	out.height = h;
-	vmaDestroyBuffer(alloc, stg, sa);
-}
-static void upload_rgba32f_3d(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q,
-                              const float* rgba, uint32_t w, uint32_t h, uint32_t d,
-                              LutTexture3D& out) {
-	VkDeviceSize  sz = (VkDeviceSize) w * h * d * 4 * sizeof(float);
-	VmaAllocation sa;
-	VkBuffer stg = create_and_upload_buffer(alloc, sz, rgba, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sa);
-	VkImageCreateInfo ii{};
-	ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-	ii.imageType     = VK_IMAGE_TYPE_3D;
-	ii.format        = VK_FORMAT_R32G32B32A32_SFLOAT;
-	ii.extent        = {w, h, d};
-	ii.mipLevels     = 1;
-	ii.arrayLayers   = 1;
-	ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-	ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-	ii.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-	ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	VmaAllocationCreateInfo ai{};
-	ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	vmaCreateImage(alloc, &ii, &ai, &out.image, &out.alloc, nullptr);
-	VkCommandBuffer cmd = begin_one_time_cmd(dev, pool);
-	transition_layout(cmd, out.image, VK_IMAGE_LAYOUT_UNDEFINED,
-	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-	                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-	VkBufferImageCopy r{};
-	r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-	r.imageExtent      = {w, h, d};
-	vkCmdCopyBufferToImage(cmd, stg, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
-	transition_layout(cmd, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-	                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-	                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-	                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-	end_one_time_cmd(dev, pool, q, cmd);
-	out.view =
-	    create_image_view(dev, out.image, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_3D);
-	out.width  = w;
-	out.height = h;
-	out.depth  = d;
-	vmaDestroyBuffer(alloc, stg, sa);
-}
-
 // =======================
 // === Window resizing ===
 // =======================
-static uint32_t g_frame_number_ref = 0;
-static void     handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb_h) {
-    vkDeviceWaitIdle(vulkan_ctx.device);
+static void handle_resize(uint32_t& frame_number, uint32_t fb_w, uint32_t fb_h) {
+	vkDeviceWaitIdle(vulkan_ctx.device);
 
-    uint32_t new_w = fb_w;
-    uint32_t new_h = fb_h;
-    if (new_w == 0 || new_h == 0)
-        return;        // minimised – skip
+	uint32_t new_w = fb_w;
+	uint32_t new_h = fb_h;
+	if (new_w == 0 || new_h == 0)
+		return;        // minimised – skip
 
-    VmaAllocator allocator = render_target_ctx.allocator;
+	VmaAllocator allocator = render_target_ctx.allocator;
 
-    // -- Destroy old swapchain image views --
-    for (auto v : swapchain_ctx.image_views)
-        vkDestroyImageView(vulkan_ctx.device, v, nullptr);
-    swapchain_ctx.image_views.clear();
+	// -- Destroy old swapchain image views --
+	for (auto v : swapchain_ctx.image_views)
+		vkDestroyImageView(vulkan_ctx.device, v, nullptr);
+	swapchain_ctx.image_views.clear();
 
-    // -- Destroy old render-target images --
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.storage_image,
-	                    render_target_ctx.storage_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.object_id_image,
-	                    render_target_ctx.object_id_image_alloc);
-    vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
-    vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
+	// -- Destroy old render-target images --
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.storage_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.storage_image,
+	                render_target_ctx.storage_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.object_id_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.object_id_image,
+	                render_target_ctx.object_id_image_alloc);
+	vkDestroyImageView(vulkan_ctx.device, render_target_ctx.accum_image_view, nullptr);
+	vmaDestroyImage(allocator, render_target_ctx.accum_image, render_target_ctx.accum_image_alloc);
 
-    // -- Rebuild swapchain --
-    vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
-    auto           swap_ret =
-        vkb::SwapchainBuilder{vulkan_ctx.log_device}
-            .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-            .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-            .set_desired_extent(new_w, new_h)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-	                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-            .set_old_swapchain(old_swapchain.swapchain)
-            .build();
-    vkb::destroy_swapchain(old_swapchain);
+	// -- Rebuild swapchain --
+	vkb::Swapchain old_swapchain = swapchain_ctx.swapchain;
+	auto           swap_ret =
+	    vkb::SwapchainBuilder{vulkan_ctx.log_device}
+	        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+	        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+	        .set_desired_extent(new_w, new_h)
+	        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+	                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+	        .set_old_swapchain(old_swapchain.swapchain)
+	        .build();
+	vkb::destroy_swapchain(old_swapchain);
 
-    if (!swap_ret) {
-        std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
-        return;
-    }
-    swapchain_ctx.swapchain    = swap_ret.value();
-    swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
-    swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
-    auto images_ret            = swapchain_ctx.swapchain.get_images();
-    if (!images_ret)
-        return;
-    swapchain_ctx.images = images_ret.value();
-    auto views_ret       = swapchain_ctx.swapchain.get_image_views();
-    if (!views_ret)
-        return;
-    swapchain_ctx.image_views = views_ret.value();
-    swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
-
-    // -- Recreate render-target images at new size --
-    // Use the actual swapchain extent (Vulkan may adjust from the requested size)
-    const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
-
-    auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
-                            VkImageUsageFlags extra) {
-        VkImageCreateInfo ii{};
-        ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ii.imageType     = VK_IMAGE_TYPE_2D;
-        ii.format        = format;
-        ii.extent        = ext;
-        ii.mipLevels     = 1;
-        ii.arrayLayers   = 1;
-        ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
-        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-        vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
-    };
-
-    make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
-	                 VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
-	                 VK_FORMAT_R8G8B8A8_UNORM, 0);
-
-    render_target_ctx.storage_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.object_id_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
-	                          VK_IMAGE_VIEW_TYPE_2D);
-    render_target_ctx.accum_image_view =
-        create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
-	                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
-
-    // Transition accum → GENERAL
-    {
-        VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
-        transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
-		                      VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-		                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
-		                     cmd);
-    }
-
-    // Update the two storage-image descriptors (bindings 0 and 1)
-    {
-        VkDescriptorImageInfo out_img{};
-        out_img.imageView   = render_target_ctx.storage_image_view;
-        out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo object_id_img{};
-        object_id_img.imageView   = render_target_ctx.object_id_image_view;
-        object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo accum_img{};
-        accum_img.imageView   = render_target_ctx.accum_image_view;
-        accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        VkWriteDescriptorSet writes[3]{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 0,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &out_img};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 13,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &object_id_img};
-        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		                 nullptr,
-		                 render_target_ctx.descriptor_set,
-		                 1,
-		                 0,
-		                 1,
-		                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		                 &accum_img};
-        vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
-    }
-
-    // Reset sync semaphores if the swapchain image count changed
-    {
-        const uint32_t n = (uint32_t) swapchain_ctx.images.size();
-        if (n != (uint32_t) sync_ctx.image_available.size()) {
-            for (auto s : sync_ctx.image_available)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            for (auto s : sync_ctx.render_finished)
-                vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
-            sync_ctx.image_available.resize(n);
-            sync_ctx.render_finished.resize(n);
-            VkSemaphoreCreateInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            for (uint32_t i = 0; i < n; ++i) {
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
-                vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
-            }
-        }
-    }
-
-    // Recreate overlay framebuffers for the new swapchain image views / extent
-    for (VkFramebuffer fb : overlay_ctx.framebuffers)
-        vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
-    overlay_ctx.framebuffers.clear();
-    overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
-    for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
-        VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
-        VkFramebufferCreateInfo framebuffer_info{};
-        framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass      = overlay_ctx.render_pass;
-        framebuffer_info.attachmentCount = 1;
-        framebuffer_info.pAttachments    = attachments;
-        framebuffer_info.width           = swapchain_ctx.extent.width;
-        framebuffer_info.height          = swapchain_ctx.extent.height;
-        framebuffer_info.layers          = 1;
-        vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
-		                        &overlay_ctx.framebuffers[i]);
-    }
-
-    render_target_ctx.storage_image_initialized = false;
-    frame_number                                = 0;        // reset temporal accumulation
-
-    std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
-              << "\n";
-}
-
-// ============================================================
-// === LUT data conversion helpers
-// ============================================================
-// Energy table: uint32 [0..65535] → RGBA32F  (R = val/65535, GBA = 0)
-static std::vector<float> uint_lut_to_rgba32f(const uint32_t* data, size_t count) {
-	std::vector<float> out(count * 4, 0.f);
-	for (size_t i = 0; i < count; ++i)
-		out[i * 4] = float(data[i]) / 65535.f;
-	return out;
-}
-// LTC table: float3 per texel → RGBA32F  (A = 0)
-static std::vector<float> float3_lut_to_rgba32f(const float* data, size_t count_vec3) {
-	std::vector<float> out(count_vec3 * 4, 0.f);
-	for (size_t i = 0; i < count_vec3; ++i) {
-		out[i * 4 + 0] = data[i * 3 + 0];
-		out[i * 4 + 1] = data[i * 3 + 1];
-		out[i * 4 + 2] = data[i * 3 + 2];
+	if (!swap_ret) {
+		std::cerr << "[RESIZE] Failed to rebuild swapchain\n";
+		return;
 	}
-	return out;
-}
+	swapchain_ctx.swapchain    = swap_ret.value();
+	swapchain_ctx.image_format = swapchain_ctx.swapchain.image_format;
+	swapchain_ctx.extent       = swapchain_ctx.swapchain.extent;
+	auto images_ret            = swapchain_ctx.swapchain.get_images();
+	if (!images_ret)
+		return;
+	swapchain_ctx.images = images_ret.value();
+	auto views_ret       = swapchain_ctx.swapchain.get_image_views();
+	if (!views_ret)
+		return;
+	swapchain_ctx.image_views = views_ret.value();
+	swapchain_ctx.image_initialized.assign(swapchain_ctx.images.size(), false);
 
-static void upload_openpbr_luts(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q) {
-	// Requires:
-	//   #include "vendors/openpbr-bsdf/openpbr_data_constants.h"
-	//   #include "vendors/openpbr-bsdf/impl/data/openpbr_energy_arrays.h"
-	//   #include "vendors/openpbr-bsdf/impl/data/openpbr_ltc_array.h"
+	// -- Recreate render-target images at new size --
+	// Use the actual swapchain extent (Vulkan may adjust from the requested size)
+	const VkExtent3D ext = {swapchain_ctx.extent.width, swapchain_ctx.extent.height, 1};
 
-	// ---------------------------------------------------------------------
-	// 3D energy LUTs (32 x 32 x 32)
-	// ---------------------------------------------------------------------
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_IdealDielectricEnergyComplement_Array,
-		                                OpenPBR_EnergyTableSize * OpenPBR_EnergyTableSize *
-		                                    OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_3d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, OpenPBR_EnergyTableSize,
-		    OpenPBR_EnergyTableSize,
-		    render_target_ctx.lut_textures_3d[OpenPBR_LutId_IdealDielectricEnergyComplement]);
-	}
-
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_OpaqueDielectricEnergyComplement_Array,
-		                                OpenPBR_EnergyTableSize * OpenPBR_EnergyTableSize *
-		                                    OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_3d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, OpenPBR_EnergyTableSize,
-		    OpenPBR_EnergyTableSize,
-		    render_target_ctx.lut_textures_3d[OpenPBR_LutId_OpaqueDielectricEnergyComplement]);
-	}
-
-	// ---------------------------------------------------------------------
-	// 2D energy LUTs (32 x 32)
-	// ---------------------------------------------------------------------
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_IdealDielectricAverageEnergyComplement_Array,
-		                                OpenPBR_EnergyTableSize * OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_2d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, OpenPBR_EnergyTableSize,
-		    render_target_ctx
-		        .lut_textures_2d[OpenPBR_LutId_IdealDielectricAverageEnergyComplement]);
-	}
-
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_IdealDielectricReflectionRatio_Array,
-		                                OpenPBR_EnergyTableSize * OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_2d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, OpenPBR_EnergyTableSize,
-		    render_target_ctx.lut_textures_2d[OpenPBR_LutId_IdealDielectricReflectionRatio]);
-	}
-
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_OpaqueDielectricAverageEnergyComplement_Array,
-		                                OpenPBR_EnergyTableSize * OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_2d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, OpenPBR_EnergyTableSize,
-		    render_target_ctx
-		        .lut_textures_2d[OpenPBR_LutId_OpaqueDielectricAverageEnergyComplement]);
-	}
-
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_IdealMetalEnergyComplement_Array,
-		                                OpenPBR_EnergyTableSize * OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_2d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, OpenPBR_EnergyTableSize,
-		    render_target_ctx.lut_textures_2d[OpenPBR_LutId_IdealMetalEnergyComplement]);
-	}
-
-	// ---------------------------------------------------------------------
-	// 1D energy LUT stored as thin 2D texture (32 x 1)
-	// ---------------------------------------------------------------------
-	{
-		auto data = uint_lut_to_rgba32f(OpenPBR_IdealMetalAverageEnergyComplement_Array,
-		                                OpenPBR_EnergyTableSize);
-
-		upload_rgba32f_2d(
-		    alloc, dev, pool, q, data.data(), OpenPBR_EnergyTableSize, 1,
-		    render_target_ctx.lut_textures_2d[OpenPBR_LutId_IdealMetalAverageEnergyComplement]);
-	}
-
-	// ---------------------------------------------------------------------
-	// LTC LUT (32 x 32), float3 -> rgba32f
-	// ---------------------------------------------------------------------
-	{
-		auto data = float3_lut_to_rgba32f(reinterpret_cast<const float*>(OpenPBR_LTC_Array),
-		                                  OpenPBR_LTCTableSize * OpenPBR_LTCTableSize);
-
-		upload_rgba32f_2d(alloc, dev, pool, q, data.data(), OpenPBR_LTCTableSize,
-		                  OpenPBR_LTCTableSize,
-		                  render_target_ctx.lut_textures_2d[OpenPBR_LutId_LTC]);
-	}
-
-	std::cout << "[INFO] Uploaded OpenPBR LUTs\n";
-}
-
-// ============================================================
-// === Material texture upload
-// ============================================================
-static void upload_material_textures(VmaAllocator alloc, VkDevice dev, VkCommandPool pool,
-                                     VkQueue                                      q,
-                                     const std::vector<std::shared_ptr<Texture>>& textures) {
-	auto& images = render_target_ctx.mat_images;
-	auto& allocs = render_target_ctx.mat_allocs;
-	auto& views  = render_target_ctx.mat_views;
-	images.reserve(textures.size());
-	allocs.reserve(textures.size());
-	views.reserve(textures.size());
-
-	for (const auto& tex : textures) {
-		if (!tex || !tex->valid()) {
-			images.push_back(VK_NULL_HANDLE);
-			allocs.push_back(VK_NULL_HANDLE);
-			views.push_back(VK_NULL_HANDLE);
-			continue;
-		}
-		VkDeviceSize      sz = (VkDeviceSize) tex->width * tex->height * 4;
-		VmaAllocation     sa;
-		VkBuffer          stg = create_and_upload_buffer(alloc, sz, tex->pixels.data(),
-		                                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sa);
-		const VkFormat    fmt = tex->is_srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+	auto make_storage = [&](VkImage& img, VmaAllocation& alloc, VkFormat format,
+	                        VkImageUsageFlags extra) {
 		VkImageCreateInfo ii{};
 		ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 		ii.imageType     = VK_IMAGE_TYPE_2D;
-		ii.format        = fmt;
-		ii.extent        = {(uint32_t) tex->width, (uint32_t) tex->height, 1};
+		ii.format        = format;
+		ii.extent        = ext;
 		ii.mipLevels     = 1;
 		ii.arrayLayers   = 1;
 		ii.samples       = VK_SAMPLE_COUNT_1_BIT;
 		ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-		ii.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		ii.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extra;
 		ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		VmaAllocationCreateInfo ai2{};
-		ai2.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-		VkImage       img;
-		VmaAllocation imgalloc;
-		if (vmaCreateImage(alloc, &ii, &ai2, &img, &imgalloc, nullptr) != VK_SUCCESS)
-			throw std::runtime_error("failed to create material texture");
-		VkCommandBuffer cmd = begin_one_time_cmd(dev, pool);
-		transition_layout(cmd, img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		                  0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-		                  VK_PIPELINE_STAGE_TRANSFER_BIT);
-		VkBufferImageCopy r{};
-		r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		r.imageExtent      = {(uint32_t) tex->width, (uint32_t) tex->height, 1};
-		vkCmdCopyBufferToImage(cmd, stg, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
-		transition_layout(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-		                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-		                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-		end_one_time_cmd(dev, pool, q, cmd);
-		images.push_back(img);
-		allocs.push_back(imgalloc);
-		views.push_back(create_image_view(dev, img, fmt, VK_IMAGE_VIEW_TYPE_2D));
-		vmaDestroyBuffer(alloc, stg, sa);
-	}
-	std::cout << "[INFO] Uploaded " << textures.size() << " material textures\n";
-}
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		vmaCreateImage(allocator, &ii, &ai, &img, &alloc, nullptr);
+	};
 
-// ============================================================
-// === Shader compilation
-// ============================================================
-static std::vector<uint32_t>
-    compile_slang_shader(const std::string& path, const std::string& entry_point,
-                         const std::vector<std::string>& search_paths = {}) {
-	SlangSession*        session = spCreateSession(nullptr);
-	SlangCompileRequest* req     = spCreateCompileRequest(session);
-	for (const auto& sp : search_paths)
-		spAddSearchPath(req, sp.c_str());
-	int ti = spAddCodeGenTarget(req, SLANG_SPIRV);
-	spSetTargetProfile(req, ti, spFindProfile(session, "spirv_1_4"));
-	int ui = spAddTranslationUnit(req, SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	spAddTranslationUnitSourceFile(req, ui, path.c_str());
-	spAddEntryPoint(req, ui, entry_point.c_str(), SLANG_STAGE_COMPUTE);
-	SlangResult res  = spCompile(req);
-	const char* diag = spGetDiagnosticOutput(req);
-	if (diag && diag[0] != '\0')
-		std::cerr << "[SLANG] " << path << ":\n" << diag << "\n";
-	if (res != SLANG_OK) {
-		spDestroyCompileRequest(req);
-		spDestroySession(session);
-		throw std::runtime_error("slang compilation failed: " + path);
-	}
-	size_t                sz   = 0;
-	const void*           data = spGetEntryPointCode(req, 0, &sz);
-	std::vector<uint32_t> spirv(sz / sizeof(uint32_t));
-	memcpy(spirv.data(), data, sz);
-	spDestroyCompileRequest(req);
-	spDestroySession(session);
-	return spirv;
-}
+	make_storage(render_target_ctx.storage_image, render_target_ctx.storage_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.object_id_image, render_target_ctx.object_id_image_alloc,
+	             VK_FORMAT_R32_SINT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+	make_storage(render_target_ctx.accum_image, render_target_ctx.accum_image_alloc,
+	             VK_FORMAT_R8G8B8A8_UNORM, 0);
 
-static size_t render_mode_index(ui::RenderDebugViewMode mode) {
-	switch (mode) {
-		case ui::RenderDebugViewMode::HiPR:
-			return 0;
-		case ui::RenderDebugViewMode::Naive:
-			return 1;
-		case ui::RenderDebugViewMode::HiPRVis:
-			return 2;
-		case ui::RenderDebugViewMode::ObjectIds:
-			return 3;
-	}
-	return 0;
-}
+	render_target_ctx.storage_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.storage_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.object_id_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.object_id_image, VK_FORMAT_R32_SINT,
+	                      VK_IMAGE_VIEW_TYPE_2D);
+	render_target_ctx.accum_image_view =
+	    create_image_view(vulkan_ctx.device, render_target_ctx.accum_image,
+	                      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D);
 
-static constexpr std::array<ui::RenderDebugViewMode, 4> kRenderModes = {
-    ui::RenderDebugViewMode::HiPR,
-    ui::RenderDebugViewMode::Naive,
-    ui::RenderDebugViewMode::HiPRVis,
-    ui::RenderDebugViewMode::ObjectIds,
-};
-
-static const char* render_mode_shader_filename(ui::RenderDebugViewMode mode) {
-	switch (mode) {
-		case ui::RenderDebugViewMode::HiPR:
-			return "hipr.slang";
-		case ui::RenderDebugViewMode::Naive:
-			return "naivept.slang";
-		case ui::RenderDebugViewMode::HiPRVis:
-			return "hiprvis.slang";
-		case ui::RenderDebugViewMode::ObjectIds:
-			return "objectid.slang";
-	}
-	return "hipr.slang";
-}
-
-static const char* render_mode_label(ui::RenderDebugViewMode mode) {
-	switch (mode) {
-		case ui::RenderDebugViewMode::HiPR:
-			return "HiPR";
-		case ui::RenderDebugViewMode::Naive:
-			return "NaivePT";
-		case ui::RenderDebugViewMode::HiPRVis:
-			return "HiPRVis";
-		case ui::RenderDebugViewMode::ObjectIds:
-			return "ObjectID";
-	}
-	return "HiPR";
-}
-
-static bool create_pipeline_for_mode(ui::RenderDebugViewMode mode, VkPipeline& out_pipeline,
-                                     size_t* out_shader_size_bytes = nullptr) {
-	std::vector<uint32_t> spirv;
-	const std::string     shader_path =
-	    std::string(SHADERS_DIR) + "/" + render_mode_shader_filename(mode);
-	try {
-		spirv = compile_slang_shader(shader_path, "main", {VENDORS_DIR});
-	} catch (const std::exception& e) {
-		std::cerr << "[PIPELINE] " << render_mode_label(mode) << " compile failed: " << e.what()
-		          << "\n";
-		return false;
+	// Transition accum → GENERAL
+	{
+		VkCommandBuffer cmd = begin_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool);
+		transition_layout(cmd, render_target_ctx.object_id_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		transition_layout(cmd, render_target_ctx.accum_image, VK_IMAGE_LAYOUT_UNDEFINED,
+		                  VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		end_one_time_cmd(vulkan_ctx.device, command_ctx.command_pool, vulkan_ctx.graphics_queue,
+		                 cmd);
 	}
 
-	if (out_shader_size_bytes != nullptr) {
-		*out_shader_size_bytes = spirv.size() * sizeof(uint32_t);
+	// Update the two storage-image descriptors (bindings 0 and 1)
+	{
+		VkDescriptorImageInfo out_img{};
+		out_img.imageView   = render_target_ctx.storage_image_view;
+		out_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo object_id_img{};
+		object_id_img.imageView   = render_target_ctx.object_id_image_view;
+		object_id_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		VkDescriptorImageInfo accum_img{};
+		accum_img.imageView   = render_target_ctx.accum_image_view;
+		accum_img.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+		VkWriteDescriptorSet writes[3]{};
+		writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             0,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &out_img};
+		writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             13,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &object_id_img};
+		writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		             nullptr,
+		             render_target_ctx.descriptor_set,
+		             1,
+		             0,
+		             1,
+		             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		             &accum_img};
+		vkUpdateDescriptorSets(vulkan_ctx.device, 3, writes, 0, nullptr);
 	}
 
-	VkShaderModuleCreateInfo mci{};
-	mci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-	mci.codeSize = spirv.size() * sizeof(uint32_t);
-	mci.pCode    = spirv.data();
-
-	VkShaderModule shader_module = VK_NULL_HANDLE;
-	if (vkCreateShaderModule(vulkan_ctx.device, &mci, nullptr, &shader_module) != VK_SUCCESS) {
-		std::cerr << "[PIPELINE] " << render_mode_label(mode) << " vkCreateShaderModule failed\n";
-		return false;
-	}
-
-	VkPipelineShaderStageCreateInfo stage{};
-	stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-	stage.module = shader_module;
-	stage.pName  = "main";
-
-	VkComputePipelineCreateInfo pci{};
-	pci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-	pci.stage  = stage;
-	pci.layout = compute_ctx.pipeline_layout;
-
-	VkPipeline new_pipeline = VK_NULL_HANDLE;
-	if (vkCreateComputePipelines(vulkan_ctx.device, VK_NULL_HANDLE, 1, &pci, nullptr,
-	                             &new_pipeline) != VK_SUCCESS) {
-		vkDestroyShaderModule(vulkan_ctx.device, shader_module, nullptr);
-		std::cerr << "[PIPELINE] " << render_mode_label(mode)
-		          << " vkCreateComputePipelines failed\n";
-		return false;
-	}
-
-	vkDestroyShaderModule(vulkan_ctx.device, shader_module, nullptr);
-	out_pipeline = new_pipeline;
-	return true;
-}
-
-static bool ensure_pipeline_for_mode(ui::RenderDebugViewMode mode) {
-	const size_t index = render_mode_index(mode);
-	if (compute_ctx.compiled[index] && compute_ctx.pipelines[index] != VK_NULL_HANDLE) {
-		return true;
-	}
-
-	VkPipeline new_pipeline = VK_NULL_HANDLE;
-	size_t     shader_size  = 0;
-	if (!create_pipeline_for_mode(mode, new_pipeline, &shader_size)) {
-		return false;
-	}
-
-	compute_ctx.pipelines[index] = new_pipeline;
-	compute_ctx.compiled[index]  = true;
-	std::cout << "[PIPELINE] Built " << render_mode_label(mode) << " ("
-	          << static_cast<unsigned long long>(shader_size) << " bytes SPIR-V)\n";
-	return true;
-}
-
-static bool build_all_mode_pipelines() {
-	for (ui::RenderDebugViewMode mode : kRenderModes) {
-		if (!ensure_pipeline_for_mode(mode)) {
-			return false;
+	// Reset sync semaphores if the swapchain image count changed
+	{
+		const uint32_t n = (uint32_t) swapchain_ctx.images.size();
+		if (n != (uint32_t) sync_ctx.image_available.size()) {
+			for (auto s : sync_ctx.image_available)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			for (auto s : sync_ctx.render_finished)
+				vkDestroySemaphore(vulkan_ctx.device, s, nullptr);
+			sync_ctx.image_available.resize(n);
+			sync_ctx.render_finished.resize(n);
+			VkSemaphoreCreateInfo si{};
+			si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+			for (uint32_t i = 0; i < n; ++i) {
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.image_available[i]);
+				vkCreateSemaphore(vulkan_ctx.device, &si, nullptr, &sync_ctx.render_finished[i]);
+			}
 		}
 	}
-	return true;
+
+	// Recreate overlay framebuffers for the new swapchain image views / extent
+	for (VkFramebuffer fb : overlay_ctx.framebuffers)
+		vkDestroyFramebuffer(vulkan_ctx.device, fb, nullptr);
+	overlay_ctx.framebuffers.clear();
+	overlay_ctx.framebuffers.resize(swapchain_ctx.image_views.size(), VK_NULL_HANDLE);
+	for (size_t i = 0; i < swapchain_ctx.image_views.size(); ++i) {
+		VkImageView             attachments[] = {swapchain_ctx.image_views[i]};
+		VkFramebufferCreateInfo framebuffer_info{};
+		framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.renderPass      = overlay_ctx.render_pass;
+		framebuffer_info.attachmentCount = 1;
+		framebuffer_info.pAttachments    = attachments;
+		framebuffer_info.width           = swapchain_ctx.extent.width;
+		framebuffer_info.height          = swapchain_ctx.extent.height;
+		framebuffer_info.layers          = 1;
+		vkCreateFramebuffer(vulkan_ctx.device, &framebuffer_info, nullptr,
+		                    &overlay_ctx.framebuffers[i]);
+	}
+
+	render_target_ctx.storage_image_initialized = false;
+	frame_number                                = 0;        // reset temporal accumulation
+
+	std::cout << "[RESIZE] " << swapchain_ctx.extent.width << "x" << swapchain_ctx.extent.height
+	          << "\n";
 }
 
-static bool rebuild_pipeline(ui::RenderDebugViewMode mode) {
-	const size_t index = render_mode_index(mode);
-
-	VkPipeline new_pipeline = VK_NULL_HANDLE;
-	size_t     shader_size  = 0;
-	if (!create_pipeline_for_mode(mode, new_pipeline, &shader_size)) {
-		return false;
-	}
-
-	vkDeviceWaitIdle(vulkan_ctx.device);
-	if (compute_ctx.pipelines[index] != VK_NULL_HANDLE) {
-		vkDestroyPipeline(vulkan_ctx.device, compute_ctx.pipelines[index], nullptr);
-	}
-	compute_ctx.pipelines[index] = new_pipeline;
-	compute_ctx.compiled[index]  = true;
-
-	std::cout << "[SHADER RELOAD] Rebuilt " << render_mode_label(mode) << " ("
-	          << static_cast<unsigned long long>(shader_size) << " bytes SPIR-V)\n";
-	return true;
-}
-
-// ============================================================
-// === Descriptor layout helper
-// ============================================================
-static VkDescriptorSetLayoutBinding make_binding(uint32_t binding, VkDescriptorType type,
-                                                 uint32_t count = 1) {
-	VkDescriptorSetLayoutBinding b{};
-	b.binding         = binding;
-	b.descriptorType  = type;
-	b.descriptorCount = count;
-	b.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-	return b;
-}
-
-// ============================================================
-// === Acceleration structure helpers
-// ============================================================
-static constexpr VkBuildAccelerationStructureFlagsKHR AS_BUILD_FLAGS =
-    VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-static constexpr VkBufferUsageFlags AS_BUFFER_USAGE =
-    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-static constexpr VkBufferUsageFlags AS_INPUT_BUFFER_USAGE =
-    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-static constexpr VkBufferUsageFlags SCRATCH_BUFFER_USAGE =
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-
-static BLAS build_blas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q,
-                       const void* verts, uint32_t vc, uint32_t vstride, const void* idxs,
-                       uint32_t ic) {
-	VmaAllocation va, ia;
-	VkBuffer      vb =
-	    create_and_upload_buffer(alloc, (VkDeviceSize) vstride * vc, verts,
-	                             AS_INPUT_BUFFER_USAGE | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, va);
-	VkBuffer ib =
-	    create_and_upload_buffer(alloc, (VkDeviceSize) sizeof(uint32_t) * ic, idxs,
-	                             AS_INPUT_BUFFER_USAGE | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ia);
-	VkAccelerationStructureGeometryTrianglesDataKHR tri{};
-	tri.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-	tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-	tri.vertexData   = {.deviceAddress = get_bda(dev, vb)};
-	tri.vertexStride = vstride;
-	tri.maxVertex    = vc - 1;
-	tri.indexType    = VK_INDEX_TYPE_UINT32;
-	tri.indexData    = {.deviceAddress = get_bda(dev, ib)};
-	VkAccelerationStructureGeometryKHR geom{};
-	geom.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-	geom.geometryType       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-	geom.geometry.triangles = tri;
-	geom.flags              = VK_GEOMETRY_OPAQUE_BIT_KHR;
-	const uint32_t                              tc = ic / 3;
-	VkAccelerationStructureBuildGeometryInfoKHR build{};
-	build.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-	build.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-	build.flags         = AS_BUILD_FLAGS;
-	build.geometryCount = 1;
-	build.pGeometries   = &geom;
-	VkAccelerationStructureBuildSizesInfoKHR si{};
-	si.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-	vkGetAccelerationStructureBuildSizesKHR(dev, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-	                                        &build, &tc, &si);
-	BLAS blas;
-	blas.buffer =
-	    create_gpu_buffer(alloc, si.accelerationStructureSize, AS_BUFFER_USAGE, blas.buffer_alloc);
-	VmaAllocation sca;
-	VkBuffer      scb = create_gpu_buffer(alloc, si.buildScratchSize, SCRATCH_BUFFER_USAGE, sca,
-	                                      vulkan_ctx.scratch_alignment);
-	VkAccelerationStructureCreateInfoKHR aci{};
-	aci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-	aci.buffer = blas.buffer;
-	aci.size   = si.accelerationStructureSize;
-	aci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-	if (vkCreateAccelerationStructureKHR(dev, &aci, nullptr, &blas.handle) != VK_SUCCESS)
-		throw std::runtime_error("failed to create BLAS");
-	build.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build.dstAccelerationStructure  = blas.handle;
-	build.scratchData.deviceAddress = get_bda(dev, scb);
-	VkAccelerationStructureBuildRangeInfoKHR ri{};
-	ri.primitiveCount                                   = tc;
-	const VkAccelerationStructureBuildRangeInfoKHR* pri = &ri;
-	VkCommandBuffer                                 cmd = begin_one_time_cmd(dev, pool);
-	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, &pri);
-	end_one_time_cmd(dev, pool, q, cmd);
-	VkAccelerationStructureDeviceAddressInfoKHR dai{};
-	dai.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-	dai.accelerationStructure = blas.handle;
-	blas.device_address       = vkGetAccelerationStructureDeviceAddressKHR(dev, &dai);
-	vmaDestroyBuffer(alloc, scb, sca);
-	vmaDestroyBuffer(alloc, vb, va);
-	vmaDestroyBuffer(alloc, ib, ia);
-	return blas;
-}
-
-static VkTransformMatrixKHR glm_to_vk_transform(const glm::mat4& m) {
-	// Vulkan expects a 3x4 row-major transform matrix.
-	// GLM is column-major, so we write rows explicitly.
-	VkTransformMatrixKHR out{};
-	out.matrix[0][0] = m[0][0];
-	out.matrix[0][1] = m[1][0];
-	out.matrix[0][2] = m[2][0];
-	out.matrix[0][3] = m[3][0];
-
-	out.matrix[1][0] = m[0][1];
-	out.matrix[1][1] = m[1][1];
-	out.matrix[1][2] = m[2][1];
-	out.matrix[1][3] = m[3][1];
-
-	out.matrix[2][0] = m[0][2];
-	out.matrix[2][1] = m[1][2];
-	out.matrix[2][2] = m[2][2];
-	out.matrix[2][3] = m[3][2];
-	return out;
-}
-
-static void build_tlas(VmaAllocator alloc, VkDevice dev, VkCommandPool pool, VkQueue q,
-                       const std::vector<BLAS>&                  blases,
-                       const std::vector<std::unique_ptr<Mesh>>& meshes) {
-	if (blases.size() != meshes.size())
-		throw std::runtime_error("build_tlas: blases.size() != meshes.size()");
-
-	std::vector<VkAccelerationStructureInstanceKHR> insts;
-	insts.reserve(blases.size());
-
-	for (uint32_t i = 0; i < (uint32_t) blases.size(); ++i) {
-		VkAccelerationStructureInstanceKHR inst{};
-		inst.transform           = glm_to_vk_transform(meshes[i]->m_transform.m_transform);
-		inst.instanceCustomIndex = i;
-		inst.mask                = 0xFF;
-		inst.instanceShaderBindingTableRecordOffset = 0;
-		inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-		inst.accelerationStructureReference = blases[i].device_address;
-		insts.push_back(inst);
-	}
-
-	VmaAllocation ia;
-	VkBuffer      ib =
-	    create_and_upload_buffer(alloc, sizeof(VkAccelerationStructureInstanceKHR) * insts.size(),
-	                             insts.data(), AS_INPUT_BUFFER_USAGE, ia);
-
-	VkAccelerationStructureGeometryInstancesDataKHR id{};
-	id.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-	id.data.deviceAddress = get_bda(dev, ib);
-
-	VkAccelerationStructureGeometryKHR geom{};
-	geom.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-	geom.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-	geom.geometry.instances = id;
-
-	VkAccelerationStructureBuildGeometryInfoKHR build{};
-	build.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-	build.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-	build.flags         = AS_BUILD_FLAGS;
-	build.geometryCount = 1;
-	build.pGeometries   = &geom;
-
-	const uint32_t ic = (uint32_t) insts.size();
-
-	VkAccelerationStructureBuildSizesInfoKHR si{};
-	si.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-	vkGetAccelerationStructureBuildSizesKHR(dev, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-	                                        &build, &ic, &si);
-
-	VmaAllocation sca;
-	as_ctx.tlas_buffer = create_gpu_buffer(alloc, si.accelerationStructureSize, AS_BUFFER_USAGE,
-	                                       as_ctx.tlas_buffer_alloc);
-	VkBuffer scb       = create_gpu_buffer(alloc, si.buildScratchSize, SCRATCH_BUFFER_USAGE, sca,
-	                                       vulkan_ctx.scratch_alignment);
-
-	VkAccelerationStructureCreateInfoKHR aci{};
-	aci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-	aci.buffer = as_ctx.tlas_buffer;
-	aci.size   = si.accelerationStructureSize;
-	aci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-
-	if (vkCreateAccelerationStructureKHR(dev, &aci, nullptr, &as_ctx.tlas) != VK_SUCCESS)
-		throw std::runtime_error("failed to create TLAS");
-
-	build.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build.dstAccelerationStructure  = as_ctx.tlas;
-	build.scratchData.deviceAddress = get_bda(dev, scb);
-
-	VkAccelerationStructureBuildRangeInfoKHR ri{};
-	ri.primitiveCount                                   = ic;
-	const VkAccelerationStructureBuildRangeInfoKHR* pri = &ri;
-
-	VkCommandBuffer cmd = begin_one_time_cmd(dev, pool);
-	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, &pri);
-	end_one_time_cmd(dev, pool, q, cmd);
-
-	VkAccelerationStructureDeviceAddressInfoKHR dai{};
-	dai.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-	dai.accelerationStructure = as_ctx.tlas;
-	as_ctx.tlas_address       = vkGetAccelerationStructureDeviceAddressKHR(dev, &dai);
-
-	vmaDestroyBuffer(alloc, scb, sca);
-	vmaDestroyBuffer(alloc, ib, ia);
-}
-
-// =======================
-// === App constructor ===
-// =======================
-static std::string toLowerAscii(std::string value) {
-	std::transform(value.begin(), value.end(), value.begin(),
-	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-	return value;
-}
-
-static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
-	namespace fs = std::filesystem;
-
-	if (scene_argument.empty()) {
-		return "resources/scenes/cornell/cornell.glb";
-	}
-
-	const std::string scene_key = toLowerAscii(scene_argument);
-	if (scene_key == "pool") {
-		return "resources/scenes/poolHouse/poolHouse_optimized.glb";
-	}
-	if (scene_key == "chess") {
-		return "resources/scenes/ABeautifulGame/glTF-Binary/ABeautifulGame.glb";
-	}
-	if (scene_key == "cornell") {
-		return "resources/scenes/cornell/cornell.glb";
-	}
-	if (scene_key == "cornellsimple") {
-		return "resources/scenes/cornell/cornell_simple.glb";
-	}
-	if (scene_key == "sponza") {
-		return "resources/scenes/Sponza/glTF/Sponza.gltf";
-	}
-
-	const fs::path    user_path(scene_argument);
-	const std::string ext = toLowerAscii(user_path.extension().string());
-	if (ext != ".gltf" && ext != ".glb") {
-		throw std::runtime_error(
-		    "unknown scene alias '" + scene_argument +
-		    "'. Use one of: pool, chess, cornell, cornellsimple, sponza, or provide a .gltf/.glb "
-		    "file path.");
-	}
-
-	std::error_code ec;
-	if (!fs::exists(user_path, ec) || ec) {
-		throw std::runtime_error("scene file does not exist: " + user_path.string());
-	}
-	if (!fs::is_regular_file(user_path, ec) || ec) {
-		throw std::runtime_error("scene path is not a regular file: " + user_path.string());
-	}
-
-	return user_path.lexically_normal().string();
-}
-
-Runtime::Runtime(const std::string& scene_argument) {
-	// ==============================
-	// === 0. Scene setup
-	// ==============================
-	m_scene                      = std::make_unique<Scene>();
-	m_scene->m_camera            = Camera(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 0.f),
-	                                      glm::vec3(0.f, 1.f, 0.f), 60.f, 0.1f, 10000.f);
-	const std::string scene_path = resolveScenePathOrThrow(scene_argument);
-	std::cout << "[INFO] Loading scene: " << scene_path << "\n";
-	m_scene->load_gltf(scene_path);
-	if (m_scene->m_meshes.empty()) {
-		throw std::runtime_error("failed to load scene: " + scene_path);
-	}
-	ui::rebuildObjectIdMap(m_scene.get());
-
+Runtime::Impl::Impl(core::Window& window, const Scene& scene) : m_window(&window) {
+	g_active_runtime_contexts = &m_contexts;
 	// ========================================
 	// === I. Vulkan function pointers
 	// ========================================
@@ -1878,13 +563,12 @@ Runtime::Runtime(const std::string& scene_argument) {
 		throw std::runtime_error("failed to initialize volk");
 	std::cout << "[INFO] Volk initialized\n";
 
-	// =========================
+	/* Window creation moved to App
 	// === II. Window
 	// =========================
-	m_window = std::make_unique<core::Window>(
 	    core::WindowConfig{.width = 1280, .height = 720, .title = "tsunami 🌊"});
-	std::cout << "[INFO] Window created\n";
 
+	*/
 	// ==================================
 	// === III. Vulkan instance/device
 	// ==================================
@@ -2098,11 +782,11 @@ Runtime::Runtime(const std::string& scene_argument) {
 		vmaCreateBuffer(allocator, &cam_buf_info, &cam_alloc_info, &scene_ctx.camera_buffer,
 		                &scene_ctx.camera_alloc, &cam_info);
 		scene_ctx.camera_mapped = cam_info.pMappedData;
-		GPUCamera initial_cam   = m_scene->m_camera.pack();
+		GPUCamera initial_cam   = scene.m_camera.pack();
 		memcpy(scene_ctx.camera_mapped, &initial_cam, sizeof(GPUCamera));
 		std::vector<GPUMaterial> gms;
 
-		for (auto& mesh : m_scene->m_meshes)
+		for (const auto& mesh : scene.m_meshes)
 			gms.push_back(mesh->m_material->pack());
 		scene_ctx.material_count  = (uint32_t) gms.size();
 		scene_ctx.material_buffer = create_and_upload_buffer(
@@ -2125,8 +809,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 	std::vector<uint32_t>  all_idxs;
 	std::vector<GPUMesh>   gpu_meshes;
 
-	for (int mi = 0; mi < (int) m_scene->m_meshes.size(); ++mi) {
-		auto& mesh = m_scene->m_meshes[mi];
+	for (int mi = 0; mi < (int) scene.m_meshes.size(); ++mi) {
+		const auto& mesh = scene.m_meshes[mi];
 		if (!mesh->m_material) {
 			std::cerr << "[WARN] mesh " << mi << " no material\n";
 			continue;
@@ -2147,7 +831,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 	}
 	if (!as_ctx.blases.empty()) {
 		build_tlas(allocator, vulkan_ctx.device, command_ctx.command_pool,
-		           vulkan_ctx.graphics_queue, as_ctx.blases, m_scene->m_meshes);
+		           vulkan_ctx.graphics_queue, as_ctx.blases, scene.m_meshes);
 		std::cout << "[INFO] TLAS: " << as_ctx.blases.size() << " instances\n";
 	}
 	if (!gpu_meshes.empty()) {
@@ -2201,7 +885,7 @@ Runtime::Runtime(const std::string& scene_argument) {
 	upload_openpbr_luts(allocator, vulkan_ctx.device, command_ctx.command_pool,
 	                    vulkan_ctx.graphics_queue);
 	upload_material_textures(allocator, vulkan_ctx.device, command_ctx.command_pool,
-	                         vulkan_ctx.graphics_queue, m_scene->m_textures);
+	                         vulkan_ctx.graphics_queue, scene.m_textures);
 
 	// ==============================================
 	// === IX. Descriptor layout, pool, sets
@@ -2474,19 +1158,8 @@ Runtime::Runtime(const std::string& scene_argument) {
 	// === X. Compute Pipeline
 	// ============================================
 	{
-		VkPushConstantRange pr{};
-		pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-		pr.size       = sizeof(PathTracerPushConstants);
-		VkPipelineLayoutCreateInfo pli{};
-		pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pli.setLayoutCount         = 1;
-		pli.pSetLayouts            = &render_target_ctx.descriptor_set_layout;
-		pli.pushConstantRangeCount = 1;
-		pli.pPushConstantRanges    = &pr;
-		if (vkCreatePipelineLayout(vulkan_ctx.device, &pli, nullptr,
-		                           &compute_ctx.pipeline_layout) != VK_SUCCESS)
-			throw std::runtime_error("failed to create pipeline layout");
-		std::cout << "[INFO] Compute pipeline layout created\n";
+		init_pipeline_modes(vulkan_ctx.device, render_target_ctx.descriptor_set_layout);
+		std::cout << "[INFO] Compute pipeline layouts created\n";
 
 		if (!build_all_mode_pipelines()) {
 			throw std::runtime_error("failed to build one or more render-mode pipelines");
@@ -2512,15 +1185,6 @@ Runtime::Runtime(const std::string& scene_argument) {
 	initialize_imgui_context(m_window->handle());
 	initialize_imgui_renderer();
 	std::cout << "[INFO] Initialized ImGui overlay\n";
-
-	m_audio_controller = std::make_unique<audio::ReactiveAudioController>();
-	m_microphone       = std::make_unique<audio::MicrophoneInput>();
-	if (m_microphone->isAvailable()) {
-		std::cout << "[INFO] Live microphone capture ready: " << m_microphone->deviceName() << "\n";
-	} else {
-		std::cout << "[WARN] " << m_microphone->statusMessage()
-		          << " Falling back to the demo audience signal.\n";
-	}
 
 	// Accum image → GENERAL
 	{
@@ -2560,36 +1224,24 @@ Runtime::Runtime(const std::string& scene_argument) {
 			throw std::runtime_error("failed to create fence");
 		std::cout << "[INFO] Sync objects created\n";
 	}
+
+	m_last_frame_time = static_cast<float>(glfwGetTime());
 }
 
-Runtime::~Runtime() {
+Runtime::Impl::~Impl() {
 	if (vulkan_ctx.device == VK_NULL_HANDLE) {
-		m_water_surface.reset();
-		m_audio_controller.reset();
-		m_microphone.reset();
+		if (g_active_runtime_contexts == &m_contexts) {
+			g_active_runtime_contexts = nullptr;
+		}
 		return;
 	}
 
 	vkDeviceWaitIdle(vulkan_ctx.device);
 
-	m_audio_controller.reset();
-	m_microphone.reset();
-
 	shutdown_imgui();
 	destroySwapchainResources();
 
-	for (size_t pipeline_index = 0; pipeline_index < compute_ctx.pipelines.size();
-	     ++pipeline_index) {
-		if (compute_ctx.pipelines[pipeline_index] != VK_NULL_HANDLE) {
-			vkDestroyPipeline(vulkan_ctx.device, compute_ctx.pipelines[pipeline_index], nullptr);
-			compute_ctx.pipelines[pipeline_index] = VK_NULL_HANDLE;
-		}
-		compute_ctx.compiled[pipeline_index] = false;
-	}
-	if (compute_ctx.pipeline_layout != VK_NULL_HANDLE) {
-		vkDestroyPipelineLayout(vulkan_ctx.device, compute_ctx.pipeline_layout, nullptr);
-		compute_ctx.pipeline_layout = VK_NULL_HANDLE;
-	}
+	destroy_pipeline_modes(vulkan_ctx.device);
 
 	for (VkImageView& view : render_target_ctx.mat_views) {
 		if (view != VK_NULL_HANDLE) {
@@ -2823,11 +1475,16 @@ Runtime::~Runtime() {
 	if (vulkan_ctx.instance.instance != VK_NULL_HANDLE) {
 		vkb::destroy_instance(vulkan_ctx.instance);
 	}
+
+	if (g_active_runtime_contexts == &m_contexts) {
+		g_active_runtime_contexts = nullptr;
+	}
 }
 
 // ============================================================
 // === Main loop
 // ============================================================
+#if 0
 void Runtime::runMainLoop() {
 	MainLoop();
 }
@@ -3179,9 +1836,10 @@ void Runtime::MainLoop() {
 
 		memcpy(scene_ctx.camera_mapped, &gpu_camera, sizeof(GPUCamera));
 
-		const auto       active_render_mode = ui::selection_ctx.debug_view_mode;
-		const VkPipeline active_pipeline =
-		    compute_ctx.pipelines[render_mode_index(active_render_mode)];
+		const auto          active_render_mode = ui::selection_ctx.debug_view_mode;
+		const size_t        mode_idx           = render_mode_index(active_render_mode);
+		const PipelineMode& active_mode        = compute_ctx.modes[mode_idx];
+		const VkPipeline    active_pipeline    = active_mode.pipeline;
 		if (active_pipeline == VK_NULL_HANDLE) {
 			continue;
 		}
@@ -3273,7 +1931,7 @@ void Runtime::MainLoop() {
 		                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, active_pipeline);
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_ctx.pipeline_layout, 0,
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, active_mode.layout, 0,
 		                        1, &render_target_ctx.descriptor_set, 0, nullptr);
 
 		if (needs_visibility_pass) {
@@ -3450,7 +2108,7 @@ void Runtime::MainLoop() {
 		// Stage 10: clear per-object HiPR stats and ordering slots.
 		if (use_hipr_ranked && hipr_refresh) {
 			pc.stage = 10;
-			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			const uint32_t clear_count =
 			    std::max(pc.hipr_object_count, std::max(pc.hipr_top_k, 1u));
@@ -3461,7 +2119,7 @@ void Runtime::MainLoop() {
 		// Stage 0: visibility pass.
 		if (needs_visibility_pass) {
 			pc.stage = 0;
-			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
 
@@ -3490,7 +2148,7 @@ void Runtime::MainLoop() {
 			pc.frame            = hipr_object_sampling_enabled ?
 			                          hipr_object_sampling_frame :
 			                          (hipr_full_scene_sampling ? hipr_full_scene_frame : frame_number);
-			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
 		}
@@ -3506,7 +2164,7 @@ void Runtime::MainLoop() {
 
 			// Stage 3: build top-K HiPR ordering (selected object is rank 0).
 			pc.stage = 3;
-			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, 1, 1, 1);
 		}
@@ -3526,7 +2184,7 @@ void Runtime::MainLoop() {
 			pc.stage            = 4;
 			pc.frame            = hipr_object_sampling_frame;
 			pc.hipr_render_rank = single_rank_stage4_id;
-			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
 		}
@@ -3545,7 +2203,7 @@ void Runtime::MainLoop() {
 				pc.stage            = 4;
 				pc.frame            = frame_number;
 				pc.hipr_render_rank = static_cast<int32_t>(rank);
-				vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+				vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 				                   sizeof(pc), &pc);
 				vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
 			}
@@ -3564,7 +2222,7 @@ void Runtime::MainLoop() {
 				// Force stage-2 to include selected-object pixels (true naive path).
 				pc.debug_view_mode = static_cast<int32_t>(ui::RenderDebugViewMode::Naive);
 			}
-			vkCmdPushConstants(cmd, compute_ctx.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
 			                   sizeof(pc), &pc);
 			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
 		}
@@ -3717,4 +2375,712 @@ void Runtime::MainLoop() {
 
 		++frame_number;
 	}
+}
+#endif
+
+RuntimeFrameOutput Runtime::Impl::beginFrame() {
+	g_active_runtime_contexts = &m_contexts;
+
+	RuntimeFrameOutput output{};
+
+	const uint32_t framebuffer_width  = m_window->width();
+	const uint32_t framebuffer_height = m_window->height();
+	if ((framebuffer_width > 0 && framebuffer_height > 0) &&
+	    (m_surface_recreation_pending || swapchain_ctx.extent.width != framebuffer_width ||
+	     swapchain_ctx.extent.height != framebuffer_height)) {
+		m_frame_number               = 0;
+		m_needs_visibility_pass      = true;
+		m_hipr_force_clear_order     = true;
+		m_surface_recreation_pending = false;
+		resetHiPRObjectSampling();
+		recreateSwapchainResources();
+		output.surface_resized = true;
+	}
+
+	const float time_seconds = static_cast<float>(glfwGetTime());
+	const float delta_time   = std::max(time_seconds - m_last_frame_time, kMinFrameDelta);
+	m_last_frame_time        = time_seconds;
+	output.render            = buildRenderDiagnostics(delta_time);
+
+	ImGui_ImplVulkan_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
+
+	return output;
+}
+
+void Runtime::Impl::renderFrame(const RuntimeFrameInput& input) {
+	g_active_runtime_contexts = &m_contexts;
+
+	if (m_surface_recreation_pending || !m_has_current_camera || swapchain_ctx.images.empty()) {
+		return;
+	}
+
+	const ui::SelectionContext&           selection                = input.selection;
+	const ui::AudienceRenderPostSettings& render_post              = input.render_post;
+	const bool                            camera_moving_this_frame = input.camera_moving;
+
+	if (selection.debug_view_mode != m_last_render_mode) {
+		m_frame_number           = 0;
+		m_needs_visibility_pass  = true;
+		m_hipr_force_clear_order = true;
+		m_last_render_mode       = selection.debug_view_mode;
+		resetHiPRObjectSampling();
+	}
+
+	if (input.material_edit_active && !m_material_edit_mode) {
+		m_material_edit_mode = true;
+		m_frame_number       = 0;
+		resetHiPRObjectSampling();
+	}
+
+	if (input.material_changed) {
+		m_frame_number = 0;
+		restartHiPRObjectSampling();
+	}
+
+	if (input.material_edit_just_finished) {
+		m_material_edit_mode = false;
+		m_frame_number       = 0;
+	}
+
+	if (input.selection_changed) {
+		m_frame_number           = 0;
+		m_needs_visibility_pass  = true;
+		m_material_edit_mode     = false;
+		m_hipr_force_clear_order = true;
+		resetHiPRObjectSampling();
+	}
+
+	if (input.hipr_settings_changed) {
+		m_frame_number           = 0;
+		m_needs_visibility_pass  = true;
+		m_hipr_force_clear_order = true;
+		if (selection.debug_view_mode == ui::RenderDebugViewMode::HiPR &&
+		    selection.selected_mesh_index >= 0) {
+			restartHiPRObjectSampling();
+		} else {
+			resetHiPRObjectSampling();
+		}
+	}
+
+	if (input.path_tracing_settings_changed) {
+		m_frame_number = 0;
+		if (selection.debug_view_mode == ui::RenderDebugViewMode::HiPR &&
+		    selection.selected_mesh_index >= 0) {
+			restartHiPRObjectSampling();
+		} else {
+			resetHiPRObjectSampling();
+		}
+	}
+
+	if (selection.lighting.skybox_enabled != m_last_lighting.skybox_enabled ||
+	    selection.lighting.directional_light_enabled != m_last_lighting.directional_light_enabled ||
+	    selection.lighting.sun_elevation_deg != m_last_lighting.sun_elevation_deg ||
+	    selection.lighting.sun_azimuth_deg != m_last_lighting.sun_azimuth_deg ||
+	    selection.lighting.sun_intensity != m_last_lighting.sun_intensity) {
+		m_frame_number  = 0;
+		m_last_lighting = selection.lighting;
+		resetHiPRObjectSampling();
+	}
+
+	if (m_camera_changed) {
+		m_frame_number           = 0;
+		m_needs_visibility_pass  = true;
+		m_hipr_force_clear_order = true;
+		resetHiPRObjectSampling();
+	}
+	if (camera_moving_this_frame) {
+		m_frame_number           = 0;
+		m_needs_visibility_pass  = true;
+		m_hipr_force_clear_order = true;
+		resetHiPRObjectSampling();
+	}
+	if (!camera_moving_this_frame && m_camera_was_moving) {
+		m_frame_number = 0;
+		resetHiPRObjectSampling();
+	}
+	m_camera_was_moving = camera_moving_this_frame;
+	m_camera_changed    = false;
+
+	const auto          active_render_mode = selection.debug_view_mode;
+	const size_t        mode_idx           = render_mode_index(active_render_mode);
+	const PipelineMode& active_mode        = compute_ctx.modes[mode_idx];
+	const VkPipeline    active_pipeline    = active_mode.pipeline;
+	if (active_pipeline == VK_NULL_HANDLE) {
+		return;
+	}
+
+	const uint32_t frame_idx = m_frame_number % static_cast<uint32_t>(swapchain_ctx.images.size());
+
+	VkResult wait_result =
+	    vkWaitForFences(vulkan_ctx.device, 1, &sync_ctx.in_flight, VK_TRUE, UINT64_MAX);
+	if (wait_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkWaitForFences failed: " << static_cast<int>(wait_result) << "\n";
+		if (wait_result == VK_ERROR_DEVICE_LOST) {
+			throw std::runtime_error("vkWaitForFences failed with VK_ERROR_DEVICE_LOST");
+		}
+		return;
+	}
+
+	auto drain_acquire_semaphore = [&](uint32_t sem_index) {
+		VkPipelineStageFlags drain_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		VkSubmitInfo         drain_info{};
+		drain_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		drain_info.waitSemaphoreCount = 1;
+		drain_info.pWaitSemaphores    = &sync_ctx.image_available[sem_index];
+		drain_info.pWaitDstStageMask  = &drain_stage;
+		VkResult drain_submit_result =
+		    vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &drain_info, VK_NULL_HANDLE);
+		if (drain_submit_result != VK_SUCCESS) {
+			std::cerr << "[SYNC] failed to drain acquire semaphore: "
+			          << static_cast<int>(drain_submit_result) << "\n";
+			return;
+		}
+		VkResult drain_wait_result = vkQueueWaitIdle(vulkan_ctx.graphics_queue);
+		if (drain_wait_result != VK_SUCCESS) {
+			std::cerr << "[SYNC] vkQueueWaitIdle after drain failed: "
+			          << static_cast<int>(drain_wait_result) << "\n";
+		}
+	};
+
+	uint32_t image_index = 0;
+	VkResult acquire_result =
+	    vkAcquireNextImageKHR(vulkan_ctx.device, swapchain_ctx.swapchain.swapchain, UINT64_MAX,
+	                          sync_ctx.image_available[frame_idx], VK_NULL_HANDLE, &image_index);
+	const bool acquire_suboptimal = (acquire_result == VK_SUBOPTIMAL_KHR);
+	if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR) {
+		m_surface_recreation_pending = true;
+		return;
+	}
+	if (acquire_result != VK_SUCCESS && acquire_result != VK_SUBOPTIMAL_KHR) {
+		std::cerr << "[SYNC] vkAcquireNextImageKHR failed: " << static_cast<int>(acquire_result)
+		          << "\n";
+		return;
+	}
+
+	VkResult reset_cmd_result = vkResetCommandBuffer(command_ctx.command_buffer, 0);
+	if (reset_cmd_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkResetCommandBuffer failed: " << static_cast<int>(reset_cmd_result)
+		          << "\n";
+		drain_acquire_semaphore(frame_idx);
+		return;
+	}
+
+	VkCommandBufferBeginInfo begin_info{};
+	begin_info.sType      = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	begin_info.flags      = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	VkResult begin_result = vkBeginCommandBuffer(command_ctx.command_buffer, &begin_info);
+	if (begin_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkBeginCommandBuffer failed: " << static_cast<int>(begin_result)
+		          << "\n";
+		drain_acquire_semaphore(frame_idx);
+		return;
+	}
+
+	VkCommandBuffer cmd = command_ctx.command_buffer;
+
+	VkImageLayout storage_old = render_target_ctx.storage_image_initialized ?
+	                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
+	                                VK_IMAGE_LAYOUT_UNDEFINED;
+	transition_layout(cmd, render_target_ctx.storage_image, storage_old, VK_IMAGE_LAYOUT_GENERAL, 0,
+	                  VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+	                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+	VkImageLayout swap_old = swapchain_ctx.image_initialized[image_index] ?
+	                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR :
+	                             VK_IMAGE_LAYOUT_UNDEFINED;
+	transition_layout(cmd, swapchain_ctx.images[image_index], swap_old,
+	                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+	                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, active_pipeline);
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, active_mode.layout, 0, 1,
+	                        &render_target_ctx.descriptor_set, 0, nullptr);
+
+	if (m_needs_visibility_pass) {
+		m_frame_number = 0;
+	}
+
+	const uint32_t hipr_frames_per_object =
+	    sanitize_hipr_ten_step_value(selection.hipr_debug.frames_per_object);
+
+	PathTracerPushConstants pc{};
+	pc.frame               = m_frame_number;
+	pc.material_count      = scene_ctx.material_count;
+	pc.selected_mesh_index = selection.selected_mesh_index;
+	pc.outline_width       = selection.outline_width;
+	pc.debug_view_mode     = static_cast<int32_t>(selection.debug_view_mode);
+	pc.outline_color       = selection.outline_color;
+	pc.spp                 = std::clamp(selection.path_tracing.spp, 1u, 1024u);
+	pc.max_bounces         = std::clamp(selection.path_tracing.max_bounces, 1u, 1024u);
+	pc.enable_tonemapping  = render_post.enable_tonemapping ? 1u : 0u;
+	pc.exposure_bias       = render_post.exposure_bias;
+	pc.hipr_object_count   = scene_ctx.mesh_count;
+	pc.hipr_top_k = std::min(scene_ctx.hipr_top_k, std::max(selection.hipr_debug.rank_count, 1u));
+	pc.hipr_render_rank          = -1;
+	pc.hipr_incremental_sort     = selection.hipr_debug.incremental_sorting ? 1u : 0u;
+	pc.hipr_clear_order          = m_hipr_force_clear_order ? 1u : 0u;
+	pc.hipr_vis_enable_tint      = selection.hipr_debug.vis_enable_influence_tint ? 1u : 0u;
+	pc.hipr_vis_rainbow_tint     = selection.hipr_debug.vis_rainbow_tint ? 1u : 0u;
+	pc.hipr_frames_per_object    = hipr_frames_per_object;
+	pc.hipr_score_blend          = std::clamp(selection.hipr_debug.score_blend, 0.05f, 1.0f);
+	pc.hipr_vis_tint_strength    = std::clamp(selection.hipr_debug.vis_tint_strength, 0.0f, 1.0f);
+	pc.skybox_enabled            = selection.lighting.skybox_enabled ? 1u : 0u;
+	pc.directional_light_enabled = selection.lighting.directional_light_enabled ? 1u : 0u;
+	{
+		const float elev = selection.lighting.sun_elevation_deg * (3.14159265f / 180.0f);
+		const float azim = selection.lighting.sun_azimuth_deg * (3.14159265f / 180.0f);
+		pc.sun_dir_x     = std::cos(elev) * std::sin(azim);
+		pc.sun_dir_y     = std::sin(elev);
+		pc.sun_dir_z     = std::cos(elev) * std::cos(azim);
+	}
+	pc.sun_intensity = selection.lighting.sun_intensity;
+
+	const uint32_t dispatch_w = (swapchain_ctx.extent.width + 15) / 16;
+	const uint32_t dispatch_h = (swapchain_ctx.extent.height + 15) / 16;
+
+	const auto render_mode   = selection.debug_view_mode;
+	const bool hipr_mode     = render_mode == ui::RenderDebugViewMode::HiPR;
+	const bool obj_id_mode   = render_mode == ui::RenderDebugViewMode::ObjectIds;
+	const bool hipr_vis_mode = render_mode == ui::RenderDebugViewMode::HiPRVis;
+	const bool naive_mode    = render_mode == ui::RenderDebugViewMode::Naive;
+
+	switch (render_mode) {
+		case ui::RenderDebugViewMode::HiPR:
+			pc.hipr_vis_enable_tint   = 0u;
+			pc.hipr_vis_rainbow_tint  = 0u;
+			pc.hipr_vis_tint_strength = 0.0f;
+			break;
+		case ui::RenderDebugViewMode::HiPRVis:
+			pc.enable_tonemapping = 0u;
+			pc.exposure_bias      = 0.0f;
+			break;
+		case ui::RenderDebugViewMode::Naive:
+			pc.hipr_object_count      = 0u;
+			pc.hipr_top_k             = 0u;
+			pc.hipr_render_rank       = -1;
+			pc.hipr_incremental_sort  = 0u;
+			pc.hipr_clear_order       = 0u;
+			pc.hipr_vis_enable_tint   = 0u;
+			pc.hipr_vis_rainbow_tint  = 0u;
+			pc.hipr_reserved0         = 0u;
+			pc.hipr_frames_per_object = 0u;
+			pc.hipr_score_blend       = 0.0f;
+			pc.hipr_vis_tint_strength = 0.0f;
+			break;
+		case ui::RenderDebugViewMode::ObjectIds:
+			pc.spp                       = 0u;
+			pc.max_bounces               = 0u;
+			pc.enable_tonemapping        = 0u;
+			pc.exposure_bias             = 0.0f;
+			pc.material_count            = 0u;
+			pc.hipr_object_count         = 0u;
+			pc.hipr_top_k                = 0u;
+			pc.hipr_render_rank          = -1;
+			pc.hipr_incremental_sort     = 0u;
+			pc.hipr_clear_order          = 0u;
+			pc.hipr_vis_enable_tint      = 0u;
+			pc.hipr_vis_rainbow_tint     = 0u;
+			pc.hipr_reserved0            = 0u;
+			pc.hipr_frames_per_object    = 0u;
+			pc.hipr_score_blend          = 0.0f;
+			pc.hipr_vis_tint_strength    = 0.0f;
+			pc.skybox_enabled            = 0u;
+			pc.directional_light_enabled = 0u;
+			pc.sun_dir_x                 = 0.0f;
+			pc.sun_dir_y                 = 0.0f;
+			pc.sun_dir_z                 = 0.0f;
+			pc.sun_intensity             = 0.0f;
+			break;
+	}
+
+	const bool hipr_active = selection.selected_mesh_index >= 0;
+	const bool use_hipr_ranked =
+	    (hipr_mode || hipr_vis_mode) && hipr_active && !camera_moving_this_frame;
+	const bool hipr_object_sampling_enabled =
+	    hipr_mode && hipr_active && m_hipr_object_sampling_active && !camera_moving_this_frame;
+	const bool hipr_full_scene_sampling =
+	    hipr_mode && hipr_active && m_hipr_object_sampling_done && !camera_moving_this_frame;
+
+	bool       run_stage1 = true;
+	bool       run_stage2 = camera_moving_this_frame || !m_material_edit_mode || hipr_active;
+	bool       run_single_rank_stage4 = false;
+	bool       run_ranked_stage4_loop = false;
+	int32_t    single_rank_stage4_id  = -1;
+	const bool hipr_vis_reveal_complete =
+	    hipr_vis_mode && pc.hipr_top_k > 0u &&
+	    (m_frame_number / hipr_frames_per_object) >= (pc.hipr_top_k - 1u);
+	if (obj_id_mode || naive_mode) {
+		run_stage1 = false;
+		run_stage2 = true;
+	} else if (hipr_vis_mode) {
+		run_stage1 = hipr_active;
+		run_stage2 = true;
+	}
+
+	if (hipr_object_sampling_enabled) {
+		const uint32_t sample_rank =
+		    (pc.hipr_top_k > 0u) ? std::min(m_hipr_object_sampling_rank, pc.hipr_top_k - 1u) : 0u;
+		run_stage2             = false;
+		run_ranked_stage4_loop = false;
+		if (pc.hipr_top_k == 0u || sample_rank == 0u) {
+			run_stage1 = true;
+		} else {
+			run_stage1             = false;
+			run_single_rank_stage4 = true;
+			single_rank_stage4_id  = static_cast<int32_t>(sample_rank);
+		}
+	} else if (hipr_full_scene_sampling) {
+		run_stage1             = false;
+		run_stage2             = true;
+		run_ranked_stage4_loop = false;
+	} else {
+		if (hipr_vis_mode && hipr_vis_reveal_complete) {
+			run_stage1 = false;
+			run_stage2 = true;
+		}
+		run_ranked_stage4_loop =
+		    use_hipr_ranked && run_stage2 && !(hipr_vis_mode && hipr_vis_reveal_complete);
+	}
+
+	if ((!hipr_mode || !hipr_active) &&
+	    (m_hipr_object_sampling_active || m_hipr_object_sampling_done)) {
+		resetHiPRObjectSampling();
+	}
+
+	bool hipr_refresh = use_hipr_ranked && m_needs_visibility_pass;
+	if (hipr_full_scene_sampling) {
+		hipr_refresh = false;
+	}
+
+	if (use_hipr_ranked && hipr_refresh) {
+		pc.stage = 10;
+		vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+		                   &pc);
+		const uint32_t clear_count = std::max(pc.hipr_object_count, std::max(pc.hipr_top_k, 1u));
+		vkCmdDispatch(cmd, (clear_count + 15) / 16, 1, 1);
+		m_hipr_force_clear_order = false;
+	}
+
+	if (m_needs_visibility_pass) {
+		pc.stage = 0;
+		vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+		                   &pc);
+		vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+
+		VkImageMemoryBarrier obj_id_barrier{};
+		obj_id_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		obj_id_barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+		obj_id_barrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+		obj_id_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+		obj_id_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+		obj_id_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		obj_id_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		obj_id_barrier.image               = render_target_ctx.object_id_image;
+		obj_id_barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+		                     &obj_id_barrier);
+
+		m_needs_visibility_pass = false;
+	}
+
+	if (run_stage1) {
+		pc.stage            = 1;
+		pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
+		pc.frame            = hipr_object_sampling_enabled ?
+		                          m_hipr_object_sampling_frame :
+		                          (hipr_full_scene_sampling ? m_hipr_full_scene_frame : m_frame_number);
+		vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+		                   &pc);
+		vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+	}
+
+	if (use_hipr_ranked && hipr_refresh) {
+		VkMemoryBarrier stats_barrier{};
+		stats_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+		stats_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		stats_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &stats_barrier, 0, nullptr,
+		                     0, nullptr);
+
+		pc.stage = 3;
+		vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+		                   &pc);
+		vkCmdDispatch(cmd, 1, 1, 1);
+	}
+
+	if (run_stage1 && (run_stage2 || use_hipr_ranked)) {
+		VkMemoryBarrier stage_barrier{};
+		stage_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+		stage_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		stage_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &stage_barrier, 0, nullptr,
+		                     0, nullptr);
+	}
+
+	if (run_single_rank_stage4) {
+		pc.stage            = 4;
+		pc.frame            = m_hipr_object_sampling_frame;
+		pc.hipr_render_rank = single_rank_stage4_id;
+		vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+		                   &pc);
+		vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+	}
+
+	if (run_ranked_stage4_loop) {
+		uint32_t stage4_end_rank = pc.hipr_top_k;
+		if (hipr_vis_mode) {
+			const uint32_t reveal_rank_count =
+			    std::min(pc.hipr_top_k, 1u + (m_frame_number / hipr_frames_per_object));
+			stage4_end_rank = reveal_rank_count;
+		}
+
+		for (uint32_t rank = 1; rank < stage4_end_rank; ++rank) {
+			pc.stage            = 4;
+			pc.frame            = m_frame_number;
+			pc.hipr_render_rank = static_cast<int32_t>(rank);
+			vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+			                   &pc);
+			vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+		}
+	}
+
+	if (run_stage2) {
+		pc.stage            = 2;
+		pc.hipr_render_rank = hipr_full_scene_sampling ? -2 : -1;
+		pc.frame            = hipr_full_scene_sampling ? m_hipr_full_scene_frame : m_frame_number;
+		if (hipr_full_scene_sampling) {
+			pc.debug_view_mode = static_cast<int32_t>(ui::RenderDebugViewMode::Naive);
+		}
+		vkCmdPushConstants(cmd, active_mode.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+		                   &pc);
+		vkCmdDispatch(cmd, dispatch_w, dispatch_h, 1);
+	}
+
+	if (hipr_object_sampling_enabled && pc.hipr_top_k > 0u) {
+		++m_hipr_object_sampling_frame;
+		if (m_hipr_object_sampling_frame >= hipr_frames_per_object) {
+			m_hipr_object_sampling_frame = 0;
+			++m_hipr_object_sampling_rank;
+			if (m_hipr_object_sampling_rank >= pc.hipr_top_k) {
+				m_hipr_object_sampling_active = false;
+				m_hipr_object_sampling_done   = true;
+				m_hipr_object_sampling_rank   = 0;
+				m_hipr_object_sampling_frame  = 0;
+				m_hipr_full_scene_frame       = 0;
+			}
+		}
+	}
+	if (hipr_full_scene_sampling) {
+		++m_hipr_full_scene_frame;
+	}
+
+	VkMemoryBarrier compute_to_transfer{};
+	compute_to_transfer.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	compute_to_transfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	compute_to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+	                     0, 1, &compute_to_transfer, 0, nullptr, 0, nullptr);
+
+	transition_layout(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_GENERAL,
+	                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+	                  VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+	VkImageBlit blit_region{};
+	blit_region.srcSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+	blit_region.srcSubresource.mipLevel       = 0;
+	blit_region.srcSubresource.baseArrayLayer = 0;
+	blit_region.srcSubresource.layerCount     = 1;
+	blit_region.srcOffsets[0]                 = {0, 0, 0};
+	blit_region.srcOffsets[1]                 = {static_cast<int32_t>(swapchain_ctx.extent.width),
+	                                             static_cast<int32_t>(swapchain_ctx.extent.height), 1};
+
+	blit_region.dstSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+	blit_region.dstSubresource.mipLevel       = 0;
+	blit_region.dstSubresource.baseArrayLayer = 0;
+	blit_region.dstSubresource.layerCount     = 1;
+	blit_region.dstOffsets[0]                 = {0, 0, 0};
+	blit_region.dstOffsets[1]                 = {static_cast<int32_t>(swapchain_ctx.extent.width),
+	                                             static_cast<int32_t>(swapchain_ctx.extent.height), 1};
+
+	vkCmdBlitImage(cmd, render_target_ctx.storage_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	               swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+	               &blit_region, VK_FILTER_NEAREST);
+
+	render_target_ctx.storage_image_initialized  = true;
+	swapchain_ctx.image_initialized[image_index] = true;
+
+	transition_layout(cmd, swapchain_ctx.images[image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+	                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+	                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+	                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+	VkRenderPassBeginInfo rp_begin{};
+	rp_begin.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	rp_begin.renderPass        = overlay_ctx.render_pass;
+	rp_begin.framebuffer       = overlay_ctx.framebuffers[image_index];
+	rp_begin.renderArea.offset = {0, 0};
+	rp_begin.renderArea.extent = swapchain_ctx.extent;
+
+	vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
+	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+	vkCmdEndRenderPass(cmd);
+
+	VkResult end_result = vkEndCommandBuffer(cmd);
+	if (end_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkEndCommandBuffer failed: " << static_cast<int>(end_result) << "\n";
+		drain_acquire_semaphore(frame_idx);
+		return;
+	}
+
+	VkResult reset_fence_result = vkResetFences(vulkan_ctx.device, 1, &sync_ctx.in_flight);
+	if (reset_fence_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkResetFences failed: " << static_cast<int>(reset_fence_result)
+		          << "\n";
+		drain_acquire_semaphore(frame_idx);
+		return;
+	}
+
+	VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+	VkSubmitInfo submit_info{};
+	submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.waitSemaphoreCount   = 1;
+	submit_info.pWaitSemaphores      = &sync_ctx.image_available[frame_idx];
+	submit_info.pWaitDstStageMask    = &wait_stage;
+	submit_info.commandBufferCount   = 1;
+	submit_info.pCommandBuffers      = &cmd;
+	submit_info.signalSemaphoreCount = 1;
+	submit_info.pSignalSemaphores    = &sync_ctx.render_finished[image_index];
+
+	VkResult submit_result =
+	    vkQueueSubmit(vulkan_ctx.graphics_queue, 1, &submit_info, sync_ctx.in_flight);
+	if (submit_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkQueueSubmit failed: " << static_cast<int>(submit_result) << "\n";
+		drain_acquire_semaphore(frame_idx);
+
+		vkDestroyFence(vulkan_ctx.device, sync_ctx.in_flight, nullptr);
+		VkFenceCreateInfo signaled_fence_info{};
+		signaled_fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+		signaled_fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+		if (vkCreateFence(vulkan_ctx.device, &signaled_fence_info, nullptr, &sync_ctx.in_flight) !=
+		    VK_SUCCESS) {
+			throw std::runtime_error("failed to recreate in-flight fence");
+		}
+		return;
+	}
+
+	VkPresentInfoKHR present_info{};
+	present_info.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	present_info.waitSemaphoreCount = 1;
+	present_info.pWaitSemaphores    = &sync_ctx.render_finished[image_index];
+	present_info.swapchainCount     = 1;
+	present_info.pSwapchains        = &swapchain_ctx.swapchain.swapchain;
+	present_info.pImageIndices      = &image_index;
+
+	VkResult present_result = vkQueuePresentKHR(vulkan_ctx.graphics_queue, &present_info);
+	if (acquire_suboptimal || present_result == VK_ERROR_OUT_OF_DATE_KHR ||
+	    present_result == VK_SUBOPTIMAL_KHR) {
+		m_surface_recreation_pending = true;
+		return;
+	}
+	if (present_result != VK_SUCCESS) {
+		std::cerr << "[SYNC] vkQueuePresentKHR failed: " << static_cast<int>(present_result)
+		          << "\n";
+		return;
+	}
+
+	++m_frame_number;
+}
+
+simulation::WaterSurfaceCreateInfo Runtime::Impl::waterSurfaceCreateInfo() const {
+	return simulation::WaterSurfaceCreateInfo{
+	    .device        = vulkan_ctx.device,
+	    .allocator     = render_target_ctx.allocator,
+	    .output_extent = swapchain_ctx.extent,
+	};
+}
+
+void Runtime::Impl::uploadMaterial(int material_index, const GPUMaterial& material) {
+	if (scene_ctx.material_mapped == nullptr || material_index < 0 ||
+	    material_index >= static_cast<int>(scene_ctx.material_count)) {
+		return;
+	}
+
+	auto* gpu_materials           = reinterpret_cast<GPUMaterial*>(scene_ctx.material_mapped);
+	gpu_materials[material_index] = material;
+	vmaFlushAllocation(render_target_ctx.allocator, scene_ctx.material_alloc,
+	                   static_cast<VkDeviceSize>(material_index) * sizeof(GPUMaterial),
+	                   sizeof(GPUMaterial));
+}
+
+bool Runtime::Impl::rebuildPipeline(ui::RenderDebugViewMode mode) {
+	const bool rebuilt = ::rebuild_pipeline(mode);
+	if (rebuilt) {
+		m_frame_number           = 0;
+		m_needs_visibility_pass  = true;
+		m_hipr_force_clear_order = true;
+		resetHiPRObjectSampling();
+	}
+	return rebuilt;
+}
+
+void Runtime::Impl::updateCamera(const GPUCamera& camera) {
+	if (!m_has_current_camera || std::memcmp(&m_current_camera, &camera, sizeof(GPUCamera)) != 0) {
+		m_current_camera     = camera;
+		m_has_current_camera = true;
+		m_camera_changed     = true;
+	}
+
+	if (scene_ctx.camera_mapped != nullptr) {
+		memcpy(scene_ctx.camera_mapped, &camera, sizeof(GPUCamera));
+	}
+}
+
+void Runtime::Impl::waitIdle() {
+	if (vulkan_ctx.device != VK_NULL_HANDLE) {
+		vkDeviceWaitIdle(vulkan_ctx.device);
+	}
+}
+
+Runtime::Runtime(core::Window& window, const Scene& scene) :
+    m_impl(std::make_unique<Impl>(window, scene)) {
+}
+
+Runtime::~Runtime() = default;
+
+RuntimeFrameOutput Runtime::beginFrame() {
+	return m_impl->beginFrame();
+}
+
+void Runtime::renderFrame(const RuntimeFrameInput& input) {
+	m_impl->renderFrame(input);
+}
+
+simulation::WaterSurfaceCreateInfo Runtime::waterSurfaceCreateInfo() const {
+	return m_impl->waterSurfaceCreateInfo();
+}
+
+void Runtime::uploadMaterial(int material_index, const GPUMaterial& material) {
+	m_impl->uploadMaterial(material_index, material);
+}
+
+bool Runtime::rebuildPipeline(ui::RenderDebugViewMode mode) {
+	return m_impl->rebuildPipeline(mode);
+}
+
+void Runtime::updateCamera(const GPUCamera& camera) {
+	m_impl->updateCamera(camera);
+}
+
+void Runtime::waitIdle() {
+	m_impl->waitIdle();
 }

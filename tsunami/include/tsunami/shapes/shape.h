@@ -14,6 +14,7 @@ struct alignas(16) GPUShape {
 	float     _pad[2];
 };
 
+// Note: Primitives are not optimized for hardware ray tracing
 class Shape {
   public:
 	Shape(Transform transform, std::shared_ptr<Material> material) :

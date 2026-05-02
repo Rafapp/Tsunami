@@ -1,28 +1,49 @@
 #pragma once
 
 #include <memory>
-#include <string>
 
-namespace audio {
-class MicrophoneInput;
-class ReactiveAudioController;
-}        // namespace audio
+#include "tsunami/ui/render_settings.h"
+#include "tsunami/ui/selection_panel.h"
+
+struct GPUMaterial;
+struct GPUCamera;
+
+class Scene;
+
+namespace ui {
+enum class RenderDebugViewMode : int;
+}
 
 namespace core {
 class Window;
 }
 
 namespace simulation {
-class WaterSurfaceSimulation;
+struct WaterSurfaceCreateInfo;
 }
-
-class Scene;
 
 namespace vulkan {
 
+struct RuntimeFrameInput {
+	const ui::SelectionContext&           selection;
+	const ui::AudienceRenderPostSettings& render_post;
+	bool                                  material_edit_active          = false;
+	bool                                  material_changed              = false;
+	bool                                  material_edit_just_finished   = false;
+	bool                                  selection_changed             = false;
+	bool                                  hipr_settings_changed         = false;
+	bool                                  path_tracing_settings_changed = false;
+	bool                                  camera_moving                 = false;
+};
+
+struct RuntimeFrameOutput {
+	ui::AudienceRenderDiagnostics render{};
+	bool                          surface_resized = false;
+};
+
 class Runtime {
   public:
-	explicit Runtime(const std::string& scene_argument = "");
+	Runtime(core::Window& window, const Scene& scene);
 	~Runtime();
 
 	Runtime(const Runtime&)            = delete;
@@ -30,19 +51,17 @@ class Runtime {
 	Runtime(Runtime&&)                 = delete;
 	Runtime& operator=(Runtime&&)      = delete;
 
-	void runMainLoop();
+	RuntimeFrameOutput                 beginFrame();
+	void                               renderFrame(const RuntimeFrameInput& input);
+	simulation::WaterSurfaceCreateInfo waterSurfaceCreateInfo() const;
+	void uploadMaterial(int material_index, const GPUMaterial& material);
+	bool rebuildPipeline(ui::RenderDebugViewMode mode);
+	void updateCamera(const GPUCamera& camera);
+	void waitIdle();
 
   private:
-	void createSwapchainResources();
-	void destroySwapchainResources();
-	void recreateSwapchainResources();
-	void MainLoop();
-
-	std::unique_ptr<audio::ReactiveAudioController>     m_audio_controller;
-	std::unique_ptr<audio::MicrophoneInput>             m_microphone;
-	std::unique_ptr<simulation::WaterSurfaceSimulation> m_water_surface;
-	std::unique_ptr<core::Window>                       m_window;
-	std::unique_ptr<Scene>                              m_scene;
+	class Impl;
+	std::unique_ptr<Impl> m_impl;
 };
 
 }        // namespace vulkan
