@@ -15,6 +15,10 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 
+//needed for the nuke command
+#include <windows.h>
+std::string m_scene_argument;
+
 #ifndef VK_NO_PROTOTYPES
 #	define VK_NO_PROTOTYPES
 #endif
@@ -32,6 +36,8 @@
 
 #include "slang.h"
 #include "tsunami/vulkan/vulkan.h"
+#include <fstream>
+#include "tsunami/controller/ControllerInput.h"
 
 using vulkan::Runtime;
 
@@ -1857,6 +1863,7 @@ static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
 }
 
 Runtime::Runtime(const std::string& scene_argument) {
+	m_scene_argument = scene_argument;
 	// ==============================
 	// === 0. Scene setup
 	// ==============================
@@ -2829,6 +2836,15 @@ Runtime::~Runtime() {
 // === Main loop
 // ============================================================
 void Runtime::runMainLoop() {
+	//CTRL: load controller
+	std::ifstream db_file("resources/gamecontrollerdb.txt");
+	if (db_file) {
+		std::string db_text((std::istreambuf_iterator<char>(db_file)), {});
+		ControllerInput::Controller::getControllerMappingsFromDB(db_text);
+	} else {
+		std::cerr << "gamecontrollerdb.txt not found\n";
+	}
+	//END CTRL
 	MainLoop();
 }
 void Runtime::MainLoop() {
@@ -2896,6 +2912,20 @@ void Runtime::MainLoop() {
 		hipr_object_sampling_frame  = 0;
 		hipr_full_scene_frame       = 0;
 	};
+
+
+	//CTRL section
+	ControllerInput::Controller controller(GLFW_JOYSTICK_1);
+	//previous button states
+	bool prev_dpad_left  = false;
+	bool prev_dpad_right = false;
+	bool prev_options_button = false;
+	bool prev_touchpad_button = false;
+	//Camera State
+	const glm::vec3 cam_reset_position = fly_cam.m_position;
+	const float     cam_reset_yaw      = fly_cam.m_yaw;
+	const float     cam_reset_pitch    = fly_cam.m_pitch;
+	//End of CTRL section
 
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
@@ -3111,6 +3141,7 @@ void Runtime::MainLoop() {
 		ImGui::Render();
 
 		glfwPollEvents();
+		
 
 		double now = glfwGetTime();
 		float  dt  = static_cast<float>(now - last_time);
@@ -3147,18 +3178,25 @@ void Runtime::MainLoop() {
 
 		// ---- Fly-camera update ----------------------------------------------
 		const bool camera_moving_this_frame = fly_cam.update(m_window->handle(), dt);
-		if (camera_moving_this_frame) {
+
+
+		//Poll the state of the controller | Start of CTRL section
+		#include "controller_input.inl"
+		//When re-adding remember to change instances of camera_moving_this_frame to any_camera_moving and to set ctrl_moving to false at the end of each loop iteration
+		// End of controller additions | End of CTRL section
+
+		if (any_camera_moving) {
 			frame_number           = 0;
 			needs_visibility_pass  = true;
 			hipr_force_clear_order = true;
 			reset_hipr_object_sampling();
 		}
-		if (!camera_moving_this_frame && camera_was_moving) {
+		if (!any_camera_moving && camera_was_moving) {
 			// Start a fresh accumulation the first frame after camera motion stops.
 			frame_number = 0;
 			reset_hipr_object_sampling();
 		}
-		camera_was_moving = camera_moving_this_frame;
+		camera_was_moving = any_camera_moving;
 
 		// Upload camera to GPU (persistent mapping – no staging needed)
 		const GPUCamera gpu_camera = fly_cam.pack();
@@ -3381,11 +3419,11 @@ void Runtime::MainLoop() {
 
 		const bool hipr_active = ui::selection_ctx.selected_mesh_index >= 0;
 		const bool use_hipr_ranked =
-		    (hipr_mode || hipr_vis_mode) && hipr_active && !camera_moving_this_frame;
+		    (hipr_mode || hipr_vis_mode) && hipr_active && !any_camera_moving;
 		const bool hipr_object_sampling_enabled =
-		    hipr_mode && hipr_active && hipr_object_sampling_active && !camera_moving_this_frame;
+		    hipr_mode && hipr_active && hipr_object_sampling_active && !any_camera_moving;
 		const bool hipr_full_scene_sampling =
-		    hipr_mode && hipr_active && hipr_object_sampling_done && !camera_moving_this_frame;
+		    hipr_mode && hipr_active && hipr_object_sampling_done && !any_camera_moving;
 
 		bool       run_stage1 = true;
 		bool       run_stage2 = camera_moving_this_frame || !material_edit_mode || hipr_active;
