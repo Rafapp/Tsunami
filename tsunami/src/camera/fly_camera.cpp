@@ -41,25 +41,25 @@ glm::vec3 FlyCamera::right() const {
 	return glm::normalize(glm::cross(forward(), glm::vec3{0.f, 0.f, 1.f}));
 }
 
-void FlyCamera::applyControllerInput(float move_x, float move_y,
-                                     float look_x, float look_y, float dt) {
-    constexpr float kMoveSpeed = 3.0f;
-    constexpr float kLookSpeed = 1.5f;
+void FlyCamera::applyControllerInput(float move_x, float move_y, float look_x, float look_y,
+                                     float dt) {
+	constexpr float kMoveSpeed = 3.0f;
+	constexpr float kLookSpeed = 1.5f;
 
-    glm::vec3 move{0.f};
-    move += forward() * move_y;   
-    move += right()   * move_x;   
+	glm::vec3 move{0.f};
+	move += forward() * move_y;
+	move += right() * move_x;
 
-    if (glm::length(move) > 0.001f)
-        m_position += glm::normalize(move) * (kMoveSpeed * m_speed * dt);
+	if (glm::length(move) > 0.001f)
+		m_position += glm::normalize(move) * (kMoveSpeed * m_speed * dt);
 
-    // Stick look
-    if (look_x != 0.f || look_y != 0.f) {
-        m_yaw   -= look_x * kLookSpeed * dt;
-        m_pitch -= look_y * kLookSpeed * dt;
-        constexpr float kLimit = glm::radians(89.f);
-        m_pitch = std::clamp(m_pitch, -kLimit, kLimit);
-    }
+	// Stick look
+	if (look_x != 0.f || look_y != 0.f) {
+		m_yaw -= look_x * kLookSpeed * dt;
+		m_pitch -= look_y * kLookSpeed * dt;
+		constexpr float kLimit = glm::radians(89.f);
+		m_pitch                = std::clamp(m_pitch, -kLimit, kLimit);
+	}
 }
 
 bool FlyCamera::update(GLFWwindow* window, float dt) {

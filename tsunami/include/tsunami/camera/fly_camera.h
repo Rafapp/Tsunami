@@ -40,11 +40,11 @@ class FlyCamera {
 	void applyControllerInput(float move_x, float move_y, float look_x, float look_y, float dt);
 
 	// ---- tweakable parameters ----
-	float m_speed       = 0.5f;           // units / second
-	float m_sensitivity = 0.0005f;        // radians / pixel
-	float m_fov         = 60.f;           // vertical field-of-view in degrees
-	float m_near_clip   = 0.1f;
-	float m_far_clip    = 10000.f;
+	float     m_speed       = 0.5f;           // units / second
+	float     m_sensitivity = 0.0005f;        // radians / pixel
+	float     m_fov         = 60.f;           // vertical field-of-view in degrees
+	float     m_near_clip   = 0.1f;
+	float     m_far_clip    = 10000.f;
 	glm::vec3 m_position{0.f, 0.5f, 0.f};
 	float     m_yaw   = 0.f;        // radians, around world-Y
 	float     m_pitch = 0.f;        // radians, clamped to +/-89 deg
