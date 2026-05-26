@@ -1841,13 +1841,16 @@ static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
 	if (scene_key == "sponza") {
 		return "resources/scenes/Sponza/glTF/Sponza.gltf";
 	}
+	if (scene_key == "church") {
+		return "resources/scenes/Church/scene.gltf";
+	}
 
 	const fs::path    user_path(scene_argument);
 	const std::string ext = toLowerAscii(user_path.extension().string());
 	if (ext != ".gltf" && ext != ".glb") {
 		throw std::runtime_error(
 		    "unknown scene alias '" + scene_argument +
-		    "'. Use one of: pool, chess, cornell, cornellsimple, sponza, or provide a .gltf/.glb "
+		    "'. Use one of: pool, chess, cornell, cornellsimple, sponza, church, or provide a .gltf/.glb "
 		    "file path.");
 	}
 
@@ -2926,6 +2929,9 @@ void Runtime::MainLoop() {
 	const float     cam_reset_pitch    = fly_cam.m_pitch;
 	// End of CTRL section
 
+	// Paint system initialization
+	#include "paint_system_init.inl"
+
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
 
@@ -3137,6 +3143,10 @@ void Runtime::MainLoop() {
 			ui::drawAudienceOverlay(ImGui::GetIO().DisplaySize, overlay_ctx.controls.overlay,
 			                        overlay_ctx.controls.style);
 		}
+
+		//Paint Loop 
+		#include "paint_system.inl"
+
 		ImGui::Render();
 
 		glfwPollEvents();
@@ -3177,8 +3187,8 @@ void Runtime::MainLoop() {
 		// ---- Fly-camera update ----------------------------------------------
 		const bool camera_moving_this_frame = fly_cam.update(m_window->handle(), dt);
 
-// Poll the state of the controller | Start of CTRL section
-#include "controller_input.inl"
+		// Poll the state of the controller | Start of CTRL section
+		#include "controller_input.inl"
 		// When re-adding remember to change instances of camera_moving_this_frame to
 		// any_camera_moving and to set ctrl_moving to false at the end of each loop iteration
 		//  End of controller additions | End of CTRL section
