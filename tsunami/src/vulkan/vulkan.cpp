@@ -1848,10 +1848,10 @@ static std::string resolveScenePathOrThrow(const std::string& scene_argument) {
 	const fs::path    user_path(scene_argument);
 	const std::string ext = toLowerAscii(user_path.extension().string());
 	if (ext != ".gltf" && ext != ".glb") {
-		throw std::runtime_error(
-		    "unknown scene alias '" + scene_argument +
-		    "'. Use one of: pool, chess, cornell, cornellsimple, sponza, church, or provide a .gltf/.glb "
-		    "file path.");
+		throw std::runtime_error("unknown scene alias '" + scene_argument +
+		                         "'. Use one of: pool, chess, cornell, cornellsimple, sponza, "
+		                         "church, or provide a .gltf/.glb "
+		                         "file path.");
 	}
 
 	std::error_code ec;
@@ -2927,10 +2927,10 @@ void Runtime::MainLoop() {
 	const glm::vec3 cam_reset_position = fly_cam.m_position;
 	const float     cam_reset_yaw      = fly_cam.m_yaw;
 	const float     cam_reset_pitch    = fly_cam.m_pitch;
-	// End of CTRL section
+// End of CTRL section
 
-	// Paint system initialization
-	#include "paint_system_init.inl"
+// Paint system initialization
+#include "paint_system_init.inl"
 
 	while (!m_window->shouldClose()) {
 		m_window->pollEvents();
@@ -3144,8 +3144,8 @@ void Runtime::MainLoop() {
 			                        overlay_ctx.controls.style);
 		}
 
-		//Paint Loop 
-		#include "paint_system.inl"
+// Paint Loop
+#include "paint_system.inl"
 
 		ImGui::Render();
 
@@ -3187,8 +3187,8 @@ void Runtime::MainLoop() {
 		// ---- Fly-camera update ----------------------------------------------
 		const bool camera_moving_this_frame = fly_cam.update(m_window->handle(), dt);
 
-		// Poll the state of the controller | Start of CTRL section
-		#include "controller_input.inl"
+// Poll the state of the controller | Start of CTRL section
+#include "controller_input.inl"
 		// When re-adding remember to change instances of camera_moving_this_frame to
 		// any_camera_moving and to set ctrl_moving to false at the end of each loop iteration
 		//  End of controller additions | End of CTRL section
