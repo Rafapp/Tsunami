@@ -79,7 +79,8 @@ struct GPUMaterial {
     float4 base_color;
     float     base_metalness;
     float     base_diffuse_roughness;
-    float     _pad0[2];
+    float     texture_weight;
+    float     _pad0;
 
     // Specular layer
     float4 specular_color;
@@ -387,13 +388,14 @@ bool intersectScene(Ray ray, out Hit hit, out GPUMaterial mat) {
     float3 B = safeNormalize(handedness * cross(N, T), buildOrthoTangent(N));
 
     float3 N_world = N;
-    if (mat.normal_tex_index != NO_TEXTURE) {
+    if (mat.normal_tex_index != NO_TEXTURE && mat.texture_weight > 0.0f) {
         float3 normal_tex = sample_tex(
             mat.normal_tex_index,
             attr.uv,
             float4(0.5, 0.5, 1.0, 1.0)
         ).xyz;
 
+        normal_tex = lerp(float3(0.5, 0.5, 1.0), normal_tex, saturate(mat.texture_weight));
         normal_tex = normal_tex * 2.0 - 1.0;
 
         // Perturb N by the normal map in the world-space TBN frame.
@@ -438,11 +440,14 @@ OpenPBR_ResolvedInputs material_to_openpbr(
 {
     OpenPBR_ResolvedInputs inp = openpbr_make_default_resolved_inputs();
 
-    float4 alb = sample_tex(m.albedo_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
+    float texture_weight = saturate(m.texture_weight);
+    float4 alb_sample = sample_tex(m.albedo_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
+    float4 alb = lerp(float4(1.f, 1.f, 1.f, 1.f), alb_sample, texture_weight);
     // glTF ORM texture: R=occlusion, G=roughness, B=metalness.
     // The CPU values act as live multipliers so GUI edits still affect
     // textured materials.
-    float4 orm = sample_tex(m.roughness_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
+    float4 orm_sample = sample_tex(m.roughness_tex_index, uv, float4(1.f, 1.f, 1.f, 1.f));
+    float4 orm = lerp(float4(1.f, 1.f, 1.f, 1.f), orm_sample, texture_weight);
 
     float geometry_opacity = saturate(m.geometry_opacity);
 
@@ -512,8 +517,10 @@ float3 tracePath(Ray ray, inout RNG rng) {
         }
 
         // ── Emission ──
-        float3 emissive_sample =
+        float3 emissive_texture =
             sample_tex(mat.emissive_tex_index, hit.uv, float4(1.f, 1.f, 1.f, 1.f)).rgb;
+        float3 emissive_sample = lerp(
+            float3(1.f, 1.f, 1.f), emissive_texture, saturate(mat.texture_weight));
         radiance += throughput * emissive_sample * mat.emission_color.rgb * mat.emission_luminance;
 
         float3 hitPos   = ray.origin + hit.t * ray.dir;

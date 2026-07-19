@@ -2990,6 +2990,8 @@ void Runtime::MainLoop() {
 		}
 
 		ui::SelectionPanelResult selection_panel_result{};
+		bool                     chameleon_material_changed =
+		    ui::syncSelectedChameleonMaterial(m_scene.get(), scene_ctx.selection_voice_loudness);
 		if (show_all_gui && show_selection_panel) {
 			selection_panel_result = ui::drawSelectionPanel(
 			    m_scene.get(), scene_ctx.selection_voice_loudness, &show_selection_panel);
@@ -3039,7 +3041,10 @@ void Runtime::MainLoop() {
 			const float updated_water_audio_level = overlay_ctx.diagnostics.audio.normalized_level;
 			applyOverlayLevel(audio_level);
 			update_water_and_floaters(updated_water_audio_level);
+			chameleon_material_changed |= ui::syncSelectedChameleonMaterial(
+			    m_scene.get(), scene_ctx.selection_voice_loudness);
 		}
+		selection_panel_result.material_changed |= chameleon_material_changed;
 
 		if (selection_panel_result.material_edit_active && !material_edit_mode) {
 			// Entering edit mode: restart accumulation at the edited value.

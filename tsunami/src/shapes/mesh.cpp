@@ -151,18 +151,23 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		}
 
 		// --- Material ---
-		glm::vec3 albedo(0.8f);
-		glm::vec3 emission(0.0f);
-		float     emission_intensity = 0.0f;
-		float     metalness          = 0.f;
-		float     roughness          = 0.3f;
-		float     ior                = 1.5f;
-		float     transmission       = 0.f;
+		glm::vec3   albedo(0.8f);
+		glm::vec3   emission(0.0f);
+		float       emission_intensity = 0.0f;
+		float       metalness          = 0.f;
+		float       roughness          = 0.3f;
+		float       ior                = 1.5f;
+		float       transmission       = 0.f;
+		std::string material_name;
 
 		const aiMaterial* mat = nullptr;
 
 		if (scene->HasMaterials() && ai_mesh->mMaterialIndex < scene->mNumMaterials) {
 			mat = scene->mMaterials[ai_mesh->mMaterialIndex];
+			aiString imported_material_name;
+			if (mat->Get(AI_MATKEY_NAME, imported_material_name) == AI_SUCCESS) {
+				material_name = imported_material_name.C_Str();
+			}
 
 			aiColor4D base_color;
 			if (mat->Get(AI_MATKEY_BASE_COLOR, base_color) == AI_SUCCESS)
@@ -201,9 +206,9 @@ static void append_gltf_node_meshes(const aiScene* scene, const aiNode* node,
 		transform.m_transform        = glm::mat4(1.0f);
 		transform.m_inverseTransform = glm::mat4(1.0f);
 
-		result.push_back(std::make_unique<Mesh>(std::move(verts), std::move(indices), transform,
-		                                        std::move(material),
-		                                        build_gltf_mesh_name(node, ai_mesh, mesh_idx)));
+		result.push_back(std::make_unique<Mesh>(
+		    std::move(verts), std::move(indices), transform, std::move(material),
+		    build_gltf_mesh_name(node, ai_mesh, mesh_idx), std::move(material_name)));
 
 		std::cout << "[Mesh::load_gltf] node=" << node->mName.C_Str() << " mesh_idx=" << mesh_idx
 		          << " (transform baked)\n";
@@ -227,12 +232,13 @@ Mesh::Mesh(const std::string& path, Transform transform, std::shared_ptr<Materia
 }
 
 Mesh::Mesh(std::vector<GPUVertex> verts, std::vector<uint32_t> indices, Transform transform,
-           std::shared_ptr<Material> material, std::string name) :
+           std::shared_ptr<Material> material, std::string name, std::string material_name) :
     gpuVertices(std::move(verts)),
     gpuIndices(std::move(indices)),
     m_transform(transform),
     m_material(std::move(material)),
-    m_name(std::move(name)) {
+    m_name(std::move(name)),
+    m_material_name(std::move(material_name)) {
 	compute_local_bounds();
 }
 

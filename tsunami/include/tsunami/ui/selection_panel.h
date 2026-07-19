@@ -32,6 +32,7 @@ enum class VoiceDrivenParameter : int {
 	ObjectRotateX     = 11,
 	ObjectRotateY     = 12,
 	ObjectRotateZ     = 13,
+	ChameleonMaterial = 14,
 };
 
 enum class RenderDebugViewMode : int {
@@ -111,6 +112,7 @@ extern SelectionContext selection_ctx;
 std::string meshDisplayName(const Scene* scene, int mesh_index);
 void        rebuildObjectIdMap(const Scene* scene);
 bool        selectMesh(const Scene* scene, int mesh_index);
+bool        syncSelectedChameleonMaterial(const Scene* scene, float voice_loudness);
 void        applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* material_mapped,
                                         uint32_t material_count, VmaAllocation material_alloc);
 SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness,

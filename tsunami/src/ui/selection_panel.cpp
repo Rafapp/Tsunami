@@ -3,9 +3,12 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
+#include <string_view>
 #include <utility>
 
 namespace ui {
@@ -20,6 +23,80 @@ constexpr float kEditorTranslationMin = -2.0f;
 constexpr float kEditorTranslationMax = 2.0f;
 constexpr float kEditorRotationMinDeg = -180.0f;
 constexpr float kEditorRotationMaxDeg = 180.0f;
+
+struct ChameleonMaterialTransition {
+	std::array<uint8_t, 3> start_color_rgb255;
+	std::array<uint8_t, 3> end_color_rgb255;
+	float                  start_metalness;
+	float                  end_metalness;
+	float                  start_roughness;
+	float                  end_roughness;
+	float                  start_transmission;
+	float                  end_transmission;
+};
+
+// Colors are kept in the same 0-255 representation shown by the GUI and normalized only
+// when they are written to the renderer's material structure.
+const std::array<ChameleonMaterialTransition, 3> kChameleonMaterialTransitions = {{
+    {{{255, 255, 255}}, {{71, 77, 50}}, 0.0f, 0.0f, 0.5f, 0.2f, 0.0f, 0.0f},
+    {{{255, 255, 255}}, {{77, 32, 19}}, 0.0f, 0.0f, 0.482f, 0.5f, 0.0f, 0.0f},
+    {{{255, 255, 255}}, {{85, 85, 85}}, 0.0f, 1.0f, 0.414f, 0.347f, 0.0f, 0.0f},
+}};
+
+static glm::vec3 normalizeRgb255(const std::array<uint8_t, 3>& color) {
+	return glm::vec3(static_cast<float>(color[0]), static_cast<float>(color[1]),
+	                 static_cast<float>(color[2])) /
+	       255.0f;
+}
+
+static glm::vec3 interpolateChameleonColor(const ChameleonMaterialTransition& transition,
+                                           float                              level) {
+	const glm::vec3 start_color = normalizeRgb255(transition.start_color_rgb255);
+	const glm::vec3 end_color   = normalizeRgb255(transition.end_color_rgb255);
+	return start_color + level * (end_color - start_color);
+}
+
+static bool containsCaseInsensitive(std::string_view value, std::string_view needle) {
+	if (needle.empty() || value.size() < needle.size()) {
+		return false;
+	}
+
+	const auto match = std::search(value.begin(), value.end(), needle.begin(), needle.end(),
+	                               [](unsigned char lhs, unsigned char rhs) {
+		                               return std::tolower(lhs) == std::tolower(rhs);
+	                               });
+	return match != value.end();
+}
+
+static int chameleonPresetIndexFromName(std::string_view name) {
+	if (containsCaseInsensitive(name, "chameleon.002")) {
+		return 2;
+	}
+	if (containsCaseInsensitive(name, "chameleon.001")) {
+		return 1;
+	}
+	if (containsCaseInsensitive(name, "chameleon")) {
+		return 0;
+	}
+	return -1;
+}
+
+static int selectedChameleonPresetIndex(const Scene* scene) {
+	if (scene == nullptr || selection_ctx.selected_mesh_index < 0 ||
+	    selection_ctx.selected_mesh_index >= static_cast<int>(scene->m_meshes.size())) {
+		return -1;
+	}
+
+	const int name_preset =
+	    chameleonPresetIndexFromName(meshDisplayName(scene, selection_ctx.selected_mesh_index));
+	if (name_preset >= 0) {
+		return name_preset;
+	}
+
+	const Mesh* selected_mesh = scene->m_meshes[selection_ctx.selected_mesh_index].get();
+	return selected_mesh != nullptr ? chameleonPresetIndexFromName(selected_mesh->m_material_name) :
+	                                  -1;
+}
 
 std::string meshDisplayName(const Scene* scene, int mesh_index) {
 	if (scene == nullptr || mesh_index < 0 ||
@@ -128,6 +205,7 @@ static float voiceDrivenScalarValue(VoiceDrivenParameter parameter, float loudne
 		case VoiceDrivenParameter::ObjectRotateY:
 		case VoiceDrivenParameter::ObjectRotateZ:
 			return kEditorRotationMinDeg + level * (kEditorRotationMaxDeg - kEditorRotationMinDeg);
+		case VoiceDrivenParameter::ChameleonMaterial:
 		case VoiceDrivenParameter::BaseTint:
 		case VoiceDrivenParameter::EmissionColor:
 			return level;
@@ -166,6 +244,8 @@ static const char* voiceDrivenParameterLabel(VoiceDrivenParameter parameter) {
 			return "Object rotation Y";
 		case VoiceDrivenParameter::ObjectRotateZ:
 			return "Object rotation Z";
+		case VoiceDrivenParameter::ChameleonMaterial:
+			return "Chameleon material (all fields)";
 	}
 
 	return "Unknown";
@@ -304,6 +384,10 @@ static VoiceDrivenSyncResult syncVoiceDrivenSelectionParameter(float loudness) {
 			result.transform_changed                = true;
 			return result;
 		}
+		case VoiceDrivenParameter::ChameleonMaterial:
+			// The selected-chameleon composite path owns this target and updates all
+			// requested material fields together.
+			return result;
 	}
 
 	return result;
@@ -319,11 +403,61 @@ bool selectMesh(const Scene* scene, int mesh_index) {
 
 	selection_ctx.selected_mesh_index = clamped_index;
 	refreshSelectedMaterialEditor(scene);
+	if (selectedChameleonPresetIndex(scene) >= 0) {
+		selection_ctx.voice_parameter = VoiceDrivenParameter::ChameleonMaterial;
+	} else if (selection_ctx.voice_parameter == VoiceDrivenParameter::ChameleonMaterial) {
+		selection_ctx.voice_parameter = VoiceDrivenParameter::BaseTint;
+	}
 	if (clamped_index < 0) {
 		selection_ctx.editor_scale        = 1.0f;
 		selection_ctx.editor_translation  = glm::vec3(0.0f);
 		selection_ctx.editor_rotation_deg = glm::vec3(0.0f);
 	}
+	return true;
+}
+
+bool syncSelectedChameleonMaterial(const Scene* scene, float voice_loudness) {
+	const int preset_index = selectedChameleonPresetIndex(scene);
+	if (preset_index < 0) {
+		return false;
+	}
+	selection_ctx.voice_parameter = VoiceDrivenParameter::ChameleonMaterial;
+	if (selection_ctx.material_edit_mode != MaterialEditMode::Voice) {
+		return false;
+	}
+
+	const ChameleonMaterialTransition& transition =
+	    kChameleonMaterialTransitions[static_cast<size_t>(preset_index)];
+	const float level = std::clamp(voice_loudness, 0.0f, 1.0f);
+
+	const glm::vec3 target_color = interpolateChameleonColor(transition, level);
+	const float target_metalness = transition.start_metalness +
+	                               level * (transition.end_metalness - transition.start_metalness);
+	const float target_roughness = transition.start_roughness +
+	                               level * (transition.end_roughness - transition.start_roughness);
+	const float target_transmission =
+	    transition.start_transmission +
+	    level * (transition.end_transmission - transition.start_transmission);
+	const float target_texture_weight = 1.0f - level;
+
+	const GPUMaterial& current = selection_ctx.editor_material;
+	const bool changed = glm::length(glm::vec3(current.base_color) - target_color) > 1.0e-4f ||
+	                     std::abs(current.base_metalness - target_metalness) > 1.0e-4f ||
+	                     std::abs(current.specular_roughness - target_roughness) > 1.0e-4f ||
+	                     std::abs(current.transmission_weight - target_transmission) > 1.0e-4f ||
+	                     std::abs(current.texture_weight - target_texture_weight) > 1.0e-4f;
+	if (!changed) {
+		return false;
+	}
+
+	// Texture indices stay intact so the fade is reversible, but their shader influence
+	// reaches zero at the end state.
+	selection_ctx.editor_material.base_color =
+	    glm::vec4(target_color, selection_ctx.editor_material.base_color.a);
+	selection_ctx.editor_material.base_metalness      = target_metalness;
+	selection_ctx.editor_material.specular_roughness  = target_roughness;
+	selection_ctx.editor_material.transmission_weight = target_transmission;
+	selection_ctx.editor_material.texture_weight      = target_texture_weight;
 	return true;
 }
 
@@ -361,7 +495,9 @@ void applySelectedMaterialEditor(Scene* scene, VmaAllocator allocator, void* mat
 
 SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness, bool* is_open) {
 	SelectionPanelResult result{};
-	const glm::vec3      voice_color = rainbowColorFromLoudness(voice_loudness);
+	const int            chameleon_preset_index = selectedChameleonPresetIndex(scene);
+	const glm::vec3      voice_color =
+	    chameleon_preset_index >= 0 ? glm::vec3(0.0f) : rainbowColorFromLoudness(voice_loudness);
 	const float voice_value = voiceDrivenScalarValue(selection_ctx.voice_parameter, voice_loudness);
 
 	if (is_open != nullptr && !*is_open) {
@@ -383,13 +519,21 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness
 		selection_ctx.material_edit_mode = static_cast<MaterialEditMode>(edit_mode);
 	}
 	if (selection_ctx.material_edit_mode == MaterialEditMode::Voice) {
-		int         voice_parameter = static_cast<int>(selection_ctx.voice_parameter);
-		const char* voice_items =
-		    "Base tint\0Emission color\0Metalness\0Roughness\0Transmission\0IOR\0Emission "
-		    "intensity\0Object scale\0Translate X\0Translate Y\0Translate Z\0Rotate X\0Rotate "
-		    "Y\0Rotate Z\0";
-		if (ImGui::Combo("Voice target", &voice_parameter, voice_items)) {
-			selection_ctx.voice_parameter = static_cast<VoiceDrivenParameter>(voice_parameter);
+		if (chameleon_preset_index >= 0) {
+			int chameleon_target = 0;
+			ImGui::BeginDisabled();
+			ImGui::Combo("Voice target", &chameleon_target,
+			             "Chameleon material (all fields + texture fade)\0");
+			ImGui::EndDisabled();
+		} else {
+			int         voice_parameter = static_cast<int>(selection_ctx.voice_parameter);
+			const char* voice_items =
+			    "Base tint\0Emission color\0Metalness\0Roughness\0Transmission\0IOR\0Emission "
+			    "intensity\0Object scale\0Translate X\0Translate Y\0Translate Z\0Rotate X\0Rotate "
+			    "Y\0Rotate Z\0";
+			if (ImGui::Combo("Voice target", &voice_parameter, voice_items)) {
+				selection_ctx.voice_parameter = static_cast<VoiceDrivenParameter>(voice_parameter);
+			}
 		}
 	}
 
@@ -520,7 +664,21 @@ SelectionPanelResult drawSelectionPanel(const Scene* scene, float voice_loudness
 	ImGui::Separator();
 
 	const bool gui_mode_enabled = selection_ctx.material_edit_mode == MaterialEditMode::Gui;
-	if (!gui_mode_enabled) {
+	if (chameleon_preset_index >= 0 && !gui_mode_enabled) {
+		const ChameleonMaterialTransition& transition =
+		    kChameleonMaterialTransitions[static_cast<size_t>(chameleon_preset_index)];
+		const float     level           = std::clamp(voice_loudness, 0.0f, 1.0f);
+		const glm::vec3 chameleon_color = interpolateChameleonColor(transition, level);
+		ImGui::Text("Chameleon preset: %d", chameleon_preset_index + 1);
+		ImGui::Text("Voice loudness: %.2f", voice_loudness);
+		ImGui::ColorButton("Chameleon color preview",
+		                   ImVec4(chameleon_color.r, chameleon_color.g, chameleon_color.b, 1.0f),
+		                   ImGuiColorEditFlags_NoTooltip, ImVec2(52.0f, 20.0f));
+		ImGui::ProgressBar(level, ImVec2(-1.0f, 0.0f));
+		ImGui::TextWrapped(
+		    "Base color, metalness, roughness, transmission, and texture influence are blended "
+		    "by voice loudness while this chameleon is selected.");
+	} else if (!gui_mode_enabled) {
 		const VoiceDrivenSyncResult voice_sync = syncVoiceDrivenSelectionParameter(voice_loudness);
 		result.material_changed |= voice_sync.material_changed;
 		result.transform_changed |= voice_sync.transform_changed;

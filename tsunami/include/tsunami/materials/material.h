@@ -7,7 +7,8 @@ struct alignas(16) GPUMaterial {
 	glm::vec4 base_color;
 	float     base_metalness;
 	float     base_diffuse_roughness;
-	float     _pad0[2];
+	float     texture_weight;
+	float     _pad0;
 
 	// Specular layer
 	glm::vec4 specular_color;
@@ -131,6 +132,7 @@ class Material {
 		m_gpu.base_color                          = glm::vec4(0.8f, 0.8f, 0.8f, 1.f);
 		m_gpu.base_metalness                      = 0.f;
 		m_gpu.base_diffuse_roughness              = 0.f;
+		m_gpu.texture_weight                      = 1.f;
 		m_gpu.specular_color                      = glm::vec4(1.f, 1.f, 1.f, 1.f);
 		m_gpu.specular_roughness                  = 0.3f;
 		m_gpu.specular_ior                        = 1.5f;
