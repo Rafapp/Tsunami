@@ -55,7 +55,7 @@ if (ctrl.isConnected) {
     prev_south_button = ctrl.south_button;   
 
     //PSbutton resets the camera to the initial position and orientation
-    if (ctrl.touchpad_button && !prev_touchpad_button) {
+    if (ctrl.north_button && !prev_touchpad_button) {
         fly_cam.m_position = cam_reset_position;
         fly_cam.m_yaw      = cam_reset_yaw;
         fly_cam.m_pitch    = cam_reset_pitch;
@@ -63,7 +63,7 @@ if (ctrl.isConnected) {
         needs_visibility_pass = true;
         reset_hipr_object_sampling();
     }
-    prev_touchpad_button = ctrl.touchpad_button;
+    prev_touchpad_button = ctrl.north_button;
 
     //Camera Movement with the sticks
     if (has_stick_input) {
