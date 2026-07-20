@@ -2920,6 +2920,7 @@ void Runtime::MainLoop() {
 	bool prev_dpad_right      = false;
 	bool prev_options_button  = false;
 	bool prev_touchpad_button = false;
+	bool prev_south_button    = false;
 	// Camera State
 	const glm::vec3 cam_reset_position = fly_cam.m_position;
 	const float     cam_reset_yaw      = fly_cam.m_yaw;
@@ -2982,6 +2983,12 @@ void Runtime::MainLoop() {
 				show_selection_panel           = true;
 			}
 		}
+
+		//Keyboard backup for toggling off the mic overlay
+		if (ImGui::IsKeyPressed(ImGuiKey_F2, false) ) {
+			overlay_ctx.controls.show_overlay = !overlay_ctx.controls.show_overlay;
+		}
+
 
 		bool controls_changed = false;
 		if (show_all_gui && overlay_ctx.show_control_panel) {
