@@ -48,6 +48,12 @@ if (ctrl.isConnected) {
         ctrl_moving = true;
     }
 
+    //Toggle volume vis with the south button (cross)
+    if (ctrl.south_button && !prev_south_button){
+        overlay_ctx.controls.show_overlay = !overlay_ctx.controls.show_overlay;
+    }
+    prev_south_button = ctrl.south_button;   
+
     //PSbutton resets the camera to the initial position and orientation
     if (ctrl.touchpad_button && !prev_touchpad_button) {
         fly_cam.m_position = cam_reset_position;
